@@ -80,6 +80,10 @@ app.use('/api/v1/admin',            require('./routes/admin'));
 // Profile
 app.use('/api/v1/profile',          auth, require('./routes/profile'));
 
+// Settings (persistent user preferences)
+app.use('/api/v1/settings',         auth, require('./routes/settings'));
+
+
 // Home / Summary
 app.use('/api/v1/home',             auth, require('./routes/home'));
 

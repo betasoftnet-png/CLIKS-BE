@@ -1,81 +1,21 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../db/connection');
 const { auth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { likeLimiter } = require('../middleware/rateLimiter');
-const { sendSuccess, sendError } = require('../utils/response');
-const { paginate } = require('../utils/pagination');
 const cache = require('../middleware/cache');
-const { invalidatePublicFeed } = require('../utils/cacheInvalidation');
+const { getPublicFeed, createPost, likePost, deletePost } = require('../controllers/publicController');
 
-// ── GET / — Public paginated feed ─────────────────────────────────────────────
-router.get('/', cache(120), validate.listQuery, validate.handle, async (req, res) => {
-  const { page, limit = 20, type } = req.query;
+// GET    /public              — Get paginated public post feed (cached 2 min, filterable by type)
+router.get('/', cache(120), validate.listQuery, validate.handle, getPublicFeed);
 
-  let query = `
-    SELECT p.id, p.content, p.type, p.likes, p.created_at, u.username AS author_username
-    FROM public_posts p
-    JOIN users u ON u.id = p.user_id
-    WHERE 1=1
-  `;
-  const params = [];
+// POST   /public              — Create a new public post (auth required)
+router.post('/', auth, validate.createPost, validate.handle, createPost);
 
-  if (type) { query += ' AND p.type = ?'; params.push(type); }
-  query += ' ORDER BY p.created_at DESC';
+// PATCH  /public/:id/like     — Increment like count on a post (rate-limited, no auth required)
+router.patch('/:id/like', likeLimiter, likePost);
 
-  const result = await paginate(query, params, page, limit, db);
-  const rows = result.rows.map(({ author_username, ...post }) => ({
-    ...post,
-    author: { username: author_username },
-  }));
-
-  return sendSuccess(res, rows, 'Public feed fetched', 200, result.meta);
-});
-
-// ── POST / — Create post (auth required) ──────────────────────────────────────
-router.post('/', auth, validate.createPost, validate.handle, async (req, res) => {
-  const { content, type = 'update' } = req.body;
-
-  const now = new Date().toISOString();
-  const info = await db.prepare(`
-    INSERT INTO public_posts (user_id, content, type, likes, created_at, updated_at)
-    VALUES (?, ?, ?, 0, ?, ?)
-  `).run(req.user.id, content, type, now, now);
-
-  const newPost = await db.prepare(`
-    SELECT p.id, p.content, p.type, p.likes, p.created_at, u.username AS author_username
-    FROM public_posts p JOIN users u ON u.id = p.user_id
-    WHERE p.id = ?
-  `).get(info.lastInsertRowid);
-
-  const { author_username, ...post } = newPost;
-  await invalidatePublicFeed();
-  return sendSuccess(res, { ...post, author: { username: author_username } }, 'Post created', 201);
-});
-
-// ── PATCH /:id/like — Increment likes (rate-limited, no auth) ─────────────────
-router.patch('/:id/like', likeLimiter, async (req, res) => {
-  const post = await db.prepare('SELECT id FROM public_posts WHERE id = ?').get(req.params.id);
-  if (!post) return sendError(res, 'Post not found', 404, 'NOT_FOUND');
-
-  await db.prepare('UPDATE public_posts SET likes = likes + 1, updated_at = ? WHERE id = ?')
-    .run(new Date().toISOString(), req.params.id);
-
-  const updated = await db.prepare('SELECT id, likes FROM public_posts WHERE id = ?').get(req.params.id);
-  await invalidatePublicFeed();
-  return sendSuccess(res, updated, 'Post liked');
-});
-
-// ── DELETE /:id — Author only (auth required) ─────────────────────────────────
-router.delete('/:id', auth, async (req, res) => {
-  const post = await db.prepare('SELECT * FROM public_posts WHERE id = ?').get(req.params.id);
-  if (!post) return sendError(res, 'Post not found', 404, 'NOT_FOUND');
-  if (post.user_id !== req.user.id) return sendError(res, 'Forbidden', 403, 'FORBIDDEN');
-
-  await db.prepare('DELETE FROM public_posts WHERE id = ?').run(req.params.id);
-  await invalidatePublicFeed();
-  return res.status(204).end();
-});
+// DELETE /public/:id          — Delete your own post (auth required, author only)
+router.delete('/:id', auth, deletePost);
 
 module.exports = router;

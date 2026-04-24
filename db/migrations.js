@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS stock (
   name TEXT NOT NULL,
   sku TEXT,
   quantity REAL DEFAULT 0,
+  unit TEXT,
   unit_price REAL,
   category TEXT,
   location TEXT,
@@ -320,6 +321,8 @@ CREATE TABLE IF NOT EXISTS people_records (
   person_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL,
   title TEXT,
+  type TEXT,
+  description TEXT,
   content TEXT,
   date TEXT,
   created_at TEXT,
@@ -430,13 +433,23 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     await db.pool.query(sql);
 
     // Ensure columns are updated
+    const pgAlters = [
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT \'user\';',
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS refresh_token TEXT;',
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS widgets TEXT;',
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS settings TEXT;',
+      'ALTER TABLE stock ADD COLUMN IF NOT EXISTS unit TEXT;',
+      'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS type TEXT;',
+      'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS description TEXT;',
+      'ALTER TABLE people ADD COLUMN IF NOT EXISTS relationship TEXT;',
+      'ALTER TABLE people ADD COLUMN IF NOT EXISTS phone TEXT;',
+      'ALTER TABLE people ADD COLUMN IF NOT EXISTS email TEXT;'
+    ];
     try {
-      await db.pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT \'user\';');
-      await db.pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS refresh_token TEXT;');
-      await db.pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS widgets TEXT;');
-      console.log('✅ Updated users table columns (role, refresh_token, widgets)');
+      for (const q of pgAlters) await db.pool.query(q);
+      console.log('✅ Updated all table columns (PostgreSQL)');
     } catch (e) {
-      console.warn('⚠️ Could not alter users table:', e.message);
+      console.warn('⚠️ Could not alter tables:', e.message);
     }
 
   } else {
@@ -446,7 +459,14 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     const alterQueries = [
       'ALTER TABLE users ADD COLUMN role TEXT DEFAULT \'user\'',
       'ALTER TABLE users ADD COLUMN refresh_token TEXT',
-      'ALTER TABLE users ADD COLUMN widgets TEXT'
+      'ALTER TABLE users ADD COLUMN widgets TEXT',
+      'ALTER TABLE users ADD COLUMN settings TEXT',
+      'ALTER TABLE stock ADD COLUMN unit TEXT',
+      'ALTER TABLE people_records ADD COLUMN type TEXT',
+      'ALTER TABLE people_records ADD COLUMN description TEXT',
+      'ALTER TABLE people ADD COLUMN relationship TEXT',
+      'ALTER TABLE people ADD COLUMN phone TEXT',
+      'ALTER TABLE people ADD COLUMN email TEXT'
     ];
 
     alterQueries.forEach(query => {
@@ -458,7 +478,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
         }
       }
     });
-    console.log('✅ Verified/Updated users table columns in SQLite');
+    console.log('✅ Verified/Updated table columns in SQLite');
   }
 
   console.log('✅ Migrations applied');

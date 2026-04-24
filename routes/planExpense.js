@@ -1,87 +1,23 @@
 const express = require('express');
 const router = express.Router({ mergeParams: true });
-const db = require('../db/connection');
-const { sendSuccess, sendError } = require('../utils/response');
-const { paginate } = require('../utils/pagination');
+const { verifyPlan, getPlanExpenses, createPlanExpense, getPlanExpense, updatePlanExpense, deletePlanExpense } = require('../controllers/planExpenseController');
 
-// Verify plan ownership
-router.use(async (req, res, next) => {
-  const plan = await db.prepare('SELECT * FROM financial_plans WHERE id = ? AND user_id = ?').get(req.params.planId, req.user.id);
-  if (!plan) return sendError(res, 'Financial plan not found', 404, 'NOT_FOUND');
-  next();
-});
+// Middleware: verify the parent plan exists and belongs to the user
+router.use(verifyPlan);
 
-router.get('/', async (req, res) => {
-  const { page, limit, sort = 'created_at', order = 'desc', search, category } = req.query;
-  let query = 'SELECT * FROM plan_expenses WHERE plan_id = ? AND user_id = ?';
-  const params = [req.params.planId, req.user.id];
+// GET    /plans/:planId/expenses              — List all planned expenses in a plan
+router.get('/', getPlanExpenses);
 
-  if (category) { query += ' AND category = ?'; params.push(category); }
-  if (search) { query += ' AND (description LIKE ? OR notes LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+// POST   /plans/:planId/expenses              — Add a planned expense to a plan
+router.post('/', createPlanExpense);
 
-  const allowedSorts = ['created_at', 'updated_at', 'category', 'expected_amount', 'actual_amount'];
-  const sortCol = allowedSorts.includes(sort) ? sort : 'created_at';
-  const sortDir = order.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+// GET    /plans/:planId/expenses/:id          — Get a single planned expense by ID
+router.get('/:id', getPlanExpense);
 
-  query += ` ORDER BY ${sortCol} ${sortDir}`;
+// PATCH  /plans/:planId/expenses/:id          — Update a planned expense (expected/actual amounts)
+router.patch('/:id', updatePlanExpense);
 
-  const result = await paginate(query, params, page, limit, db);
-  return sendSuccess(res, result.rows, 'Plan expenses fetched', 200, result.meta);
-});
-
-router.post('/', async (req, res) => {
-  const { category, description, expected_amount, actual_amount = 0, notes } = req.body;
-  if (!category || expected_amount === undefined) return sendError(res, 'Category and expected_amount are required', 400, 'BAD_REQUEST');
-
-  const now = new Date().toISOString();
-  const stmt = db.prepare(`
-    INSERT INTO plan_expenses (plan_id, user_id, category, description, expected_amount, actual_amount, notes, created_at, updated_at) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const info = await stmt.run(req.params.planId, req.user.id, category, description || null, expected_amount, actual_amount, notes || null, now, now);
-  
-  const newItem = await db.prepare('SELECT * FROM plan_expenses WHERE id = ?').get(info.lastInsertRowid);
-  return sendSuccess(res, newItem, 'Plan expense created', 201);
-});
-
-router.get('/:id', async (req, res) => {
-  const item = await db.prepare('SELECT * FROM plan_expenses WHERE id = ? AND plan_id = ? AND user_id = ?').get(req.params.id, req.params.planId, req.user.id);
-  if (!item) return sendError(res, 'Plan expense not found', 404, 'NOT_FOUND');
-  return sendSuccess(res, item);
-});
-
-router.patch('/:id', async (req, res) => {
-  const item = await db.prepare('SELECT * FROM plan_expenses WHERE id = ? AND plan_id = ? AND user_id = ?').get(req.params.id, req.params.planId, req.user.id);
-  if (!item) return sendError(res, 'Plan expense not found', 404, 'NOT_FOUND');
-
-  const updates = [];
-  const params = [];
-  const allowedFields = ['category', 'description', 'expected_amount', 'actual_amount', 'notes'];
-  
-  for (const field of allowedFields) {
-    if (req.body[field] !== undefined) {
-      updates.push(`${field} = ?`);
-      params.push(req.body[field]);
-    }
-  }
-
-  if (updates.length > 0) {
-    updates.push('updated_at = ?');
-    params.push(new Date().toISOString());
-    params.push(req.params.id, req.params.planId, req.user.id);
-    await db.prepare(`UPDATE plan_expenses SET ${updates.join(', ')} WHERE id = ? AND plan_id = ? AND user_id = ?`).run(...params);
-  }
-  
-  const updatedItem = await db.prepare('SELECT * FROM plan_expenses WHERE id = ?').get(req.params.id);
-  return sendSuccess(res, updatedItem, 'Plan expense updated');
-});
-
-router.delete('/:id', async (req, res) => {
-  const item = await db.prepare('SELECT * FROM plan_expenses WHERE id = ? AND plan_id = ? AND user_id = ?').get(req.params.id, req.params.planId, req.user.id);
-  if (!item) return sendError(res, 'Plan expense not found', 404, 'NOT_FOUND');
-
-  await db.prepare('DELETE FROM plan_expenses WHERE id = ? AND plan_id = ? AND user_id = ?').run(req.params.id, req.params.planId, req.user.id);
-  return res.status(204).end();
-});
+// DELETE /plans/:planId/expenses/:id          — Remove a planned expense from a plan
+router.delete('/:id', deletePlanExpense);
 
 module.exports = router;

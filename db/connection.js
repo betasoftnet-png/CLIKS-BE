@@ -7,11 +7,21 @@ let db;
 
 if (dbType === 'postgres') {
   const pool = new Pool({
-    connectionString: process.env.DATABASE_URL
+    host:     process.env.DB_HOST     || 'localhost',
+    port:     Number(process.env.DB_PORT) || 5432,
+    user:     process.env.DB_USER     || 'postgres',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME     || 'books_finance'
   });
 
   const convertQuery = (sql) => {
     let pgSql = sql;
+    
+    // Replace SQLite strftime with PostgreSQL TO_CHAR
+    // Specifically handle the formats used in the project: strftime('%Y-%m', ...)
+    pgSql = pgSql.replace(/strftime\('%Y-%m',\s*date\)/gi, "TO_CHAR(date::timestamp, 'YYYY-MM')");
+    pgSql = pgSql.replace(/strftime\('%Y-%m',\s*'now'\)/gi, "TO_CHAR(CURRENT_DATE, 'YYYY-MM')");
+
     let i = 1;
     // Replace '?' with '$1', '$2', etc. (handling cases with or without surrounding text safely)
     pgSql = pgSql.replace(/\?/g, () => `$${i++}`);
