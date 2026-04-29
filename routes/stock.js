@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getStockStats, getStocks, createStock, getStock, updateStock, adjustQuantity, deleteStock } = require('../controllers/stockController');
+const { getStockStats, getStocks, createStock, getStock, updateStock, adjustQuantity, deleteStock, getStockHistory } = require('../controllers/stockController');
 
 // ── Stats route (must be before /:id to avoid being caught by the param route) ─
 
@@ -26,5 +26,8 @@ router.patch('/:id/adjust-quantity', adjustQuantity);
 
 // DELETE /stock/:id                      — Delete a stock item
 router.delete('/:id', deleteStock);
+
+// GET    /stock/:id/history              — Get transaction history for an item
+router.get('/:id/history', getStockHistory);
 
 module.exports = router;

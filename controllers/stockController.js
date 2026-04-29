@@ -77,13 +77,22 @@ const createStock = async (req, res) => {
   if (!name) return sendError(res, 'Name is required', 400, 'BAD_REQUEST');
 
   const now = new Date().toISOString();
+  const qty = Number(quantity || 0);
+  const price = Number(unit_price || 0);
   const stmt = db.prepare(`
     INSERT INTO stock (user_id, name, sku, quantity, unit, unit_price, category, location, notes, created_at, updated_at) 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = await stmt.run(req.user.id, name, sku || null, quantity, unit || null, unit_price || null, category || null, location || null, notes || null, now, now);
+  const info = await stmt.run(req.user.id, name, sku || null, qty, unit || null, price || null, category || null, location || null, notes || null, now, now);
   
   const newItem = await db.prepare('SELECT * FROM stock WHERE id = ?').get(info.lastInsertRowid);
+  
+  // Log initial stock as a transaction
+  await db.prepare(`
+    INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(newItem.id, req.user.id, 'in', quantity, now, now);
+
   return sendSuccess(res, enrichRow(newItem), 'Stock item created', 201);
 };
 
@@ -106,7 +115,9 @@ const updateStock = async (req, res) => {
   for (const field of allowedFields) {
     if (req.body[field] !== undefined) {
       updates.push(`${field} = ?`);
-      params.push(req.body[field]);
+      let val = req.body[field];
+      if (field === 'quantity' || field === 'unit_price') val = Number(val);
+      params.push(val);
     }
   }
 
@@ -129,7 +140,7 @@ const adjustQuantity = async (req, res) => {
   const item = await db.prepare('SELECT * FROM stock WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!item) return sendError(res, 'Stock item not found', 404, 'NOT_FOUND');
 
-  let newQuantity = item.quantity + Number(delta);
+  let newQuantity = Number(item.quantity) + Number(delta);
   if (newQuantity < 0) newQuantity = 0;
 
   const now = new Date().toISOString();
@@ -137,6 +148,13 @@ const adjustQuantity = async (req, res) => {
     .run(newQuantity, now, req.params.id, req.user.id);
 
   const updatedItem = await db.prepare('SELECT * FROM stock WHERE id = ?').get(req.params.id);
+
+  // Log transaction
+  await db.prepare(`
+    INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(req.params.id, req.user.id, delta > 0 ? 'in' : 'out', Math.abs(delta), now, now);
+
   return sendSuccess(res, enrichRow(updatedItem), 'Quantity adjusted');
 };
 
@@ -149,4 +167,16 @@ const deleteStock = async (req, res) => {
   return res.status(204).end();
 };
 
-module.exports = { getStockStats, getStocks, createStock, getStock, updateStock, adjustQuantity, deleteStock };
+// ── GET /:id/history ──────────────────────────────────────────────────────────
+const getStockHistory = async (req, res) => {
+  const history = await db.prepare(`
+    SELECT * FROM stock_transactions 
+    WHERE stock_id = ? AND user_id = ? 
+    ORDER BY created_at DESC 
+    LIMIT 50
+  `).all(req.params.id, req.user.id);
+  
+  return sendSuccess(res, history, 'Stock history fetched');
+};
+
+module.exports = { getStockStats, getStocks, createStock, getStock, updateStock, adjustQuantity, deleteStock, getStockHistory };

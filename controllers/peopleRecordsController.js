@@ -27,16 +27,39 @@ const getRecords = async (req, res) => {
   return sendSuccess(res, result.rows, 'People records fetched', 200, result.meta);
 };
 
+const fs = require('fs');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+
 const createRecord = async (req, res) => {
-  const { title, type, description, content } = req.body;
+  const { title, type, description, content, file_data, file_name } = req.body;
   if (!title || !type) return sendError(res, 'Title and type are required', 400, 'BAD_REQUEST');
+
+  let attachment_url = null;
+  let file_type = null;
+
+  // Handle Base64 file upload if provided
+  if (file_data && file_name) {
+    try {
+      const base64Data = file_data.replace(/^data:.*?;base64,/, '');
+      const ext = path.extname(file_name) || '.bin';
+      const fileName = `${uuidv4()}${ext}`;
+      const uploadPath = path.join(__dirname, '../uploads', fileName);
+      
+      fs.writeFileSync(uploadPath, base64Data, 'base64');
+      attachment_url = `/uploads/${fileName}`;
+      file_type = ext.replace('.', '').toUpperCase();
+    } catch (err) {
+      console.error('File upload error:', err);
+    }
+  }
 
   const now = new Date().toISOString();
   const stmt = db.prepare(`
-    INSERT INTO people_records (person_id, user_id, title, type, description, content, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO people_records (person_id, user_id, title, type, description, content, attachment_url, file_type, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = await stmt.run(req.params.personId, req.user.id, title, type, description || null, content || null, now, now);
+  const info = await stmt.run(req.params.personId, req.user.id, title, type, description || null, content || null, attachment_url, file_type, now, now);
 
   const newItem = await db.prepare('SELECT * FROM people_records WHERE id = ?').get(info.lastInsertRowid);
   return sendSuccess(res, newItem, 'Person record created', 201);
@@ -54,7 +77,7 @@ const updateRecord = async (req, res) => {
 
   const updates = [];
   const params = [];
-  for (const field of ['title', 'type', 'description', 'content']) {
+  for (const field of ['title', 'type', 'description', 'content', 'attachment_url', 'file_type']) {
     if (req.body[field] !== undefined) {
       updates.push(`${field} = ?`);
       params.push(req.body[field]);

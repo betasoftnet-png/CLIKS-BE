@@ -28,7 +28,9 @@ const getPlanExpenses = async (req, res) => {
 };
 
 const createPlanExpense = async (req, res) => {
-  const { category, description, expected_amount, actual_amount = 0, notes } = req.body;
+  const { category, description, item, expected_amount, actual_amount = 0, notes } = req.body;
+  const finalDescription = description || item;
+  
   if (!category || expected_amount === undefined) return sendError(res, 'Category and expected_amount are required', 400, 'BAD_REQUEST');
 
   const now = new Date().toISOString();
@@ -36,7 +38,7 @@ const createPlanExpense = async (req, res) => {
     INSERT INTO plan_expenses (plan_id, user_id, category, description, expected_amount, actual_amount, notes, created_at, updated_at) 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = await stmt.run(req.params.planId, req.user.id, category, description || null, expected_amount, actual_amount, notes || null, now, now);
+  const info = await stmt.run(req.params.planId, req.user.id, category, finalDescription || null, expected_amount, actual_amount, notes || null, now, now);
   
   const newItem = await db.prepare('SELECT * FROM plan_expenses WHERE id = ?').get(info.lastInsertRowid);
   return sendSuccess(res, newItem, 'Plan expense created', 201);

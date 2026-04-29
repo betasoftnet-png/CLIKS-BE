@@ -4,7 +4,7 @@ const db = require('./connection');
 async function seedDefaultUser() {
   const row = await db.prepare('SELECT COUNT(*) as count FROM users').get();
   
-  if (row.count === 0) {
+  if (Number(row.count) === 0) {
     const salt = bcrypt.genSaltSync(10);
     const hash = bcrypt.hashSync('password123', salt);
     

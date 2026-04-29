@@ -42,6 +42,7 @@ router.use('/savings',          auth, require('../savings'));
 router.use('/investments',      auth, require('../investments'));
 router.use('/debts',            auth, require('../debts'));
 router.use('/planned-payments', auth, require('../plannedPayments'));
+router.use('/goal-wallets',    auth, require('../goalWallet'));
 
 // ── Books Module ───────────────────────────────────────────────────────────
 router.use('/stock',            auth, require('../stock'));

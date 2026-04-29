@@ -16,6 +16,16 @@ for (const key of REQUIRED_ENV) {
   }
 }
 
+// ── Global Error Catching ───────────────────────────────────────────────────
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error({ promise, reason }, 'Unhandled Rejection at Promise');
+});
+
+process.on('uncaughtException', (error) => {
+  logger.fatal(error, 'Uncaught Exception thrown');
+  process.exit(1);
+});
+
 const { runMigrations } = require('./db/migrations');
 const { seedDefaultUser } = require('./db/seed');
 const app = require('./app');
@@ -32,6 +42,13 @@ async function startServer() {
       logger.info(`   ENV  : ${process.env.NODE_ENV || 'development'}`);
       logger.info(`   URL  : http://localhost:${PORT}/api/v1`);
       logger.info(`   Docs : http://localhost:${PORT}/api-docs`);
+    });
+
+    server.on('error', (e) => {
+      if (e.code === 'EADDRINUSE') {
+        logger.fatal(`Port ${PORT} is already in use. Please run: lsof -ti :${PORT} | xargs kill -9`);
+        process.exit(1);
+      }
     });
 
     // Graceful shutdown

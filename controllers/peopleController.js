@@ -54,7 +54,7 @@ const getAllReminders = async (req, res) => {
 
   const result = await paginate(query, params, page, limit, db);
 
-  const stats = db.prepare(`
+  const stats = await db.prepare(`
     SELECT 
       SUM(CASE WHEN date(due_date) = date('now') AND status != 'settled' THEN 1 ELSE 0 END) as due_today,
       SUM(CASE WHEN date(due_date) > date('now') AND status != 'settled' THEN 1 ELSE 0 END) as upcoming,
@@ -90,7 +90,7 @@ const getAllRecords = async (req, res) => {
 
   const result = await paginate(query, params, page, limit, db);
 
-  const stats = db.prepare(`
+  const stats = await db.prepare(`
     SELECT 
       COUNT(*) as total_records
     FROM people_records
@@ -130,7 +130,7 @@ const getPeople = async (req, res) => {
 
   const result = await paginate(query, params, page, limit, db);
 
-  const summary = db.prepare(`
+  const summary = await db.prepare(`
     SELECT 
       COUNT(*) as total_contacts,
       SUM(CASE WHEN net_balance > 0 THEN net_balance ELSE 0 END) as total_receivables,
@@ -142,7 +142,7 @@ const getPeople = async (req, res) => {
       LEFT JOIN people_transactions pt ON p.id = pt.person_id
       WHERE p.user_id = ?
       GROUP BY p.id
-    )
+    ) AS balance_sub
   `).get(req.user.id);
 
   return sendSuccess(res, result.rows, 'People fetched', 200, { ...result.meta, summary });

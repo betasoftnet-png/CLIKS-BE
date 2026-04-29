@@ -27,15 +27,15 @@ const getPlanIncomes = async (req, res) => {
 };
 
 const createPlanIncome = async (req, res) => {
-  const { source, expected_amount, actual_amount = 0, notes } = req.body;
+  const { source, category, expected_amount, actual_amount = 0, notes } = req.body;
   if (!source || expected_amount === undefined) return sendError(res, 'Source and expected_amount are required', 400, 'BAD_REQUEST');
 
   const now = new Date().toISOString();
   const stmt = db.prepare(`
-    INSERT INTO plan_income (plan_id, user_id, source, expected_amount, actual_amount, notes, created_at, updated_at) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO plan_income (plan_id, user_id, category, source, expected_amount, actual_amount, notes, created_at, updated_at) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = await stmt.run(req.params.planId, req.user.id, source, expected_amount, actual_amount, notes || null, now, now);
+  const info = await stmt.run(req.params.planId, req.user.id, category || 'Other', source, expected_amount, actual_amount, notes || null, now, now);
   
   const newItem = await db.prepare('SELECT * FROM plan_income WHERE id = ?').get(info.lastInsertRowid);
   return sendSuccess(res, newItem, 'Plan income created', 201);

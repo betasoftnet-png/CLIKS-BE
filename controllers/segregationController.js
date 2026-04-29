@@ -46,7 +46,7 @@ const createSegregation = async (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
       for (const alloc of allocations) {
-        allocStmt.run(ruleId, req.user.id, alloc.label, alloc.percentage, alloc.notes || null, now, now);
+        await allocStmt.run(ruleId, req.user.id, alloc.label, alloc.percentage, alloc.notes || null, now, now);
       }
     }
 
@@ -106,7 +106,7 @@ const updateSegregation = async (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
       for (const alloc of allocations) {
-        allocStmt.run(req.params.id, req.user.id, alloc.label, alloc.percentage, alloc.notes || null, now, now);
+        await allocStmt.run(req.params.id, req.user.id, alloc.label, alloc.percentage, alloc.notes || null, now, now);
       }
     }
   });

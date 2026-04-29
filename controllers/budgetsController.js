@@ -76,7 +76,7 @@ const spendBudget = async (req, res) => {
   if (!item) return sendError(res, 'Budget not found', 404, 'NOT_FOUND');
 
   const now = new Date().toISOString();
-  db.prepare(`UPDATE budgets SET amount_spent = amount_spent + ?, updated_at = ? WHERE id = ? AND user_id = ?`)
+  await db.prepare(`UPDATE budgets SET amount_spent = amount_spent + ?, updated_at = ? WHERE id = ? AND user_id = ?`)
     .run(amount, now, req.params.id, req.user.id);
 
   const updatedItem = await db.prepare('SELECT * FROM budgets WHERE id = ?').get(req.params.id);

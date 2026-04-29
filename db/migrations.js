@@ -206,6 +206,7 @@ CREATE TABLE IF NOT EXISTS plan_income (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   plan_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL,
+  category TEXT,
   source TEXT,
   expected_amount REAL,
   actual_amount REAL,
@@ -222,6 +223,7 @@ CREATE TABLE IF NOT EXISTS plan_expenses (
   plan_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL,
   category TEXT,
+  description TEXT,
   expected_amount REAL,
   actual_amount REAL,
   date TEXT,
@@ -383,6 +385,8 @@ CREATE TABLE IF NOT EXISTS split_expenses (
   title TEXT NOT NULL,
   total_amount REAL,
   date TEXT,
+  split_type TEXT,
+  paid_by TEXT,
   notes TEXT,
   created_at TEXT,
   updated_at TEXT,
@@ -423,6 +427,34 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   created_at TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
+
+-- Goal Wallets (Personal Purpose Wallet)
+CREATE TABLE IF NOT EXISTS goal_wallets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  target_amount REAL NOT NULL,
+  current_amount REAL DEFAULT 0,
+  status TEXT DEFAULT 'active', -- active | completed
+  person_id INTEGER, -- Optional link to a person
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id),
+  FOREIGN KEY(person_id) REFERENCES people(id)
+);
+
+-- Wallet Transactions (History of money added)
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  amount REAL NOT NULL,
+  type TEXT DEFAULT 'credit',
+  created_at TEXT,
+  FOREIGN KEY(wallet_id) REFERENCES goal_wallets(id),
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
   `;
 
   if (dbType === 'postgres') {
@@ -443,7 +475,11 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
       'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS description TEXT;',
       'ALTER TABLE people ADD COLUMN IF NOT EXISTS relationship TEXT;',
       'ALTER TABLE people ADD COLUMN IF NOT EXISTS phone TEXT;',
-      'ALTER TABLE people ADD COLUMN IF NOT EXISTS email TEXT;'
+      'ALTER TABLE people ADD COLUMN IF NOT EXISTS email TEXT;',
+      'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS attachment_url TEXT;',
+      'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS file_type TEXT;',
+      'ALTER TABLE plan_income ADD COLUMN IF NOT EXISTS category TEXT;',
+      'ALTER TABLE plan_expenses ADD COLUMN IF NOT EXISTS description TEXT;'
     ];
     try {
       for (const q of pgAlters) await db.pool.query(q);
@@ -466,7 +502,13 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
       'ALTER TABLE people_records ADD COLUMN description TEXT',
       'ALTER TABLE people ADD COLUMN relationship TEXT',
       'ALTER TABLE people ADD COLUMN phone TEXT',
-      'ALTER TABLE people ADD COLUMN email TEXT'
+      'ALTER TABLE people ADD COLUMN email TEXT',
+      'ALTER TABLE split_expenses ADD COLUMN paid_by TEXT',
+      'ALTER TABLE goal_wallets ADD COLUMN person_id INTEGER',
+      'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS attachment_url TEXT',
+      'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS file_type TEXT',
+      'ALTER TABLE plan_income ADD COLUMN category TEXT',
+      'ALTER TABLE plan_expenses ADD COLUMN description TEXT'
     ];
 
     alterQueries.forEach(query => {

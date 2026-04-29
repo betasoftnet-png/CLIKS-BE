@@ -41,13 +41,13 @@ const getPlan = async (req, res) => {
   const plan = await db.prepare('SELECT * FROM financial_plans WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!plan) return sendError(res, 'Financial plan not found', 404, 'NOT_FOUND');
 
-  const budCount = await db.prepare('SELECT COUNT(*) as c FROM plan_budgets WHERE plan_id = ? AND user_id = ?').get(plan.id, req.user.id).c;
-  const goalCount = await db.prepare('SELECT COUNT(*) as c FROM plan_goals WHERE plan_id = ? AND user_id = ?').get(plan.id, req.user.id).c;
-  const remCount = await db.prepare('SELECT COUNT(*) as c FROM plan_reminders WHERE plan_id = ? AND user_id = ?').get(plan.id, req.user.id).c;
+  const budCount  = (await db.prepare('SELECT COUNT(*) as c FROM plan_budgets WHERE plan_id = ? AND user_id = ?').get(plan.id, req.user.id)).c;
+  const goalCount = (await db.prepare('SELECT COUNT(*) as c FROM plan_goals WHERE plan_id = ? AND user_id = ?').get(plan.id, req.user.id)).c;
+  const remCount  = (await db.prepare('SELECT COUNT(*) as c FROM plan_reminders WHERE plan_id = ? AND user_id = ?').get(plan.id, req.user.id)).c;
 
-  plan.budgets_count = budCount;
-  plan.goals_count = goalCount;
-  plan.reminders_count = remCount;
+  plan.budgets_count = Number(budCount);
+  plan.goals_count = Number(goalCount);
+  plan.reminders_count = Number(remCount);
 
   return sendSuccess(res, plan);
 };

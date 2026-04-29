@@ -38,10 +38,10 @@ const createTransaction = async (req, res) => {
   
   if (account_id) {
     if (type === 'income') {
-      db.prepare('UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE id = ? AND user_id = ?')
+      await db.prepare('UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE id = ? AND user_id = ?')
         .run(amount, now, account_id, req.user.id);
     } else if (type === 'expense' || type === 'transfer') {
-      db.prepare('UPDATE accounts SET balance = balance - ?, updated_at = ? WHERE id = ? AND user_id = ?')
+      await db.prepare('UPDATE accounts SET balance = balance - ?, updated_at = ? WHERE id = ? AND user_id = ?')
         .run(amount, now, account_id, req.user.id);
     }
   }

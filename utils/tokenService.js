@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const db = require('../db/connection');
 
-const ACCESS_EXPIRES_IN = '15m';
+const ACCESS_EXPIRES_IN = '24h';
 const REFRESH_EXPIRES_DAYS = 7;
 const REFRESH_EXPIRES_MS = REFRESH_EXPIRES_DAYS * 24 * 60 * 60 * 1000;
 

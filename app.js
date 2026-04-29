@@ -25,9 +25,19 @@ const swaggerDocument = YAML.load(path.join(__dirname, 'openapi.yaml'));
 // ── Security, Optimization & Logging ───────────────────────────────────────────
 const compression = require('compression');
 
-app.use(helmet());
+/*
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: false,
+}));
+*/
 app.use(compression());
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173' }));
+const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+app.use(cors({
+  origin: corsOrigin.includes(',') ? corsOrigin.split(',') : corsOrigin,
+  credentials: true
+}));
 
 // ── Structured Request Logger + Request ID ──────────────────────────────────────
 // Replaces morgan. Adds: X-Request-Id header, structured JSON logs,
@@ -41,6 +51,7 @@ app.use(sanitizer);
 // ── Body Parsing ──────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ── API Documentation (Swagger) ────────────────────────────────────────────────
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
@@ -97,6 +108,7 @@ app.use('/api/v1/savings',          auth, require('./routes/savings'));
 app.use('/api/v1/investments',      auth, require('./routes/investments'));
 app.use('/api/v1/debts',            auth, require('./routes/debts'));
 app.use('/api/v1/planned-payments', auth, require('./routes/plannedPayments'));
+app.use('/api/v1/goal-wallets',    auth, require('./routes/goalWallet'));
 
 // Books Module — Stock
 app.use('/api/v1/stock',            auth, require('./routes/stock'));
