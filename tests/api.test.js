@@ -9,8 +9,8 @@ process.env.JWT_REFRESH_SECRET = 'test-refresh-secret';
 
 // Mock data
 const testUser = {
-  username: 'testuser123',
-  email: 'test123user@example.com',
+  username: `testuser${Date.now().toString().slice(-5)}`,
+  email: `test${Date.now().toString().slice(-5)}user@example.com`,
   password: 'Password123!',
 };
 

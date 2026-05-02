@@ -82,6 +82,7 @@ app.use('/api/v1/auth', require('./routes/auth'));
 
 // ── Public Feed (selective auth inside route file) ────────────────────────────
 app.use('/api/v1/public', require('./routes/public'));
+app.use('/api/v1/meetups', require('./routes/meetups'));
 
 // ── Protected Routes ──────────────────────────────────────────────────────────
 
@@ -134,6 +135,14 @@ app.use('/api/v1/people',                         auth, require('./routes/people
 app.use('/api/v1/contacts',         auth, require('./routes/contacts'));
 app.use('/api/v1/segregation',      auth, require('./routes/segregation'));
 app.use('/api/v1/split-expenses',   auth, require('./routes/splitExpense'));
+app.use('/api/v1/business',         auth, require('./routes/business'));
+app.use('/api/v1/inventory',        auth, require('./routes/inventory'));
+app.use('/api/v1/billing',          auth, require('./routes/billing'));
+app.use('/api/v1/crm',              auth, require('./routes/crm'));
+app.use('/api/v1/staffing',         auth, require('./routes/staffing'));
+app.use('/api/v1/business-plans',   auth, require('./routes/businessFinancialPlan'));
+app.use('/api/v1/business-segregation', auth, require('./routes/businessSegregation'));
+app.use('/api/v1/business-compare',     auth, require('./routes/businessCompare'));
 
 // ── 404 Handler ───────────────────────────────────────────────────────────────
 app.use((req, res) => {

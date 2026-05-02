@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   role TEXT DEFAULT 'user',
+  business_name TEXT,
+  business_type TEXT,
+  industry TEXT,
   refresh_token TEXT,
   widgets TEXT, -- Added to persist dashboard configuration
   created_at TEXT,
@@ -170,6 +173,19 @@ CREATE TABLE IF NOT EXISTS stock (
   notes TEXT,
   created_at TEXT,
   updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Stock Transactions
+CREATE TABLE IF NOT EXISTS stock_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  stock_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  type TEXT CHECK(type IN ('in','out')),
+  quantity REAL NOT NULL,
+  date TEXT,
+  created_at TEXT,
+  FOREIGN KEY(stock_id) REFERENCES stock(id) ON DELETE CASCADE,
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
@@ -455,6 +471,58 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   FOREIGN KEY(wallet_id) REFERENCES goal_wallets(id),
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
+
+-- Meetups Table
+CREATE TABLE IF NOT EXISTS meetups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  type TEXT DEFAULT 'Offline',
+  date TEXT,
+  time TEXT,
+  location TEXT,
+  price TEXT DEFAULT 'Free',
+  description TEXT,
+  category TEXT DEFAULT 'General',
+  image_url TEXT,
+  icon TEXT DEFAULT 'Users',
+  gradient TEXT DEFAULT 'linear-gradient(135deg, #1B6B3A 0%, #22C55E 100%)',
+  attendees INTEGER DEFAULT 1,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Inventory
+CREATE TABLE IF NOT EXISTS inventory (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  sku TEXT,
+  category TEXT,
+  quantity INTEGER DEFAULT 0,
+  price REAL DEFAULT 0,
+  supplier TEXT,
+  status TEXT DEFAULT 'In Stock',
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Business Invoices
+CREATE TABLE IF NOT EXISTS business_invoices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  invoice_number TEXT NOT NULL,
+  client_name TEXT NOT NULL,
+  client_email TEXT,
+  amount REAL DEFAULT 0,
+  status TEXT DEFAULT 'Draft',
+  due_date TEXT,
+  items TEXT, -- JSON string
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
   `;
 
   if (dbType === 'postgres') {
@@ -469,6 +537,9 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT \'user\';',
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS refresh_token TEXT;',
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS widgets TEXT;',
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS business_name TEXT;',
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS business_type TEXT;',
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS industry TEXT;',
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS settings TEXT;',
       'ALTER TABLE stock ADD COLUMN IF NOT EXISTS unit TEXT;',
       'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS type TEXT;',
@@ -479,7 +550,38 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
       'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS attachment_url TEXT;',
       'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS file_type TEXT;',
       'ALTER TABLE plan_income ADD COLUMN IF NOT EXISTS category TEXT;',
-      'ALTER TABLE plan_expenses ADD COLUMN IF NOT EXISTS description TEXT;'
+      'ALTER TABLE plan_expenses ADD COLUMN IF NOT EXISTS description TEXT;',
+      'ALTER TABLE meetups ADD COLUMN IF NOT EXISTS description TEXT;',
+      'ALTER TABLE meetups ADD COLUMN IF NOT EXISTS category TEXT DEFAULT \'General\';',
+      'ALTER TABLE meetups ADD COLUMN IF NOT EXISTS image_url TEXT;',
+      `CREATE TABLE IF NOT EXISTS inventory (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        sku VARCHAR(100),
+        category VARCHAR(100),
+        quantity INTEGER DEFAULT 0,
+        price NUMERIC DEFAULT 0,
+        supplier VARCHAR(255),
+        status VARCHAR(50) DEFAULT 'In Stock',
+        created_at TEXT,
+        updated_at TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );`,
+      `CREATE TABLE IF NOT EXISTS business_invoices (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        invoice_number VARCHAR(100) NOT NULL,
+        client_name VARCHAR(255) NOT NULL,
+        client_email VARCHAR(255),
+        amount NUMERIC DEFAULT 0,
+        status VARCHAR(50) DEFAULT 'Draft',
+        due_date TEXT,
+        items TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );`
     ];
     try {
       for (const q of pgAlters) await db.pool.query(q);
@@ -508,7 +610,10 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
       'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS attachment_url TEXT',
       'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS file_type TEXT',
       'ALTER TABLE plan_income ADD COLUMN category TEXT',
-      'ALTER TABLE plan_expenses ADD COLUMN description TEXT'
+      'ALTER TABLE plan_expenses ADD COLUMN description TEXT',
+      'ALTER TABLE meetups ADD COLUMN description TEXT',
+      'ALTER TABLE meetups ADD COLUMN category TEXT DEFAULT \'General\'',
+      'ALTER TABLE meetups ADD COLUMN image_url TEXT'
     ];
 
     alterQueries.forEach(query => {

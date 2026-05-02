@@ -29,7 +29,7 @@ const getRecords = async (req, res) => {
 
 const fs = require('fs');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 
 const createRecord = async (req, res) => {
   const { title, type, description, content, file_data, file_name } = req.body;
@@ -43,7 +43,7 @@ const createRecord = async (req, res) => {
     try {
       const base64Data = file_data.replace(/^data:.*?;base64,/, '');
       const ext = path.extname(file_name) || '.bin';
-      const fileName = `${uuidv4()}${ext}`;
+      const fileName = `${randomUUID()}${ext}`;
       const uploadPath = path.join(__dirname, '../uploads', fileName);
       
       fs.writeFileSync(uploadPath, base64Data, 'base64');

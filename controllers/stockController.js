@@ -26,8 +26,8 @@ const getStockStats = async (req, res) => {
       COUNT(*)                                                              AS totalItems,
       COALESCE(SUM(quantity * unit_price), 0)                              AS totalValue,
       SUM(CASE WHEN quantity = 0             THEN 1 ELSE 0 END)            AS outOfStockCount,
-      SUM(CASE WHEN quantity > 0 AND quantity < 5 THEN 1 ELSE 0 END)      AS lowStockCount,
-      SUM(CASE WHEN quantity >= 5            THEN 1 ELSE 0 END)            AS inStockCount
+      SUM(CASE WHEN quantity > 0 AND quantity < COALESCE(low_stock_threshold, 5) THEN 1 ELSE 0 END) AS lowStockCount,
+      SUM(CASE WHEN quantity >= COALESCE(low_stock_threshold, 5)            THEN 1 ELSE 0 END) AS inStockCount
     FROM stock
     WHERE user_id = ?
   `).get(req.user.id);
@@ -58,8 +58,8 @@ const getStocks = async (req, res) => {
   if (search)   { query += ' AND (name LIKE ? OR sku LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
 
   if (status === 'Out of Stock') { query += ' AND quantity = 0'; }
-  else if (status === 'Low Stock') { query += ' AND quantity > 0 AND quantity < 5'; }
-  else if (status === 'In Stock')  { query += ' AND quantity >= 5'; }
+  else if (status === 'Low Stock') { query += ' AND quantity > 0 AND quantity < COALESCE(low_stock_threshold, 5)'; }
+  else if (status === 'In Stock')  { query += ' AND quantity >= COALESCE(low_stock_threshold, 5)'; }
 
   const allowedSorts = ['created_at', 'updated_at', 'name', 'quantity', 'unit_price'];
   const sortCol = allowedSorts.includes(sort) ? sort : 'created_at';
@@ -144,7 +144,7 @@ const adjustQuantity = async (req, res) => {
   if (newQuantity < 0) newQuantity = 0;
 
   const now = new Date().toISOString();
-  db.prepare(`UPDATE stock SET quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?`)
+  await db.prepare(`UPDATE stock SET quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?`)
     .run(newQuantity, now, req.params.id, req.user.id);
 
   const updatedItem = await db.prepare('SELECT * FROM stock WHERE id = ?').get(req.params.id);

@@ -12,6 +12,10 @@ const registerSchema = z.object({
     username: z.string().min(1, 'Username is required').max(50),
     email: z.string().email('Valid email required'),
     password: z.string().min(6, 'Password must be at least 6 characters'),
+    role: z.enum(['user', 'business']).optional(),
+    business_name: z.string().optional(),
+    business_type: z.string().optional(),
+    industry: z.string().optional(),
   })
 });
 
@@ -26,9 +30,9 @@ const loginSchema = z.object({
   })
 });
 
-// ── POST /auth/register ───────────────────────────────────────────────────────
 const register = async (req, res) => {
-  const { username, email, password } = req.body;
+  const { username, email, password, role, business_name, business_type, industry } = req.body;
+  const userRole = role === 'business' ? 'business' : 'user';
 
   const existingEmail = await db.prepare('SELECT id FROM users WHERE email = ?').get(email);
   if (existingEmail) throw new AppError('Email already registered', 409, 'CONFLICT');
@@ -40,10 +44,10 @@ const register = async (req, res) => {
   const now = new Date().toISOString();
 
   const info = await db.prepare(
-    'INSERT INTO users (username, email, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(username, email, hash, 'user', now, now);
+    'INSERT INTO users (username, email, password_hash, role, business_name, business_type, industry, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(username, email, hash, userRole, business_name || null, business_type || null, industry || null, now, now);
 
-  const user = await db.prepare('SELECT id, username, email, role, created_at FROM users WHERE id = ?').get(info.lastInsertRowid);
+  const user = await db.prepare('SELECT id, username, email, role, business_name, business_type, industry, created_at FROM users WHERE id = ?').get(info.lastInsertRowid || info.id || info[0]?.id);
 
   const { accessToken, refreshToken } = await TokenService.issueEnhancedTokens(user);
 
