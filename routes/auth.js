@@ -1,15 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { authLimiter } = require('../middleware/rateLimiter');
-const validate = require('../middleware/zodValidate');
 const asyncHandler = require('../utils/asyncHandler');
-const { registerSchema, loginSchema, register, login, refresh, logout, logoutAll } = require('../controllers/authController');
+const { ssoLogin, refresh, logout, logoutAll } = require('../controllers/authController');
 
-// POST /auth/register      — Register a new user account
-router.post('/register', authLimiter, validate(registerSchema), asyncHandler(register));
-
-// POST /auth/login         — Login with email/username + password
-router.post('/login', authLimiter, validate(loginSchema), asyncHandler(login));
+// POST /auth/sso           — SSO Login using BNX Token
+router.post('/sso', authLimiter, asyncHandler(ssoLogin));
 
 // POST /auth/refresh       — Refresh access token using a refresh token
 router.post('/refresh', authLimiter, asyncHandler(refresh));
