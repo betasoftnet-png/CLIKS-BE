@@ -6,6 +6,7 @@ const initColumns = async () => {
     const columns = [
         'employee_name',
         'salary_type',
+        'basic_salary',
         'hra_amount',
         'special_allowance',
         'bonus_amount',
@@ -37,6 +38,13 @@ const initColumns = async () => {
 };
 initColumns();
 
+const parseEmployeeId = (empId) => {
+    if (!empId) return 1;
+    if (typeof empId === 'number') return empId;
+    const match = String(empId).match(/\d+/);
+    return match ? parseInt(match[0], 10) : 1;
+};
+
 const payrollController = {
     // 1. POST /payroll
     createPayroll: async (req, res) => {
@@ -53,7 +61,7 @@ const payrollController = {
                 ) VALUES (?, ?, ?, ?, ?, ?, 'Monthly', ?, ?, ?, ?, 0, ?, ?, ?, 200, 0, 30, ?, ?, ?, ?, '100223344999', '3122334455009', ?, ?)
             `).run(
                 req.user.id,
-                employee_id || 'EMP-001',
+                parseEmployeeId(employee_id || 'EMP-001'),
                 amount || 35000,
                 month || 'May 2026',
                 status || 'processed',

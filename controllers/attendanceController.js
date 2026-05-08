@@ -38,6 +38,13 @@ const initColumns = async () => {
 };
 initColumns();
 
+const parseEmployeeId = (empId) => {
+    if (!empId) return 1;
+    if (typeof empId === 'number') return empId;
+    const match = String(empId).match(/\d+/);
+    return match ? parseInt(match[0], 10) : 1;
+};
+
 const attendanceController = {
     // 1. POST /attendance
     createAttendance: async (req, res) => {
@@ -48,7 +55,7 @@ const attendanceController = {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 9.0, 1.0, 8.0, 'MOBILE-GPS-APP', 'Inside')
             `).run(
                 req.user.id,
-                employee_id || 'EMP-001',
+                parseEmployeeId(employee_id || 'EMP-001'),
                 date || new Date().toISOString().split('T')[0],
                 status || 'present',
                 check_in_time || '09:00 AM',
@@ -152,7 +159,7 @@ const attendanceController = {
             const result = await db.prepare(`
                 INSERT INTO attendance (user_id, employee_id, date, check_in_time, status, employee_name, location_address, first_punch, device_id, geo_fence_status)
                 VALUES (?, ?, ?, ?, 'present', 'Arun Kumar (Sales)', ?, ?, 'MOBILE-GPS-APP', 'Inside')
-            `).run(req.user.id, employee_id || 'EMP-001', today, nowTime, location_address || 'Main Office Complex, Mumbai', nowTime);
+            `).run(req.user.id, parseEmployeeId(employee_id || 'EMP-001'), today, nowTime, location_address || 'Main Office Complex, Mumbai', nowTime);
             return sendSuccess(res, { id: result.lastInsertRowid, check_in_time: nowTime }, 'Checked in successfully');
         } catch (error) {
             return sendError(res, 'Check-in failed', 500);
