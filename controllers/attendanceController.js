@@ -168,7 +168,7 @@ const attendanceController = {
 
     // 7. POST /attendance/check-out
     checkOut: async (req, res) => {
-        const { employee_id } = req.body;
+        const { _employee_id } = req.body;
         try {
             const today = new Date().toISOString().split('T')[0];
             const nowTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });

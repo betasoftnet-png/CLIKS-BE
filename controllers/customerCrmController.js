@@ -302,7 +302,7 @@ const customerCrmController = {
 
     // 10. Get Customer Orders
     getOrders: async (req, res) => {
-        const { id } = req.params;
+        const { _id } = req.params;
         try {
             // Placeholder: Customer orders from manufacturing orders or similar, returning empty list or matching mock
             return sendSuccess(res, [], 'Customer orders fetched successfully');
@@ -313,7 +313,7 @@ const customerCrmController = {
 
     // 11. Get Customer Returns
     getReturns: async (req, res) => {
-        const { id } = req.params;
+        const { _id } = req.params;
         try {
             // Placeholder: returns matching mock
             return sendSuccess(res, [], 'Customer returns fetched successfully');
@@ -322,10 +322,9 @@ const customerCrmController = {
         }
     },
 
-    // 12. Create Payment
     createPayment: async (req, res) => {
         const { id } = req.params;
-        const { amount, payment_method, reference_number } = req.body;
+        const { amount, payment_method, reference_number, type } = req.body;
         if (!amount) return sendError(res, 'Amount is required', 400);
 
         try {
@@ -333,10 +332,13 @@ const customerCrmController = {
             const customer = await db.prepare('SELECT outstanding_balance FROM business_customers WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (!customer) return sendError(res, 'Customer not found', 404);
 
-            const newBalance = Math.max(0, (customer.outstanding_balance || 0) - amount);
+            const isPaymentOut = type && (type.toLowerCase() === 'payment out' || type.toLowerCase() === 'debit');
+            const newBalance = isPaymentOut 
+                ? (customer.outstanding_balance || 0) + amount
+                : Math.max(0, (customer.outstanding_balance || 0) - amount);
 
-            // Deduct outstanding balance
-            await db.prepare('UPDATE business_customers SET outstanding_balance = ? WHERE id = ? AND user_id = ?').run(newBalance, id, req.user.id);
+            // Update outstanding balance
+            await db.prepare('UPDATE business_customers SET outstanding_balance = ?, current_balance = ? WHERE id = ? AND user_id = ?').run(newBalance, newBalance, id, req.user.id);
 
             // Insert into customer payments
             const result = await db.prepare(`
@@ -345,10 +347,17 @@ const customerCrmController = {
             `).run(id, req.user.id, amount, payment_method || null, reference_number || null, now);
 
             // Record in Customer Ledger
+            const ledgerDescription = type && type.toLowerCase() === 'debit'
+                ? `Debit (Invoice/Charge) - Ref: ${reference_number || 'N/A'}`
+                : (isPaymentOut 
+                    ? `Payment given - Ref: ${reference_number || 'N/A'}`
+                    : `Payment received - Ref: ${reference_number || 'N/A'}`);
+            const ledgerType = isPaymentOut ? 'debit' : 'credit';
+
             await db.prepare(`
                 INSERT INTO customer_ledger (customer_id, user_id, description, amount, type, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
-            `).run(id, req.user.id, `Payment received - Ref: ${reference_number || 'N/A'}`, amount, 'credit', now);
+            `).run(id, req.user.id, ledgerDescription, amount, ledgerType, now);
 
             return sendSuccess(res, { id: result.lastInsertRowid, outstanding_balance: newBalance }, 'Payment recorded successfully', 201);
         } catch (error) {

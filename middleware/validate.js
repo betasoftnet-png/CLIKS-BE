@@ -8,7 +8,7 @@
  *   router.post('/', validate.createTransaction, validate.handle, (req, res) => { ... });
  */
 
-const { body, param, query, validationResult } = require('express-validator');
+const { body, query, validationResult } = require('express-validator');
 
 // ── Run collected rules and return 422 if any fail ────────────────────────────
 const handle = (req, res, next) => {

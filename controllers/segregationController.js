@@ -74,7 +74,7 @@ const updateSegregation = async (req, res) => {
   const rule = await db.prepare('SELECT * FROM segregation WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!rule) return sendError(res, 'Segregation rule not found', 404, 'NOT_FOUND');
 
-  const { name, rule_type, description, allocations } = req.body;
+  const { allocations } = req.body;
 
   if (allocations && Array.isArray(allocations)) {
     const totalPct = allocations.reduce((sum, a) => sum + (parseFloat(a.percentage) || 0), 0);

@@ -1,5 +1,5 @@
 const db = require('../db/connection');
-const { sendSuccess } = require('../utils/response');
+const { sendSuccess, sendError } = require('../utils/response');
 
 const getDashboard = async (req, res) => {
   const userId = req.user.id;

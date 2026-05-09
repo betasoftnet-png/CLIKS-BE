@@ -1,7 +1,7 @@
 const request = require('supertest');
 const app = require('../app');
 const { runMigrations } = require('../db/migrations');
-const db = require('../db/connection');
+// const db = require('../db/connection');
 
 // Set dummy environment variables for tests
 process.env.JWT_SECRET = 'test-jwt-secret';

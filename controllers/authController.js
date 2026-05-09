@@ -1,5 +1,5 @@
-const bcrypt = require('bcryptjs');
-const { z } = require('zod');
+// const bcrypt = require('bcryptjs');
+// const { z } = require('zod');
 
 const db = require('../db/connection');
 const { sendSuccess } = require('../utils/response');
@@ -28,7 +28,7 @@ const ssoLogin = async (req, res) => {
     throw new AppError('Failed to verify SSO token: ' + err.message, 401, 'UNAUTHORIZED');
   }
 
-  const { email, name, accountType } = bnxProfile;
+  const { email, name: _name, accountType } = bnxProfile;
 
   // Enforce Business Account for Business App
   if (appType === 'BUSINESS' && accountType !== 'BUSINESS') {

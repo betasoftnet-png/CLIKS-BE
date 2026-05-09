@@ -12,7 +12,7 @@ const logger = require('../utils/logger');
 const { captureException } = require('../utils/sentry');
 const { ZodError } = require('zod');
 
-function errorHandler(err, req, res, next) {
+function errorHandler(err, req, res, _next) {
   const isDev = process.env.NODE_ENV !== 'production';
 
   // ── Zod Validation Error ──────────────────────────────────────────────────

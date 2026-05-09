@@ -250,7 +250,7 @@ const billingController = {
 
     // 9. History / Timeline
     getInvoiceHistory: async (req, res) => {
-        const { id } = req.params;
+        const { _id } = req.params;
         try {
             const timeline = [
                 { title: 'Invoice Created', date: new Date().toISOString() },

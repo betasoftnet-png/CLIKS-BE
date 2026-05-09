@@ -5,7 +5,7 @@ const { sendSuccess, sendError } = require('../utils/response');
 // Helper: strip password_hash from user row
 const safeUser = (user) => {
   if (!user) return null;
-  const { password_hash, ...safe } = user;
+  const { password_hash: _password_hash, ...safe } = user;
   safe.name = user.username; // Map database username to name expected by the frontend
   return safe;
 };

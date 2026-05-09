@@ -45,7 +45,7 @@ class TokenService {
   /**
    * Validates a raw refresh token and returns the matched DB record if valid
    */
-  static async validateRefreshToken(rawToken) {
+  static async validateRefreshToken(_rawToken) {
     // Find all unexpired tokens (performance optimization: we would normally index the exact token but we hashed it securely)
     // To find the exact token we need the user_id or we must check the hashes. 
     // BUT since we just get the "rawToken", we should really pass the user_id alongside the rawToken, OR decode user_id if it's a JWT.

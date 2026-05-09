@@ -62,7 +62,7 @@ const purchaseController = {
 
     // 2. Get Purchases with Filtering
     getPurchases: async (req, res) => {
-        const { search, status, supplier_id, doc_type } = req.query;
+        const { search, status, supplier_id: _supplier_id, doc_type } = req.query;
         try {
             let query = `SELECT * FROM business_purchases WHERE user_id = ?`;
             const params = [req.user.id];
