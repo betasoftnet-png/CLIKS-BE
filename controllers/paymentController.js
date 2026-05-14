@@ -88,6 +88,56 @@ const paymentController = {
         } catch (error) {
             return sendError(res, 'Aggregation failed', 500);
         }
+    },
+
+    createCashfreeOrder: async (req, res) => {
+        const { amount, orderId } = req.body;
+        if (!amount) return sendError(res, 'Amount is required', 400);
+
+        try {
+            const clientId = process.env.CASHFREE_CLIENT_ID;
+            const clientSecret = process.env.CASHFREE_SECRET_KEY;
+            const isProd = process.env.CASHFREE_ENV === 'production';
+            const apiDomain = isProd ? 'api.cashfree.com' : 'sandbox.cashfree.com';
+
+            const payload = {
+                order_id: orderId || `ORDER_${Date.now()}`,
+                order_amount: parseFloat(amount),
+                order_currency: 'INR',
+                customer_details: {
+                    customer_id: `CUST_${req.user?.id || 'GUEST'}`,
+                    customer_phone: req.user?.phone || '9999999999',
+                    customer_name: req.user?.name || 'CLIKS Account Holder',
+                    customer_email: req.user?.email || 'user@cliksbusiness.com'
+                },
+                order_meta: {
+                    notify_url: `https://cliks.beta-softnet.com/api/v1/payments/webhook`
+                }
+            };
+
+            const gatewayResponse = await fetch(`https://${apiDomain}/pg/orders`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-version': '2023-08-01',
+                    'x-client-id': clientId,
+                    'x-client-secret': clientSecret
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const responseData = await gatewayResponse.json();
+
+            if (!gatewayResponse.ok) {
+                console.error('[Cashfree API Handshake Failed]:', responseData);
+                return sendError(res, responseData.message || 'Cashfree provider error', gatewayResponse.status);
+            }
+
+            return sendSuccess(res, responseData, 'Payment provider session established securely');
+        } catch (error) {
+            console.error('[Payment Controller] Backend Cashfree Error:', error);
+            return sendError(res, 'Gateway communication failed internally', 500);
+        }
     }
 };
 

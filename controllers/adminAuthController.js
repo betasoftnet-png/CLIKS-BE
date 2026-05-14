@@ -4,6 +4,8 @@ const db = require('../db/connection');
 const { sendSuccess } = require('../utils/response');
 const AppError = require('../utils/AppError');
 
+const { recordAudit } = require('../utils/auditLogger');
+
 /**
  * Platform Admin Core Authentication
  */
@@ -48,6 +50,8 @@ const adminLogin = async (req, res) => {
     email: admin.email,
     role: 'admin'
   };
+
+  await recordAudit('ADMIN_LOGIN', `Administrative terminal initialized by "${admin.name || 'Master Admin'}"`, admin.name || 'Master Admin', 'SUCCESS');
 
   return sendSuccess(
     res, 

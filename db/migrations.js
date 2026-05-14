@@ -1275,6 +1275,60 @@ CREATE TABLE IF NOT EXISTS product_categories (
   created_at TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
+
+-- Platform Global Settings Override Engine
+CREATE TABLE IF NOT EXISTS platform_config (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT UNIQUE NOT NULL,
+  value TEXT NOT NULL,
+  updated_at TEXT
+);
+
+-- Multi-Tenant Broadcast Announcement Engine
+CREATE TABLE IF NOT EXISTS platform_announcements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  banner_type TEXT DEFAULT 'INFO', -- INFO | WARNING | CRITICAL
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT
+);
+
+-- Immutable Core Infrastructure Audit Logging Engine
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_type TEXT NOT NULL,
+  message TEXT NOT NULL,
+  actor TEXT DEFAULT 'System',
+  severity TEXT DEFAULT 'INFO',
+  created_at TEXT
+);
+
+-- Multi-Agent Enterprise Sales Pipeline Management
+CREATE TABLE IF NOT EXISTS sales_agents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  commission_rate REAL DEFAULT 0.0,
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT
+);
+
+-- Distributed Customer Leads Distribution Grid
+CREATE TABLE IF NOT EXISTS sales_leads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id INTEGER,
+  business_name TEXT NOT NULL,
+  contact_name TEXT,
+  email TEXT,
+  phone TEXT,
+  status TEXT DEFAULT 'NEW',
+  estimated_value REAL DEFAULT 0.0,
+  notes TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
   `;
 
   if (dbType === 'postgres') {
@@ -1521,6 +1575,22 @@ CREATE TABLE IF NOT EXISTS product_categories (
       }
     });
     console.log('✅ Verified/Updated table columns in SQLite');
+  }
+
+  // Seed Initial Infrastructure Configurations (Dialect Agnostic Block)
+  try {
+    const check = await db.prepare("SELECT count(*) as cnt FROM platform_config").get();
+    if (check && (check.cnt === 0 || check.cnt === '0')) {
+      console.log('🌱 Seeding default platform engine parameters...');
+      await db.prepare("INSERT INTO platform_config (key, value, updated_at) VALUES ('maintenance_mode', 'false', CURRENT_TIMESTAMP)").run();
+      await db.prepare("INSERT INTO platform_config (key, value, updated_at) VALUES ('signup_enabled', 'true', CURRENT_TIMESTAMP)").run();
+      await db.prepare("INSERT INTO platform_config (key, value, updated_at) VALUES ('ai_auditing', 'true', CURRENT_TIMESTAMP)").run();
+      await db.prepare("INSERT INTO platform_config (key, value, updated_at) VALUES ('instant_invoicing', 'true', CURRENT_TIMESTAMP)").run();
+      await db.prepare("INSERT INTO platform_config (key, value, updated_at) VALUES ('beta_integrations', 'false', CURRENT_TIMESTAMP)").run();
+      await db.prepare("INSERT INTO platform_config (key, value, updated_at) VALUES ('api_throttle_limit', '1200', CURRENT_TIMESTAMP)").run();
+    }
+  } catch (err) {
+    console.warn("⚠️ Skipping infrastructure seed sequence:", err.message);
   }
 
   console.log('✅ Migrations applied');

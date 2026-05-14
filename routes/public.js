@@ -4,10 +4,13 @@ const { auth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { likeLimiter } = require('../middleware/rateLimiter');
 const cache = require('../middleware/cache');
-const { getPublicFeed, createPost, likePost, deletePost } = require('../controllers/publicController');
+const { getPublicFeed, createPost, likePost, deletePost, getActiveAnnouncement } = require('../controllers/publicController');
 
 // GET    /public              — Get paginated public post feed (cached 2 min, filterable by type)
 router.get('/', cache(120), validate.listQuery, validate.handle, getPublicFeed);
+
+// GET    /public/announcement — Fetch the latest active announcement for display
+router.get('/announcement', getActiveAnnouncement);
 
 // POST   /public              — Create a new public post (auth required)
 router.post('/', auth, validate.createPost, validate.handle, createPost);

@@ -72,4 +72,25 @@ const deletePost = async (req, res) => {
   return res.status(204).end();
 };
 
-module.exports = { getPublicFeed, createPost, likePost, deletePost };
+// ── GET /announcement — Fetch the latest active broadcast alert ─────────────────
+const getActiveAnnouncement = async (req, res) => {
+  try {
+    const active = await db.prepare(`
+      SELECT title, message, banner_type, created_at 
+      FROM platform_announcements 
+      WHERE is_active = 1 OR is_active = '1'
+      ORDER BY id DESC 
+      LIMIT 1
+    `).get();
+    
+    if (!active) {
+      return sendSuccess(res, null, 'No active announcements.');
+    }
+    
+    return sendSuccess(res, active, 'Active platform announcement loaded.');
+  } catch (err) {
+    return sendSuccess(res, null);
+  }
+};
+
+module.exports = { getPublicFeed, createPost, likePost, deletePost, getActiveAnnouncement };

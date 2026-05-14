@@ -11,6 +11,7 @@ const { globalLimiter } = require('./middleware/rateLimiter');
 const apiVersion = require('./middleware/apiVersion');
 const requestLogger = require('./middleware/requestLogger');
 const { initSentry } = require('./utils/sentry');
+const { checkSystemMaintenance } = require('./middleware/maintenance');
 
 // ── Initialise Sentry FIRST (before any other middleware) ───────────────────────
 // No-ops silently when SENTRY_DSN is not set (dev/test safe)
@@ -66,6 +67,9 @@ app.use('/api/', globalLimiter);
 // Adds X-API-Deprecated + X-API-Sunset headers for sunset versions.
 app.use('/api/', apiVersion());
 
+// ── Infrastructure Integrity & Maintenance Gating ─────────────────────────────
+app.use('/api/', checkSystemMaintenance);
+
 // ── Versioned Routers (v1 / v2) ──────────────────────────────────────────────
 // routes/v1/index.js  → thin delegation layer over the existing flat routes
 // routes/v2/index.js  → scaffold — returns 501 until routes are progressively migrated
@@ -91,6 +95,9 @@ app.use('/api/v1/meetups', require('./routes/meetups'));
 
 // Admin
 app.use('/api/v1/admin',            require('./routes/admin'));
+
+// Platform Direct Marketing Reps
+app.use('/api/v1/sales-agent',      require('./routes/salesAgent'));
 
 // Profile
 app.use('/api/v1/profile',          auth, require('./routes/profile'));
