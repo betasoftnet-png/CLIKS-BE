@@ -10,6 +10,8 @@ const getPlannedPayments = async (req, res) => {
   if (status) { query += ' AND status = ?'; params.push(status); }
   if (category) { query += ' AND category LIKE ?'; params.push(`%${category}%`); }
   if (search) { query += ' AND name LIKE ?'; params.push(`%${search}%`); }
+  if (req.query.type) { query += ' AND type = ?'; params.push(req.query.type); }
+  if (req.query.person_id) { query += ' AND person_id = ?'; params.push(req.query.person_id); }
 
   const allowedSorts = ['created_at', 'updated_at', 'amount', 'due_date'];
   const sortCol = allowedSorts.includes(sort) ? sort : 'created_at';
@@ -22,15 +24,15 @@ const getPlannedPayments = async (req, res) => {
 };
 
 const createPlannedPayment = async (req, res) => {
-  const { account_id, name, amount, due_date, frequency, category, status = 'pending' } = req.body;
+  const { account_id, name, amount, due_date, frequency, category, status = 'pending', type, person_id } = req.body;
   if (!name || amount === undefined || !due_date) return sendError(res, 'Name, amount, and due_date are required', 400, 'BAD_REQUEST');
 
   const now = new Date().toISOString();
   const stmt = db.prepare(`
-    INSERT INTO planned_payments (user_id, account_id, name, amount, due_date, frequency, category, status, created_at, updated_at) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO planned_payments (user_id, account_id, name, amount, due_date, frequency, category, status, type, person_id, created_at, updated_at) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = await stmt.run(req.user.id, account_id || null, name, amount, due_date, frequency || null, category || null, status, now, now);
+  const info = await stmt.run(req.user.id, account_id || null, name, amount, due_date, frequency || null, category || null, status, type || null, person_id || null, now, now);
   
   const newItem = await db.prepare('SELECT * FROM planned_payments WHERE id = ?').get(info.lastInsertRowid);
   return sendSuccess(res, newItem, 'Planned payment created', 201);
@@ -48,7 +50,7 @@ const updatePlannedPayment = async (req, res) => {
 
   const updates = [];
   const params = [];
-  const allowedFields = ['account_id', 'name', 'amount', 'due_date', 'frequency', 'category', 'status'];
+  const allowedFields = ['account_id', 'name', 'amount', 'due_date', 'frequency', 'category', 'status', 'type', 'person_id'];
   
   for (const field of allowedFields) {
     if (req.body[field] !== undefined) {

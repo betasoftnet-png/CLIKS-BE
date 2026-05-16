@@ -70,6 +70,7 @@ router.get('/analytics', gstController.getAnalytics);
 router.get('/reports/gstr1', gstController.getReportGstr1);
 router.get('/reports/gstr2', gstController.getReportGstr2);
 router.get('/reports/gstr3b', gstController.getReportGstr3b);
+router.get('/reports/gstr9', gstController.getReportGstr9);
 router.get('/reports/input-tax-credit', gstController.getReportITC);
 router.get('/reports/output-tax', gstController.getReportOutputTax);
 router.get('/reports/liability', gstController.getReportLiability);

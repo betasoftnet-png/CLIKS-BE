@@ -178,6 +178,7 @@ app.use('/api/v1/returns',       auth, require('./routes/returns'));
 app.use('/api/v1/suppliers',     auth, require('./routes/suppliers'));
 app.use('/api/v1/reports',       auth, require('./routes/reports'));
 app.use('/api/v1/expenses',      auth, require('./routes/expenses'));
+app.use('/api/v1/calculator',    auth, require('./routes/calculator'));
 
 // ── 404 Handler ───────────────────────────────────────────────────────────────
 app.use((req, res) => {

@@ -798,6 +798,17 @@ CREATE TABLE IF NOT EXISTS business_payments (
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
+-- Calculator History
+CREATE TABLE IF NOT EXISTS calculator_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  tape TEXT NOT NULL,
+  total REAL NOT NULL,
+  timestamp TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
 -- Warehouses
 CREATE TABLE IF NOT EXISTS warehouses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -134,6 +134,33 @@ const posController = {
             console.error('[POS Controller] Summary error:', error);
             return sendError(res, 'Failed to fetch summary', 500);
         }
+    },
+
+    getOrders: async (req, res) => {
+        const userId = req.user.id;
+        const { limit = 50, offset = 0 } = req.query;
+        try {
+            const orders = await db.prepare(`
+                SELECT * FROM business_invoices 
+                WHERE user_id = ? AND invoice_type = 'POS' 
+                ORDER BY created_at DESC 
+                LIMIT ? OFFSET ?
+            `).all([userId, parseInt(limit), parseInt(offset)]);
+
+            const formattedOrders = orders.map(order => {
+                try {
+                    order.items = JSON.parse(order.items);
+                } catch (e) {
+                    order.items = [];
+                }
+                return order;
+            });
+
+            return sendSuccess(res, formattedOrders, 'POS order history retrieved');
+        } catch (error) {
+            console.error('[POS Controller] Orders history error:', error);
+            return sendError(res, 'Failed to fetch order history', 500);
+        }
     }
 };
 
