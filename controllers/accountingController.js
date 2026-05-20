@@ -202,7 +202,7 @@ const accountingController = {
             const revenue = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type = 'income'").get(req.user.id);
             const expenses = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type = 'expense'").get(req.user.id);
             const opExpenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
-            const gstPurchases = await db.prepare("SELECT SUM(invoice_amount + eligible_itc) as total FROM gst_invoices WHERE user_id = ? AND is_reconciliation = 'true'").get(req.user.id);
+            const gstPurchases = await db.prepare("SELECT SUM(CAST(COALESCE(invoice_amount, '0') AS REAL) + CAST(COALESCE(eligible_itc, '0') AS REAL)) as total FROM gst_invoices WHERE user_id = ? AND is_reconciliation = 'true'").get(req.user.id);
             
             const rev = revenue?.total || 0;
             const exp = (expenses?.total || 0) + (opExpenses?.total || 0) + (gstPurchases?.total || 0);
@@ -221,7 +221,7 @@ const accountingController = {
             const rev = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type = 'income'").get(req.user.id);
             const exp = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type = 'expense'").get(req.user.id);
             const opExpenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
-            const gstPurchases = await db.prepare("SELECT SUM(invoice_amount + eligible_itc) as total FROM gst_invoices WHERE user_id = ? AND is_reconciliation = 'true'").get(req.user.id);
+            const gstPurchases = await db.prepare("SELECT SUM(CAST(COALESCE(invoice_amount, '0') AS REAL) + CAST(COALESCE(eligible_itc, '0') AS REAL)) as total FROM gst_invoices WHERE user_id = ? AND is_reconciliation = 'true'").get(req.user.id);
             
             const totalExp = (exp?.total || 0) + (opExpenses?.total || 0) + (gstPurchases?.total || 0);
             const cashAvailable = (rev?.total || 0) - totalExp;

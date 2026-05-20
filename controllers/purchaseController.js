@@ -1,5 +1,20 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const { recordAudit } = require('../utils/auditLogger');
+
+const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') => {
+    try {
+        const user = await db.prepare('SELECT settings FROM users WHERE id = ?').get(userId);
+        if (user && user.settings) {
+            const settings = JSON.parse(user.settings);
+            if (settings.auditTrail) {
+                await recordAudit(actionType, message, `User #${userId}`, severity);
+            }
+        }
+    } catch (err) {
+        console.warn('Failed to record business audit log:', err);
+    }
+};
 
 const purchaseController = {
     // 1. Create Purchase (PO, BILL, RETURN)
@@ -53,6 +68,7 @@ const purchaseController = {
             const created = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(purchaseId);
             created.items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(purchaseId);
 
+            await logBusinessAudit(req.user.id, 'PURCHASE_CREATE', `Created purchase document ${purchase_number} (${doc_type}) for supplier ${supplier_name} (amount: ₹${grand_total})`, 'SUCCESS');
             return sendSuccess(res, created, 'Purchase document created successfully', 201);
         } catch (error) {
             console.error('[Purchase Controller] Error creating purchase:', error);
@@ -166,6 +182,7 @@ const purchaseController = {
             const updated = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(id);
             updated.items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(id);
 
+            await logBusinessAudit(req.user.id, 'PURCHASE_UPDATE', `Updated purchase record ID ${id} (${doc_type}) for supplier ${supplier_name} (amount: ₹${grand_total})`, 'INFO');
             return sendSuccess(res, updated, 'Purchase record updated successfully');
         } catch (error) {
             console.error('[Purchase Controller] Error updating purchase:', error);
@@ -181,6 +198,7 @@ const purchaseController = {
             if (!purchase) return sendError(res, 'Purchase record not found', 404);
 
             await db.prepare('DELETE FROM business_purchases WHERE id = ?').run(id);
+            await logBusinessAudit(req.user.id, 'PURCHASE_DELETE', `Deleted purchase record ID ${id}`, 'WARN');
             return sendSuccess(res, null, 'Purchase record deleted successfully');
         } catch (error) {
             console.error('[Purchase Controller] Error deleting purchase:', error);
@@ -438,6 +456,7 @@ const purchaseController = {
         const { id } = req.params;
         try {
             await db.prepare('UPDATE business_purchases SET status = \'Cancelled\' WHERE id = ?').run(id);
+            await logBusinessAudit(req.user.id, 'PURCHASE_CANCEL', `Cancelled purchase document ID ${id}`, 'WARN');
             return sendSuccess(res, null, 'Purchase document cancelled successfully');
         } catch (error) {
             return sendError(res, 'Failed to cancel purchase document', 500);

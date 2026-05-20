@@ -3,12 +3,24 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { paginate } = require('../utils/pagination');
 const { invalidatePublicFeed } = require('../utils/cacheInvalidation');
 
+const resolveAuthorName = (username, settingsStr) => {
+  if (settingsStr) {
+    try {
+      const settings = JSON.parse(settingsStr);
+      if (settings.publicProfile === false) {
+        return 'Anonymous User';
+      }
+    } catch (e) {}
+  }
+  return username;
+};
+
 // ── GET / — Public paginated feed ─────────────────────────────────────────────
 const getPublicFeed = async (req, res) => {
   const { page, limit = 20, type } = req.query;
 
   let query = `
-    SELECT p.id, p.content, p.type, p.likes, p.created_at, u.username AS author_username
+    SELECT p.id, p.content, p.type, p.likes, p.created_at, u.username AS author_username, u.settings AS author_settings
     FROM public_posts p
     JOIN users u ON u.id = p.user_id
     WHERE 1=1
@@ -19,9 +31,9 @@ const getPublicFeed = async (req, res) => {
   query += ' ORDER BY p.created_at DESC';
 
   const result = await paginate(query, params, page, limit, db);
-  const rows = result.rows.map(({ author_username, ...post }) => ({
+  const rows = result.rows.map(({ author_username, author_settings, ...post }) => ({
     ...post,
-    author: { username: author_username },
+    author: { username: resolveAuthorName(author_username, author_settings) },
   }));
 
   return sendSuccess(res, rows, 'Public feed fetched', 200, result.meta);
@@ -38,14 +50,14 @@ const createPost = async (req, res) => {
   `).run(req.user.id, content, type, now, now);
 
   const newPost = await db.prepare(`
-    SELECT p.id, p.content, p.type, p.likes, p.created_at, u.username AS author_username
+    SELECT p.id, p.content, p.type, p.likes, p.created_at, u.username AS author_username, u.settings AS author_settings
     FROM public_posts p JOIN users u ON u.id = p.user_id
     WHERE p.id = ?
   `).get(info.lastInsertRowid);
 
-  const { author_username, ...post } = newPost;
+  const { author_username, author_settings, ...post } = newPost;
   await invalidatePublicFeed();
-  return sendSuccess(res, { ...post, author: { username: author_username } }, 'Post created', 201);
+  return sendSuccess(res, { ...post, author: { username: resolveAuthorName(author_username, author_settings) } }, 'Post created', 201);
 };
 
 // ── PATCH /:id/like — Increment likes (rate-limited, no auth) ─────────────────
