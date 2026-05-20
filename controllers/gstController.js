@@ -397,6 +397,7 @@ const gstController = {
 
             return sendSuccess(res, report, 'GSTR-3B summary aggregated successfully');
         } catch (error) {
+            console.error('[GST Controller] GSTR-3B aggregation failed:', error);
             return sendError(res, 'Failed to aggregate GSTR-3B statistics', 500);
         }
     },
@@ -433,6 +434,7 @@ const gstController = {
             };
             return sendSuccess(res, annualReport, 'GSTR-9 Annual Consolidated Data retrieved');
         } catch (error) {
+            console.error('[GST Controller] GSTR-9 annual compilation failed:', error);
             return sendError(res, 'Failed to compile annual GSTR-9 data', 500);
         }
     },

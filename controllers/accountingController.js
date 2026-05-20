@@ -213,6 +213,7 @@ const accountingController = {
                 net_profit: net
             }, 'P&L retrieved');
         } catch (error) {
+            console.error('[Accounting Controller] Profit & Loss failed:', error);
             return sendError(res, 'P&L failed', 500);
         }
     },
