@@ -204,8 +204,8 @@ const accountingController = {
             const opExpenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
             const gstPurchases = await db.prepare("SELECT SUM(CAST(COALESCE(invoice_amount, '0') AS real) + CAST(COALESCE(eligible_itc, '0') AS real)) as total FROM gst_invoices WHERE user_id = ? AND is_reconciliation = 'true'").get(req.user.id);
             
-            const rev = revenue?.total || 0;
-            const exp = (expenses?.total || 0) + (opExpenses?.total || 0) + (gstPurchases?.total || 0);
+            const rev = parseFloat(revenue?.total) || 0;
+            const exp = (parseFloat(expenses?.total) || 0) + (parseFloat(opExpenses?.total) || 0) + (parseFloat(gstPurchases?.total) || 0);
             const net = rev - exp;
             return sendSuccess(res, {
                 gross_revenue: rev,
@@ -224,8 +224,8 @@ const accountingController = {
             const opExpenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
             const gstPurchases = await db.prepare("SELECT SUM(CAST(COALESCE(invoice_amount, '0') AS real) + CAST(COALESCE(eligible_itc, '0') AS real)) as total FROM gst_invoices WHERE user_id = ? AND is_reconciliation = 'true'").get(req.user.id);
             
-            const totalExp = (exp?.total || 0) + (opExpenses?.total || 0) + (gstPurchases?.total || 0);
-            const cashAvailable = (rev?.total || 0) - totalExp;
+            const totalExp = (parseFloat(exp?.total) || 0) + (parseFloat(opExpenses?.total) || 0) + (parseFloat(gstPurchases?.total) || 0);
+            const cashAvailable = (parseFloat(rev?.total) || 0) - totalExp;
 
             return sendSuccess(res, {
                 assets: { 
