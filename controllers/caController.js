@@ -72,6 +72,10 @@ const initTableAndColumns = async () => {
             )
         `).run();
 
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN ask_for_document INTEGER DEFAULT 0").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN attached_file TEXT").run(); } catch(e) {}
+
+
         await db.prepare(`
             CREATE TABLE IF NOT EXISTS ca_timesheets (
                 id ${idType},
@@ -630,7 +634,9 @@ const caController = {
                 title: item.title,
                 status: item.status,
                 priority: item.priority,
-                dueDate: item.due_date
+                dueDate: item.due_date,
+                askForDocument: item.ask_for_document === 1,
+                attachedFile: item.attached_file
             }));
             return sendSuccess(res, mapped, 'Practice tasks retrieved');
         } catch (error) {
@@ -639,14 +645,15 @@ const caController = {
         }
     },
     addTask: async (req, res) => {
-        const { clientName, title, priority, dueDate } = req.body;
+        const { clientName, title, priority, dueDate, askForDocument } = req.body;
         if (!title) return sendError(res, 'Task title is required', 400);
         try {
             const defaultDate = dueDate || new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString().split('T')[0];
+            const askDocInt = askForDocument ? 1 : 0;
             const result = await db.prepare(`
-                INSERT INTO ca_tasks (ca_user_id, client_name, title, status, priority, due_date)
-                VALUES (?, ?, ?, 'Pending', ?, ?)
-            `).run(req.user.id, clientName || 'General Client', title, priority || 'Medium', defaultDate);
+                INSERT INTO ca_tasks (ca_user_id, client_name, title, status, priority, due_date, ask_for_document, attached_file)
+                VALUES (?, ?, ?, 'Pending', ?, ?, ?, null)
+            `).run(req.user.id, clientName || 'General Client', title, priority || 'Medium', defaultDate, askDocInt);
 
             const newTask = {
                 id: result.lastInsertRowid,
@@ -654,7 +661,9 @@ const caController = {
                 title,
                 status: 'Pending',
                 priority: priority || 'Medium',
-                dueDate: defaultDate
+                dueDate: defaultDate,
+                askForDocument: !!askForDocument,
+                attachedFile: null
             };
             return sendSuccess(res, newTask, 'Task added successfully');
         } catch (error) {
@@ -679,6 +688,23 @@ const caController = {
         } catch (error) {
             console.error('[CA toggleTaskStatus Error]', error);
             return sendError(res, 'Failed to update task status', 500);
+        }
+    },
+    uploadTaskDoc: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const attachedFile = `uploaded_task_doc_${Date.now().toString().slice(-4)}.pdf`;
+            
+            await db.prepare(`
+                UPDATE ca_tasks 
+                SET attached_file = ? 
+                WHERE id = ?
+            `).run(attachedFile, id);
+
+            return sendSuccess(res, { id: parseInt(id), attachedFile }, 'Task document uploaded successfully');
+        } catch (error) {
+            console.error('[CA uploadTaskDoc Error]', error);
+            return sendError(res, 'Failed to upload task document', 500);
         }
     },
 

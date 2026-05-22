@@ -25,6 +25,7 @@ router.post('/requests/:id/approve', caController.approveRequestDoc);
 router.get('/tasks', caController.getTasks);
 router.post('/tasks', caController.addTask);
 router.post('/tasks/:id/toggle', caController.toggleTaskStatus);
+router.post('/tasks/:id/upload', caController.uploadTaskDoc);
 
 router.get('/timesheets', caController.getTimesheets);
 router.post('/timesheets', caController.addTimesheet);
