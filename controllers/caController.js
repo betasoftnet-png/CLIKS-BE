@@ -635,7 +635,7 @@ const caController = {
                 status: item.status,
                 priority: item.priority,
                 dueDate: item.due_date,
-                askForDocument: item.ask_for_document === 1,
+                askForDocument: Boolean(item.ask_for_document),
                 attachedFile: item.attached_file
             }));
             return sendSuccess(res, mapped, 'Practice tasks retrieved');
@@ -649,7 +649,7 @@ const caController = {
         if (!title) return sendError(res, 'Task title is required', 400);
         try {
             const defaultDate = dueDate || new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString().split('T')[0];
-            const askDocInt = askForDocument ? 1 : 0;
+            const askDocInt = (askForDocument === 'true' || askForDocument === true || askForDocument == 1) ? 1 : 0;
             const result = await db.prepare(`
                 INSERT INTO ca_tasks (ca_user_id, client_name, title, status, priority, due_date, ask_for_document, attached_file)
                 VALUES (?, ?, ?, 'Pending', ?, ?, ?, null)
