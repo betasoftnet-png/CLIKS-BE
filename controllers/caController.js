@@ -447,12 +447,12 @@ const caController = {
             if (!email) {
                 return sendError(res, 'User email not found in session', 400);
             }
-            // For testing/demo ease, return incoming invitations for the logged-in user OR if they are the sender, return those too so they can demo both sides!
+            // Get incoming invitations for the logged-in user
             const list = await db.prepare(`
                 SELECT * FROM ca_invitations 
-                WHERE LOWER(receiver_email) = LOWER(?) OR LOWER(sender_email) = LOWER(?)
+                WHERE LOWER(receiver_email) = LOWER(?)
                 ORDER BY id DESC
-            `).all(email, email);
+            `).all(email);
             return sendSuccess(res, list, 'Incoming invitations retrieved');
         } catch (error) {
             console.error('[CA Get Incoming Invitations Error]', error);
@@ -468,11 +468,11 @@ const caController = {
                 return sendError(res, 'User email not found in session', 400);
             }
 
-            // Find invitation - allow sender or receiver for seamless single-account demo
+            // Find invitation - verify that the logged-in user is indeed the receiver of this invitation
             const invitation = await db.prepare(`
                 SELECT * FROM ca_invitations 
-                WHERE id = ? AND (LOWER(receiver_email) = LOWER(?) OR LOWER(sender_email) = LOWER(?))
-            `).get(id, email, email);
+                WHERE id = ? AND LOWER(receiver_email) = LOWER(?)
+            `).get(id, email);
 
             if (!invitation) {
                 return sendError(res, 'Invitation not found or unauthorized', 404);
@@ -913,6 +913,11 @@ const caController = {
         const { email, role } = req.body;
         if (!email) return sendError(res, 'Email address is required', 400);
         const emailLower = email.trim().toLowerCase();
+
+        // Check self-request
+        if (req.user.email && req.user.email.toLowerCase() === emailLower) {
+            return sendError(res, 'You cannot send a team invitation to yourself.', 400);
+        }
         
         try {
             await ensureSeededPracticeData(req.user.id);
