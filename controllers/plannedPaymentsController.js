@@ -4,17 +4,25 @@ const { paginate } = require('../utils/pagination');
 
 const getPlannedPayments = async (req, res) => {
   const { status, category, page, limit, sort = 'created_at', order = 'desc', search } = req.query;
-  let query = 'SELECT * FROM planned_payments WHERE user_id = ?';
+  let query = `
+    SELECT pp.*, p.name as person_name 
+    FROM planned_payments pp 
+    LEFT JOIN people p ON pp.person_id = p.id 
+    WHERE pp.user_id = ?
+  `;
   const params = [req.user.id];
 
-  if (status) { query += ' AND status = ?'; params.push(status); }
-  if (category) { query += ' AND category LIKE ?'; params.push(`%${category}%`); }
-  if (search) { query += ' AND name LIKE ?'; params.push(`%${search}%`); }
-  if (req.query.type) { query += ' AND type = ?'; params.push(req.query.type); }
-  if (req.query.person_id) { query += ' AND person_id = ?'; params.push(req.query.person_id); }
+  if (status) { query += ' AND pp.status = ?'; params.push(status); }
+  if (category) { query += ' AND pp.category LIKE ?'; params.push(`%${category}%`); }
+  if (search) { 
+    query += ' AND (pp.name LIKE ? OR p.name LIKE ?)'; 
+    params.push(`%${search}%`, `%${search}%`); 
+  }
+  if (req.query.type) { query += ' AND pp.type = ?'; params.push(req.query.type); }
+  if (req.query.person_id) { query += ' AND pp.person_id = ?'; params.push(req.query.person_id); }
 
   const allowedSorts = ['created_at', 'updated_at', 'amount', 'due_date'];
-  const sortCol = allowedSorts.includes(sort) ? sort : 'created_at';
+  const sortCol = allowedSorts.includes(sort) ? `pp.${sort}` : 'pp.created_at';
   const sortDir = order.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
   query += ` ORDER BY ${sortCol} ${sortDir}`;

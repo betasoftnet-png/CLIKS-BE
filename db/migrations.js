@@ -154,6 +154,8 @@ CREATE TABLE IF NOT EXISTS planned_payments (
   frequency TEXT,
   category TEXT,
   status TEXT DEFAULT 'pending',
+  type TEXT,
+  person_id INTEGER,
   created_at TEXT,
   updated_at TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id)
@@ -1619,7 +1621,9 @@ CREATE TABLE IF NOT EXISTS support_tickets (
         UNIQUE(meetup_id, user_id)
       );`,
       `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS founder_phone VARCHAR(50);`,
-      `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS founder_email VARCHAR(255);`
+      `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS founder_email VARCHAR(255);`,
+      `ALTER TABLE planned_payments ADD COLUMN IF NOT EXISTS type VARCHAR(50);`,
+      `ALTER TABLE planned_payments ADD COLUMN IF NOT EXISTS person_id INTEGER;`
     ];
     try {
       for (const q of pgAlters) await db.pool.query(q);
@@ -1647,6 +1651,8 @@ CREATE TABLE IF NOT EXISTS support_tickets (
       'ALTER TABLE people ADD COLUMN email TEXT',
       'ALTER TABLE split_expenses ADD COLUMN paid_by TEXT',
       'ALTER TABLE goal_wallets ADD COLUMN person_id INTEGER',
+      'ALTER TABLE planned_payments ADD COLUMN type TEXT',
+      'ALTER TABLE planned_payments ADD COLUMN person_id INTEGER',
       'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS attachment_url TEXT',
       'ALTER TABLE people_records ADD COLUMN IF NOT EXISTS file_type TEXT',
       'ALTER TABLE plan_income ADD COLUMN category TEXT',

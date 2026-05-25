@@ -127,7 +127,53 @@ const deleteExpense = async (req, res) => {
 const getSplitSummary = async (req, res) => sendSuccess(res, []);
 const settleFriend = async (req, res) => sendSuccess(res, {});
 const getSplitExpense = async (req, res) => sendSuccess(res, {});
-const updateSplitExpense = async (req, res) => sendSuccess(res, {});
+
+// ── PATCH /:id ────────────────────────────────────────────────────────────────
+const updateSplitExpense = async (req, res) => {
+  try {
+    const ticketId = req.params.id;
+    const { title, currency, currencySymbol, description, participants } = req.body;
+    
+    if (!title) {
+      return sendError(res, 'Title is required', 400, 'BAD_REQUEST');
+    }
+
+    const now = new Date().toISOString();
+
+    await db.prepare(`
+      UPDATE split_tickets 
+      SET title = ?, currency = ?, currency_symbol = ?, description = ?, participants = ?, updated_at = ?
+      WHERE id = ? AND user_id = ?
+    `).run(
+      title, 
+      currency || 'INR', 
+      currencySymbol || '₹', 
+      description || '', 
+      JSON.stringify(participants || []), 
+      now, 
+      ticketId, 
+      req.user.id
+    );
+
+    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
+    if (!ticket) {
+      return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
+    }
+    
+    ticket.participants = JSON.parse(ticket.participants);
+    ticket.currencySymbol = ticket.currency_symbol;
+    delete ticket.currency_symbol;
+    
+    // We don't fetch expenses here as the frontend just needs the updated basic info, 
+    // or we can fetch them if needed. Usually frontend merges updated info with existing state.
+
+    return sendSuccess(res, ticket, 'Split ticket updated successfully');
+  } catch (error) {
+    console.error('Error updating split ticket:', error);
+    return sendError(res, error.message, 500);
+  }
+};
+
 const getParticipants = async (req, res) => sendSuccess(res, []);
 const addParticipant = async (req, res) => sendSuccess(res, {}, 201);
 const settleParticipant = async (req, res) => sendSuccess(res, {});
