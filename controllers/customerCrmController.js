@@ -9,7 +9,8 @@ const initTables = async () => {
         const alters = [
             'ALTER TABLE business_customers ADD COLUMN city TEXT',
             'ALTER TABLE business_customers ADD COLUMN outstanding_balance REAL DEFAULT 0',
-            'ALTER TABLE business_customers ADD COLUMN total_spent REAL DEFAULT 0'
+            'ALTER TABLE business_customers ADD COLUMN total_spent REAL DEFAULT 0',
+            'ALTER TABLE business_customers ADD COLUMN loyalty_points INTEGER DEFAULT 0'
         ];
         for (const alter of alters) {
             try {
@@ -72,7 +73,7 @@ const customerCrmController = {
             billing_address, shipping_address,
             opening_balance, current_balance, credit_limit, due_days,
             outstanding_balance, total_spent,
-            reminder_enabled, preferred_contact
+            reminder_enabled, preferred_contact, loyalty_points
         } = req.body;
         if (!name) return sendError(res, 'Name is required', 400);
 
@@ -87,10 +88,10 @@ const customerCrmController = {
                     billing_address, shipping_address,
                     opening_balance, current_balance, credit_limit, due_days,
                     outstanding_balance, total_spent,
-                    reminder_enabled, preferred_contact,
+                    reminder_enabled, preferred_contact, loyalty_points,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id,
                 customer_code || null,
@@ -123,6 +124,7 @@ const customerCrmController = {
                 total_spent || 0,
                 reminder_enabled !== undefined ? reminder_enabled : false,
                 preferred_contact || 'WhatsApp',
+                parseInt(loyalty_points) || 0,
                 now,
                 now
             );
@@ -205,7 +207,7 @@ const customerCrmController = {
                 'billing_address', 'shipping_address',
                 'opening_balance', 'current_balance', 'credit_limit', 'due_days',
                 'outstanding_balance', 'total_spent',
-                'reminder_enabled', 'preferred_contact'
+                'reminder_enabled', 'preferred_contact', 'loyalty_points'
             ];
 
             for (const field of updatableFields) {

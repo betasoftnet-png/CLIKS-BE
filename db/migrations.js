@@ -598,6 +598,7 @@ CREATE TABLE IF NOT EXISTS business_customers (
   city TEXT,
   outstanding_balance REAL DEFAULT 0,
   total_spent REAL DEFAULT 0,
+  loyalty_points INTEGER DEFAULT 0,
   created_at TEXT,
   updated_at TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id)
