@@ -322,14 +322,14 @@ const attendanceController = {
                     { shift_id: 'SFT-02', shift_name: 'Night Logistics Shift', shift_start_time: '09:00 PM', shift_end_time: '06:00 AM', shift_type: 'Fixed', grace_time: 15 }
                 ];
                 for (const d of defaults) {
-                    await db.prepare('INSERT INTO shifts (shift_id, user_id, shift_name, shift_start_time, shift_end_time, shift_type, grace_time) VALUES (?, ?, ?, ?, ?, ?, ?)')
+                    await db.prepare('INSERT INTO shifts (shift_id, user_id, shift_name, shift_start_time, shift_end_time, shift_type, grace_time) VALUES (?, ?, ?, ?, ?, ?, ?) /* RETURNING */')
                       .run(d.shift_id, req.user.id, d.shift_name, d.shift_start_time, d.shift_end_time, d.shift_type, d.grace_time);
                 }
                 return sendSuccess(res, defaults, 'Shifts retrieved successfully');
             }
             return sendSuccess(res, shifts, 'Shifts retrieved successfully');
         } catch (error) {
-            return sendError(res, 'Failed to fetch shifts', 500);
+            console.error('Fetch shifts error:', error); return sendError(res, 'Failed to fetch shifts', 500);
         }
     },
     createShift: async (req, res) => {
@@ -338,7 +338,7 @@ const attendanceController = {
         try {
             await db.prepare(`
                 INSERT INTO shifts (shift_id, user_id, shift_name, shift_start_time, shift_end_time, shift_type, grace_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?) /* RETURNING */
             `).run(shift_id, req.user.id, shift_name, shift_start_time, shift_end_time, shift_type || 'Custom', grace_time || 0);
             const newShift = await db.prepare('SELECT * FROM shifts WHERE shift_id = ?').get(shift_id);
             return sendSuccess(res, newShift, 'Shift created successfully');

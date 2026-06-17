@@ -48,7 +48,7 @@ const parseEmployeeId = (empId) => {
 const payrollController = {
     // 1. POST /payroll
     createPayroll: async (req, res) => {
-        const { employee_id, amount, month, status, employee_name, hra_amount, special_allowance, bonus_amount, pf_deduction, esi_deduction, tds_deduction, bank_name, account_number, pan_number } = req.body;
+        const { employee_id, amount, month, status, employee_name, basic_salary, hra_amount, special_allowance, bonus_amount, pf_deduction, esi_deduction, tds_deduction, bank_name, account_number, pan_number } = req.body;
         try {
             const now = new Date().toISOString();
             const payslip_number = `PSN-2026-${Date.now().toString().slice(-3)}`;
@@ -62,17 +62,17 @@ const payrollController = {
             `).run(
                 req.user.id,
                 parseEmployeeId(employee_id || 'EMP-001'),
-                amount || 35000,
+                amount ?? 35000,
                 month || 'May 2026',
                 status || 'processed',
                 employee_name || 'Arun Kumar (Sales)',
-                amount || 30000,
-                hra_amount || 5000,
-                special_allowance || 2000,
-                bonus_amount || 0,
-                pf_deduction || 1800,
-                esi_deduction || 325,
-                tds_deduction || 500,
+                basic_salary ?? amount ?? 30000,
+                hra_amount ?? 5000,
+                special_allowance ?? 2000,
+                bonus_amount ?? 0,
+                pf_deduction ?? 1800,
+                esi_deduction ?? 325,
+                tds_deduction ?? 500,
                 bank_name || 'HDFC Bank',
                 account_number || '50100223344551',
                 payslip_number,

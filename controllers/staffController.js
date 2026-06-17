@@ -15,7 +15,11 @@ const initColumns = async () => {
         'roles',
         'permissions',
         'profile_photo',
-        'documents'
+        'documents',
+        'salary_type',
+        'performance_rating',
+        'target_score',
+        'leave_balance'
     ];
     for (const col of columns) {
         try {
