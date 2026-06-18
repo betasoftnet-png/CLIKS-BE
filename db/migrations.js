@@ -1446,6 +1446,28 @@ CREATE TABLE IF NOT EXISTS support_tickets (
   updated_at TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
+-- Business Wallets (Prepaid Stored Value)
+CREATE TABLE IF NOT EXISTS business_wallets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL UNIQUE,
+  balance REAL DEFAULT 0,
+  reward_points INTEGER DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Business Wallet Transactions
+CREATE TABLE IF NOT EXISTS business_wallet_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet_id INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  amount REAL NOT NULL,
+  description TEXT,
+  transaction_ref TEXT,
+  created_at TEXT,
+  FOREIGN KEY(wallet_id) REFERENCES business_wallets(id)
+);
   `;
 
   if (dbType === 'postgres') {
@@ -1626,7 +1648,26 @@ CREATE TABLE IF NOT EXISTS support_tickets (
       `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS founder_phone VARCHAR(50);`,
       `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS founder_email VARCHAR(255);`,
       `ALTER TABLE planned_payments ADD COLUMN IF NOT EXISTS type VARCHAR(50);`,
-      `ALTER TABLE planned_payments ADD COLUMN IF NOT EXISTS person_id INTEGER;`
+      `ALTER TABLE planned_payments ADD COLUMN IF NOT EXISTS person_id INTEGER;`,
+      `CREATE TABLE IF NOT EXISTS business_wallets (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL UNIQUE,
+        balance NUMERIC DEFAULT 0,
+        reward_points INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );`,
+      `CREATE TABLE IF NOT EXISTS business_wallet_transactions (
+        id SERIAL PRIMARY KEY,
+        wallet_id INTEGER NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        amount NUMERIC NOT NULL,
+        description TEXT,
+        transaction_ref VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(wallet_id) REFERENCES business_wallets(id)
+      );`
     ];
     try {
       for (const q of pgAlters) await db.pool.query(q);

@@ -106,7 +106,7 @@ const paymentController = {
                 order_currency: currency || 'INR',
                 customer_details: {
                     customer_id: `CUST_${req.user?.id || 'GUEST'}`,
-                    customer_phone: req.user?.phone || '9999999999',
+                    customer_phone: (req.user?.phone || '9999999999').replace(/\D/g, '').slice(-10),
                     customer_name: req.user?.name || 'CLIKS Account Holder',
                     customer_email: req.user?.email || 'user@cliksbusiness.com'
                 },

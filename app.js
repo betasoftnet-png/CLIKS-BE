@@ -179,6 +179,7 @@ app.use('/api/v1/attendance',    auth, require('./routes/attendance'));
 app.use('/api/v1/employees',     auth, require('./routes/employees'));
 app.use('/api/v1/gst',           auth, require('./routes/gst'));
 app.use('/api/v1/payments',      auth, require('./routes/payments'));
+app.use('/api/v1/business-wallet', auth, require('./routes/businessWallet'));
 app.use('/api/v1/warehouses',    auth, require('./routes/warehouses'));
 app.use('/api/v1/returns',       auth, require('./routes/returns'));
 app.use('/api/v1/suppliers',     auth, require('./routes/suppliers'));
