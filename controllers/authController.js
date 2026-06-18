@@ -75,7 +75,7 @@ const ssoLogin = async (req, res) => {
 
   const { accessToken, refreshToken } = await TokenService.issueEnhancedTokens(user);
 
-  const safeUser = { id: user.id, username: user.username, email: user.email, role: user.role, created_at: user.created_at };
+  const safeUser = { id: user.id, username: user.username, email: user.email, role: user.role, tier: user.tier, subscription_days_remaining: user.subscription_days_remaining, created_at: user.created_at };
   return sendSuccess(res, { accessToken, refreshToken, user: safeUser }, 'SSO login successful', 200);
 };
 
