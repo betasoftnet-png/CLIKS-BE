@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS transactions (
   date TEXT,
   created_at TEXT,
   updated_at TEXT,
+  name TEXT,
+  time TEXT,
+  schedule TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
@@ -1667,7 +1670,10 @@ CREATE TABLE IF NOT EXISTS business_wallet_transactions (
         transaction_ref VARCHAR(255),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(wallet_id) REFERENCES business_wallets(id)
-      );`
+      );`,
+      `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS name VARCHAR(255);`,
+      `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS time VARCHAR(50);`,
+      `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS schedule VARCHAR(100);`
     ];
     try {
       for (const q of pgAlters) await db.pool.query(q);
@@ -1757,7 +1763,10 @@ CREATE TABLE IF NOT EXISTS business_wallet_transactions (
       'ALTER TABLE venture_pitches ADD COLUMN founder_phone TEXT',
       'ALTER TABLE venture_pitches ADD COLUMN founder_email TEXT',
       'ALTER TABLE users ADD COLUMN tier TEXT DEFAULT \'Free Plan\'',
-      'ALTER TABLE users ADD COLUMN subscription_days_remaining INTEGER DEFAULT 0'
+      'ALTER TABLE users ADD COLUMN subscription_days_remaining INTEGER DEFAULT 0',
+      'ALTER TABLE transactions ADD COLUMN name TEXT',
+      'ALTER TABLE transactions ADD COLUMN time TEXT',
+      'ALTER TABLE transactions ADD COLUMN schedule TEXT'
     ];
 
     alterQueries.forEach(query => {
