@@ -13,6 +13,7 @@ router.get('/:id', getTransaction);
 
 // PATCH  /transactions/:id          — Update transaction fields
 router.patch('/:id', updateTransaction);
+router.put('/:id', updateTransaction);
 
 // DELETE /transactions/:id          — Delete a transaction
 router.delete('/:id', deleteTransaction);
