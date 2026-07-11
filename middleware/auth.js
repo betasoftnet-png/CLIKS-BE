@@ -10,7 +10,7 @@ function auth(req, res, next) {
   const token = authHeader.split(' ')[1];
 
   if (token === 'developer-token') {
-    req.user = { id: 1, email: 'business@cliks.com', username: 'business', role: 'business' };
+    req.user = { id: 5, email: 'hari@gmail.com', username: 'hari', role: 'admin' };
     return next();
   }
 

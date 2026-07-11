@@ -29,6 +29,7 @@ const getReminders = async (req, res) => {
 
 const createReminder = async (req, res) => {
   // Accept 'message' (schema column) or 'description' (legacy alias)
+  console.log('DEBUG [createReminder] req.body:', req.body);
   const { title, message, description, due_date, status = 'pending', amount } = req.body;
   const messageText = message || description || null;
   if (!title || !due_date) return sendError(res, 'Title and due_date are required', 400, 'BAD_REQUEST');
@@ -40,6 +41,7 @@ const createReminder = async (req, res) => {
       return sendError(res, 'Claim Cap must be a valid number greater than or equal to 0', 400, 'BAD_REQUEST');
     }
   }
+  console.log('DEBUG [createReminder] parsedAmount:', parsedAmount);
 
   const now = new Date().toISOString();
   const stmt = db.prepare(`
