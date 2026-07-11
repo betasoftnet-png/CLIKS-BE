@@ -29,16 +29,24 @@ const getReminders = async (req, res) => {
 
 const createReminder = async (req, res) => {
   // Accept 'message' (schema column) or 'description' (legacy alias)
-  const { title, message, description, due_date, status = 'pending' } = req.body;
+  const { title, message, description, due_date, status = 'pending', amount } = req.body;
   const messageText = message || description || null;
   if (!title || !due_date) return sendError(res, 'Title and due_date are required', 400, 'BAD_REQUEST');
 
+  let parsedAmount = null;
+  if (amount !== undefined && amount !== null && amount !== '') {
+    parsedAmount = Number(amount);
+    if (isNaN(parsedAmount) || parsedAmount < 0) {
+      return sendError(res, 'Claim Cap must be a valid number greater than or equal to 0', 400, 'BAD_REQUEST');
+    }
+  }
+
   const now = new Date().toISOString();
   const stmt = db.prepare(`
-    INSERT INTO people_reminders (person_id, user_id, title, message, due_date, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO people_reminders (person_id, user_id, title, message, amount, due_date, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = await stmt.run(req.params.personId, req.user.id, title, messageText, due_date, status, now, now);
+  const info = await stmt.run(req.params.personId, req.user.id, title, messageText, parsedAmount, due_date, status, now, now);
 
   const newItem = await db.prepare('SELECT * FROM people_reminders WHERE id = ?').get(info.lastInsertRowid);
   return sendSuccess(res, newItem, 'Person reminder created', 201);
@@ -61,7 +69,20 @@ const updateReminder = async (req, res) => {
   if (body.description !== undefined && body.message === undefined) {
     body.message = body.description;
   }
-  for (const field of ['title', 'message', 'due_date', 'status']) {
+
+  if (body.amount !== undefined) {
+    if (body.amount === null || body.amount === '') {
+      body.amount = null;
+    } else {
+      const parsedAmount = Number(body.amount);
+      if (isNaN(parsedAmount) || parsedAmount < 0) {
+        return sendError(res, 'Claim Cap must be a valid number greater than or equal to 0', 400, 'BAD_REQUEST');
+      }
+      body.amount = parsedAmount;
+    }
+  }
+
+  for (const field of ['title', 'message', 'due_date', 'status', 'amount']) {
     if (body[field] !== undefined) {
       updates.push(`${field} = ?`);
       params.push(body[field]);

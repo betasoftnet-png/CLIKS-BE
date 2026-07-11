@@ -31,7 +31,7 @@ const getCalendar = async (req, res) => {
 
   // ── 3. People reminders (not sent) ──
   const peopleReminderRows = db.prepare(
-    `SELECT r.id, r.title, r.due_date AS date, r.person_id AS reference_id
+    `SELECT r.id, r.title, r.due_date AS date, r.person_id AS reference_id, r.amount
      FROM people_reminders r
      WHERE r.user_id = ?
        AND (r.status IS NULL OR r.status != 'sent')
@@ -39,7 +39,7 @@ const getCalendar = async (req, res) => {
        ${from ? "AND r.due_date >= '" + from + "'" : ''}
        ${to   ? "AND r.due_date <= '" + to   + "'" : ''}`
   ).all(uId);
-  peopleReminderRows.forEach(r => events.push({ type: 'people_reminder', title: r.title, date: r.date, amount: null, id: String(r.id), reference_id: String(r.reference_id) }));
+  peopleReminderRows.forEach(r => events.push({ type: 'people_reminder', title: r.title, date: r.date, amount: r.amount || null, id: String(r.id), reference_id: String(r.reference_id) }));
 
   // ── 4. Debts with due_date ──
   const debtRows = db.prepare(

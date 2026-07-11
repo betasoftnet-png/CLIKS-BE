@@ -333,6 +333,7 @@ CREATE TABLE IF NOT EXISTS people_reminders (
   user_id INTEGER NOT NULL,
   title TEXT,
   message TEXT,
+  amount REAL,
   due_date TEXT,
   remind_at TEXT,
   is_sent INTEGER DEFAULT 0,
@@ -1673,7 +1674,8 @@ CREATE TABLE IF NOT EXISTS business_wallet_transactions (
       );`,
       `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS name VARCHAR(255);`,
       `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS time VARCHAR(50);`,
-      `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS schedule VARCHAR(100);`
+      `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS schedule VARCHAR(100);`,
+      `ALTER TABLE people_reminders ADD COLUMN IF NOT EXISTS amount NUMERIC;`
     ];
     try {
       for (const q of pgAlters) await db.pool.query(q);
@@ -1766,7 +1768,8 @@ CREATE TABLE IF NOT EXISTS business_wallet_transactions (
       'ALTER TABLE users ADD COLUMN subscription_days_remaining INTEGER DEFAULT 0',
       'ALTER TABLE transactions ADD COLUMN name TEXT',
       'ALTER TABLE transactions ADD COLUMN time TEXT',
-      'ALTER TABLE transactions ADD COLUMN schedule TEXT'
+      'ALTER TABLE transactions ADD COLUMN schedule TEXT',
+      'ALTER TABLE people_reminders ADD COLUMN amount REAL'
     ];
 
     alterQueries.forEach(query => {
