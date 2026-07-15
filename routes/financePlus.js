@@ -30,7 +30,8 @@ router.post('/tax', auth, controller.saveTaxRecord);
 router.get('/notifications', auth, controller.getNotifications);
 router.put('/notifications/:id/read', auth, controller.markNotificationRead);
 
-// User Profile Role
+// User Profile Role & Budget
+router.put('/settings', auth, controller.updateFinanceSettings);
 router.put('/primary-income', auth, controller.updatePrimaryIncomeSource);
 
 module.exports = router;

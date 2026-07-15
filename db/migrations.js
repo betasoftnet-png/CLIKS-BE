@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
   tier TEXT DEFAULT 'Free Plan',
   subscription_days_remaining INTEGER DEFAULT 0,
   primary_income_source TEXT, -- Rental | Pension | Salaried | Business | Freelancer
+  global_budget REAL DEFAULT 20000,
   created_at TEXT,
   updated_at TEXT
 );
@@ -1889,6 +1890,7 @@ CREATE TABLE IF NOT EXISTS business_wallet_transactions (
       'ALTER TABLE users ADD COLUMN tier TEXT DEFAULT \'Free Plan\'',
       'ALTER TABLE users ADD COLUMN subscription_days_remaining INTEGER DEFAULT 0',
       'ALTER TABLE users ADD COLUMN primary_income_source TEXT',
+      'ALTER TABLE users ADD COLUMN global_budget REAL DEFAULT 20000',
       'ALTER TABLE transactions ADD COLUMN name TEXT',
       'ALTER TABLE transactions ADD COLUMN time TEXT',
       'ALTER TABLE transactions ADD COLUMN schedule TEXT',

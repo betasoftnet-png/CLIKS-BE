@@ -180,7 +180,31 @@ const markNotificationRead = async (req, res) => {
   return sendSuccess(res, null, 'Marked as read');
 };
 
-// ── Role-Based Settings ───────────────────────────────────────────────────────
+// ── Role-Based Settings & Global Budget ───────────────────────────────────────
+const updateFinanceSettings = async (req, res) => {
+  const { source, global_budget } = req.body;
+  const updates = [];
+  const params = [];
+
+  if (source !== undefined) {
+    updates.push('primary_income_source = ?');
+    params.push(source);
+  }
+
+  if (global_budget !== undefined) {
+    updates.push('global_budget = ?');
+    params.push(global_budget);
+  }
+
+  if (updates.length > 0) {
+    params.push(new Date().toISOString(), req.user.id);
+    await db.prepare(`UPDATE users SET ${updates.join(', ')}, updated_at = ? WHERE id = ?`)
+      .run(...params);
+  }
+
+  return sendSuccess(res, null, 'Finance preferences updated');
+};
+
 const updatePrimaryIncomeSource = async (req, res) => {
   const { source } = req.body;
   await db.prepare('UPDATE users SET primary_income_source = ?, updated_at = ? WHERE id = ?')

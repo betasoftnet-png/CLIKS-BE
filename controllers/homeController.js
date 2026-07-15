@@ -102,7 +102,7 @@ const getDashboard = async (req, res) => {
   };
 
   // User Profile for Role
-  const userRow = await db.prepare('SELECT primary_income_source FROM users WHERE id = ?').get(userId);
+  const userRow = await db.prepare('SELECT primary_income_source, global_budget FROM users WHERE id = ?').get(userId);
 
   return sendSuccess(res, {
     totalBalance,
@@ -127,7 +127,8 @@ const getDashboard = async (req, res) => {
       returnPct: overallReturnPct
     },
     taxSummary: taxDue,
-    primaryIncomeSource: userRow?.primary_income_source
+    primaryIncomeSource: userRow?.primary_income_source,
+    globalBudget: userRow?.global_budget || 20000
   });
 };
 
