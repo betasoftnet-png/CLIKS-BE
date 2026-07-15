@@ -38,13 +38,7 @@ router.get('/trial-balance', reportsController.getTrialBalance);
 router.get('/general-ledger', reportsController.getGeneralLedger);
 router.get('/day-book', reportsController.getDayBook);
 
-// GST
-router.get('/gst', reportsController.getGst);
-router.get('/gstr1', reportsController.getGstr1);
-router.get('/gstr2', reportsController.getGstr2);
-router.get('/gstr3b', reportsController.getGstr3b);
-router.get('/input-tax-credit', reportsController.getInputTaxCredit);
-router.get('/output-tax', reportsController.getOutputTax);
+
 
 // Stock
 router.get('/stock', reportsController.getStock);

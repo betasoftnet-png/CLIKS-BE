@@ -127,26 +127,6 @@ const reportsController = {
         return sendSuccess(res, [], 'Day book compiled');
     },
 
-    // GST Reports
-    getGst: async (req, res) => {
-        return sendSuccess(res, { liability: 24000, input_credit: 9000 }, 'GST report compiled');
-    },
-    getGstr1: async (req, res) => {
-        return sendSuccess(res, { total_b2b: 2, total_b2c: 5 }, 'GSTR-1 summary compiled');
-    },
-    getGstr2: async (req, res) => {
-        return sendSuccess(res, { total_matches: 12, mismatches: 1 }, 'GSTR-2 summary compiled');
-    },
-    getGstr3b: async (req, res) => {
-        return sendSuccess(res, { tax_payable: 15000 }, 'GSTR-3B summary compiled');
-    },
-    getInputTaxCredit: async (req, res) => {
-        return sendSuccess(res, { eligible: 9000 }, 'ITC report compiled');
-    },
-    getOutputTax: async (req, res) => {
-        return sendSuccess(res, { total_output_tax: 24000 }, 'Output tax report compiled');
-    },
-
     // Stock Reports
     getStock: async (req, res) => {
         return sendSuccess(res, [], 'Stock report compiled');
