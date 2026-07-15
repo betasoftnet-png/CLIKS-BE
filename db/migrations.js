@@ -17,8 +17,124 @@ CREATE TABLE IF NOT EXISTS users (
   widgets TEXT, -- Added to persist dashboard configuration
   tier TEXT DEFAULT 'Free Plan',
   subscription_days_remaining INTEGER DEFAULT 0,
+  primary_income_source TEXT, -- Rental | Pension | Salaried | Business | Freelancer
   created_at TEXT,
   updated_at TEXT
+);
+
+-- Financial Goals
+CREATE TABLE IF NOT EXISTS financial_goals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  target_amount REAL NOT NULL,
+  current_savings REAL DEFAULT 0,
+  target_date TEXT,
+  category TEXT, -- Emergency Fund, Retirement, etc.
+  status TEXT DEFAULT 'in_progress',
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Salary Records
+CREATE TABLE IF NOT EXISTS salary_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  company_name TEXT,
+  employee_id TEXT,
+  salary_date TEXT,
+  basic_salary REAL DEFAULT 0,
+  hra REAL DEFAULT 0,
+  da REAL DEFAULT 0,
+  bonus REAL DEFAULT 0,
+  other_allowances REAL DEFAULT 0,
+  gross_salary REAL DEFAULT 0,
+  net_salary REAL DEFAULT 0,
+  salary_slip_url TEXT,
+  wallet_id INTEGER,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Property Records
+CREATE TABLE IF NOT EXISTS property_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  property_name TEXT NOT NULL,
+  address TEXT,
+  tenant_name TEXT,
+  monthly_rent REAL DEFAULT 0,
+  security_deposit REAL DEFAULT 0,
+  due_date INTEGER, -- Day of month
+  last_received_date TEXT,
+  maintenance_cost REAL DEFAULT 0,
+  property_tax REAL DEFAULT 0,
+  occupancy_status TEXT DEFAULT 'Occupied',
+  wallet_id INTEGER,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Pension Records
+CREATE TABLE IF NOT EXISTS pension_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  provider TEXT,
+  pension_number TEXT,
+  monthly_amount REAL DEFAULT 0,
+  payment_date TEXT,
+  is_family_pension INTEGER DEFAULT 0,
+  pension_type TEXT,
+  wallet_id INTEGER,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Tax Records
+CREATE TABLE IF NOT EXISTS tax_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  tax_year TEXT,
+  income_tax REAL DEFAULT 0,
+  tds_paid REAL DEFAULT 0,
+  epf REAL DEFAULT 0,
+  esi REAL DEFAULT 0,
+  prof_tax REAL DEFAULT 0,
+  advance_tax REAL DEFAULT 0,
+  tax_savings REAL DEFAULT 0,
+  notes TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Notifications
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  title TEXT,
+  message TEXT,
+  type TEXT, -- Alert | Info | Success
+  is_read INTEGER DEFAULT 0,
+  link TEXT,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Finance Reports
+CREATE TABLE IF NOT EXISTS finance_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  report_name TEXT,
+  report_type TEXT, -- Monthly | Annual | Tax | etc.
+  file_url TEXT,
+  period TEXT,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
 -- Accounts
@@ -1772,6 +1888,7 @@ CREATE TABLE IF NOT EXISTS business_wallet_transactions (
       'ALTER TABLE venture_pitches ADD COLUMN founder_email TEXT',
       'ALTER TABLE users ADD COLUMN tier TEXT DEFAULT \'Free Plan\'',
       'ALTER TABLE users ADD COLUMN subscription_days_remaining INTEGER DEFAULT 0',
+      'ALTER TABLE users ADD COLUMN primary_income_source TEXT',
       'ALTER TABLE transactions ADD COLUMN name TEXT',
       'ALTER TABLE transactions ADD COLUMN time TEXT',
       'ALTER TABLE transactions ADD COLUMN schedule TEXT',

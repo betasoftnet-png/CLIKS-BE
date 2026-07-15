@@ -66,6 +66,44 @@ const getDashboard = async (req, res) => {
   ).get(userId);
   const totalPayables = totalPayablesObj?.total || 0;
 
+  // ── NEW ENHANCED METRICS ──
+
+  // Properties Assets
+  const totalPropertyValObj = await db.prepare(
+    `SELECT SUM(security_deposit) as total FROM property_records WHERE user_id = ?`
+  ).get(userId);
+  const totalPropertyAssets = totalPropertyValObj?.total || 0;
+
+  // Loans (Liabilities)
+  const totalLoansObj = await db.prepare(
+    `SELECT SUM(amount - amount_paid) as total FROM debts WHERE user_id = ?`
+  ).get(userId);
+  const totalLiabilities = (totalLoansObj?.total || 0) + totalPayables;
+
+  // Net Worth Calculation
+  const totalAssets = totalBalance + totalInvestments + totalPropertyAssets + totalReceivables;
+  const netWorth = totalAssets - totalLiabilities;
+
+  // Investment Stats (Monthly P/L placeholder or simplified)
+  // For monthly P/L we'd need historical snapshots, but we can return total profit
+  const totalInvestmentProfit = totalInvestments - totalInvestedAmount;
+  const overallReturnPct = totalInvestedAmount > 0 ? (totalInvestmentProfit / totalInvestedAmount) * 100 : 0;
+
+  // Tax Summary
+  const taxRecord = await db.prepare(
+    `SELECT * FROM tax_records WHERE user_id = ? ORDER BY tax_year DESC LIMIT 1`
+  ).get(userId);
+
+  const taxDue = {
+    estimated: taxRecord?.income_tax || 0,
+    paid: taxRecord?.tds_paid || 0,
+    remaining: Math.max(0, (taxRecord?.income_tax || 0) - (taxRecord?.tds_paid || 0)),
+    refund: Math.max(0, (taxRecord?.tds_paid || 0) - (taxRecord?.income_tax || 0))
+  };
+
+  // User Profile for Role
+  const userRow = await db.prepare('SELECT primary_income_source FROM users WHERE id = ?').get(userId);
+
   return sendSuccess(res, {
     totalBalance,
     monthlyIncome,
@@ -79,6 +117,17 @@ const getDashboard = async (req, res) => {
     totalPayables,
     recentTransactions,
     accounts,
+    // Enhanced
+    netWorth,
+    totalAssets,
+    totalLiabilities,
+    investmentStats: {
+      total: totalInvestments,
+      profit: totalInvestmentProfit,
+      returnPct: overallReturnPct
+    },
+    taxSummary: taxDue,
+    primaryIncomeSource: userRow?.primary_income_source
   });
 };
 

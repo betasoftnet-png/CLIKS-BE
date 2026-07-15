@@ -115,6 +115,7 @@ app.use('/api/v1/settings',         auth, require('./routes/settings'));
 
 // Home / Summary
 app.use('/api/v1/home',             auth, require('./routes/home'));
+app.use('/api/v1/finance-plus',     auth, require('./routes/financePlus'));
 
 // Core Finance
 app.use('/api/v1/accounts',         auth, require('./routes/accounts'));
