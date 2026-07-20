@@ -212,6 +212,166 @@ const updatePrimaryIncomeSource = async (req, res) => {
   return sendSuccess(res, null, 'Income source preference updated');
 };
 
+// ── Money Trackers ────────────────────────────────────────────────────────────
+const getMoneyTrackers = async (req, res) => {
+  const { search, category, place, date, name } = req.query;
+  let queryStr = 'SELECT * FROM money_trackers WHERE user_id = ?';
+  const params = [req.user.id];
+
+  if (search) {
+    queryStr += ' AND (category LIKE ? OR place LIKE ? OR date LIKE ? OR name LIKE ?)';
+    const searchVal = `%${search}%`;
+    params.push(searchVal, searchVal, searchVal, searchVal);
+  } else {
+    if (category) {
+      queryStr += ' AND category = ?';
+      params.push(category);
+    }
+    if (place) {
+      queryStr += ' AND place LIKE ?';
+      params.push(`%${place}%`);
+    }
+    if (date) {
+      queryStr += ' AND date LIKE ?';
+      params.push(`%${date}%`);
+    }
+    if (name) {
+      queryStr += ' AND name LIKE ?';
+      params.push(`%${name}%`);
+    }
+  }
+
+  queryStr += ' ORDER BY created_at DESC';
+  const trackers = await db.prepare(queryStr).all(params);
+  
+  // Parse JSON strings before returning to client
+  const parsedTrackers = trackers.map(t => ({
+    ...t,
+    details: t.details ? JSON.parse(t.details) : {},
+    expenses: t.expenses ? JSON.parse(t.expenses) : [],
+    locations: t.locations ? JSON.parse(t.locations) : [],
+    photos: t.photos ? JSON.parse(t.photos) : [],
+    timeline: t.timeline ? JSON.parse(t.timeline) : [],
+    memories: t.memories ? JSON.parse(t.memories) : [],
+    route_map: t.route_map ? JSON.parse(t.route_map) : {}
+  }));
+
+  return sendSuccess(res, parsedTrackers);
+};
+
+const createMoneyTracker = async (req, res) => {
+  const { category, name, place, date, budget, details, expenses, locations, photos, timeline, memories, route_map } = req.body;
+  const now = new Date().toISOString();
+
+  const info = await db.prepare(`
+    INSERT INTO money_trackers (
+      user_id, category, name, place, date, budget, details, expenses, locations, photos, timeline, memories, route_map, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    req.user.id,
+    category,
+    name,
+    place || '',
+    date || '',
+    budget || 0,
+    JSON.stringify(details || {}),
+    JSON.stringify(expenses || []),
+    JSON.stringify(locations || []),
+    JSON.stringify(photos || []),
+    JSON.stringify(timeline || []),
+    JSON.stringify(memories || []),
+    JSON.stringify(route_map || {}),
+    now,
+    now
+  );
+
+  const newTracker = await db.prepare('SELECT * FROM money_trackers WHERE id = ?').get(info.lastInsertRowid);
+  if (newTracker) {
+    newTracker.details = newTracker.details ? JSON.parse(newTracker.details) : {};
+    newTracker.expenses = newTracker.expenses ? JSON.parse(newTracker.expenses) : [];
+    newTracker.locations = newTracker.locations ? JSON.parse(newTracker.locations) : [];
+    newTracker.photos = newTracker.photos ? JSON.parse(newTracker.photos) : [];
+    newTracker.timeline = newTracker.timeline ? JSON.parse(newTracker.timeline) : [];
+    newTracker.memories = newTracker.memories ? JSON.parse(newTracker.memories) : [];
+    newTracker.route_map = newTracker.route_map ? JSON.parse(newTracker.route_map) : {};
+  }
+
+  return sendSuccess(res, newTracker, 'Money tracker created', 201);
+};
+
+const getMoneyTrackerById = async (req, res) => {
+  const tracker = await db.prepare('SELECT * FROM money_trackers WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!tracker) {
+    return sendError(res, 'Money tracker not found', 404);
+  }
+
+  const parsed = {
+    ...tracker,
+    details: tracker.details ? JSON.parse(tracker.details) : {},
+    expenses: tracker.expenses ? JSON.parse(tracker.expenses) : [],
+    locations: tracker.locations ? JSON.parse(tracker.locations) : [],
+    photos: tracker.photos ? JSON.parse(tracker.photos) : [],
+    timeline: tracker.timeline ? JSON.parse(tracker.timeline) : [],
+    memories: tracker.memories ? JSON.parse(tracker.memories) : [],
+    route_map: tracker.route_map ? JSON.parse(tracker.route_map) : {}
+  };
+
+  return sendSuccess(res, parsed);
+};
+
+const updateMoneyTracker = async (req, res) => {
+  const { name, place, date, budget, details, expenses, locations, photos, timeline, memories, route_map } = req.body;
+  const now = new Date().toISOString();
+
+  const existing = await db.prepare('SELECT id FROM money_trackers WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!existing) {
+    return sendError(res, 'Money tracker not found', 404);
+  }
+
+  await db.prepare(`
+    UPDATE money_trackers SET 
+      name = ?, place = ?, date = ?, budget = ?, details = ?, expenses = ?, locations = ?, photos = ?, timeline = ?, memories = ?, route_map = ?, updated_at = ?
+    WHERE id = ? AND user_id = ?
+  `).run(
+    name,
+    place,
+    date,
+    budget,
+    JSON.stringify(details || {}),
+    JSON.stringify(expenses || []),
+    JSON.stringify(locations || []),
+    JSON.stringify(photos || []),
+    JSON.stringify(timeline || []),
+    JSON.stringify(memories || []),
+    JSON.stringify(route_map || {}),
+    now,
+    req.params.id,
+    req.user.id
+  );
+
+  const updatedTracker = await db.prepare('SELECT * FROM money_trackers WHERE id = ?').get(req.params.id);
+  if (updatedTracker) {
+    updatedTracker.details = updatedTracker.details ? JSON.parse(updatedTracker.details) : {};
+    updatedTracker.expenses = updatedTracker.expenses ? JSON.parse(updatedTracker.expenses) : [];
+    updatedTracker.locations = updatedTracker.locations ? JSON.parse(updatedTracker.locations) : [];
+    updatedTracker.photos = updatedTracker.photos ? JSON.parse(updatedTracker.photos) : [];
+    updatedTracker.timeline = updatedTracker.timeline ? JSON.parse(updatedTracker.timeline) : [];
+    updatedTracker.memories = updatedTracker.memories ? JSON.parse(updatedTracker.memories) : [];
+    updatedTracker.route_map = updatedTracker.route_map ? JSON.parse(updatedTracker.route_map) : {};
+  }
+
+  return sendSuccess(res, updatedTracker, 'Money tracker updated');
+};
+
+const deleteMoneyTracker = async (req, res) => {
+  const existing = await db.prepare('SELECT id FROM money_trackers WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!existing) {
+    return sendError(res, 'Money tracker not found', 404);
+  }
+  await db.prepare('DELETE FROM money_trackers WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  return res.status(204).end();
+};
+
 module.exports = {
   getGoals, createGoal, updateGoal, deleteGoal,
   getSalaryRecords, createSalaryRecord,
@@ -219,5 +379,6 @@ module.exports = {
   getPensionRecords, recordPension,
   getTaxRecords, saveTaxRecord,
   getNotifications, markNotificationRead,
-  updatePrimaryIncomeSource
+  updateFinanceSettings, updatePrimaryIncomeSource,
+  getMoneyTrackers, createMoneyTracker, getMoneyTrackerById, updateMoneyTracker, deleteMoneyTracker
 };

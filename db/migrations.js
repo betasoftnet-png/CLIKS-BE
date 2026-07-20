@@ -1589,6 +1589,27 @@ CREATE TABLE IF NOT EXISTS business_wallet_transactions (
   created_at TEXT,
   FOREIGN KEY(wallet_id) REFERENCES business_wallets(id)
 );
+
+-- Money Trackers
+CREATE TABLE IF NOT EXISTS money_trackers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  name TEXT NOT NULL,
+  place TEXT,
+  date TEXT,
+  budget REAL DEFAULT 0,
+  details TEXT,
+  expenses TEXT,
+  locations TEXT,
+  photos TEXT,
+  timeline TEXT,
+  memories TEXT,
+  route_map TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
   `;
 
   if (dbType === 'postgres') {

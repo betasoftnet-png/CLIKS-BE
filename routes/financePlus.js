@@ -34,4 +34,11 @@ router.put('/notifications/:id/read', auth, controller.markNotificationRead);
 router.put('/settings', auth, controller.updateFinanceSettings);
 router.put('/primary-income', auth, controller.updatePrimaryIncomeSource);
 
+// Money Trackers
+router.get('/money-trackers', auth, controller.getMoneyTrackers);
+router.post('/money-trackers', auth, controller.createMoneyTracker);
+router.get('/money-trackers/:id', auth, controller.getMoneyTrackerById);
+router.put('/money-trackers/:id', auth, controller.updateMoneyTracker);
+router.delete('/money-trackers/:id', auth, controller.deleteMoneyTracker);
+
 module.exports = router;
