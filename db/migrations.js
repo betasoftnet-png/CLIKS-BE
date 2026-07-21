@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
   industry TEXT,
   refresh_token TEXT,
   widgets TEXT, -- Added to persist dashboard configuration
+  favorite_products TEXT, -- Added to persist product launcher favorites
   tier TEXT DEFAULT 'Free Plan',
   subscription_days_remaining INTEGER DEFAULT 0,
   primary_income_source TEXT, -- Rental | Pension | Salaried | Business | Freelancer
@@ -1624,6 +1625,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT \'user\';',
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS refresh_token TEXT;',
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS widgets TEXT;',
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS favorite_products TEXT;',
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS business_name TEXT;',
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS business_type TEXT;',
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS industry TEXT;',
@@ -1833,6 +1835,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE users ADD COLUMN role TEXT DEFAULT \'user\'',
       'ALTER TABLE users ADD COLUMN refresh_token TEXT',
       'ALTER TABLE users ADD COLUMN widgets TEXT',
+      'ALTER TABLE users ADD COLUMN favorite_products TEXT',
       'ALTER TABLE users ADD COLUMN settings TEXT',
       'ALTER TABLE stock ADD COLUMN sub_name TEXT',
       'ALTER TABLE stock ADD COLUMN unit TEXT',

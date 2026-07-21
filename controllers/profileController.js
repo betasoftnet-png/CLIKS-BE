@@ -9,7 +9,8 @@ const { sendSuccess, sendError } = require('../utils/response');
 const initColumns = async () => {
   const columns = [
     'tier TEXT DEFAULT \'Free Plan\'',
-    'subscription_days_remaining INTEGER DEFAULT 0'
+    'subscription_days_remaining INTEGER DEFAULT 0',
+    'favorite_products TEXT'
   ];
   for (const col of columns) {
     try {
@@ -52,10 +53,10 @@ const getProfile = async (req, res) => {
 
 // ── PATCH / — Update username, email, or avatar ───────────────────────────────
 const updateProfile = async (req, res) => {
-  const { username, email, name, avatar_data, avatar_name, tier, subscription_days_remaining } = req.body;
+  const { username, email, name, avatar_data, avatar_name, tier, subscription_days_remaining, favorite_products } = req.body;
   const targetUsername = username || name;
 
-  if (!targetUsername && !email && !avatar_data && tier === undefined && subscription_days_remaining === undefined) {
+  if (!targetUsername && !email && !avatar_data && tier === undefined && subscription_days_remaining === undefined && favorite_products === undefined) {
     return sendError(res, 'Provide at least one field to update', 400, 'BAD_REQUEST');
   }
 
@@ -106,6 +107,7 @@ const updateProfile = async (req, res) => {
   if (table === 'users') {
     if (tier !== undefined) { updates.push('tier = ?'); params.push(tier); }
     if (subscription_days_remaining !== undefined) { updates.push('subscription_days_remaining = ?'); params.push(subscription_days_remaining); }
+    if (favorite_products !== undefined) { updates.push('favorite_products = ?'); params.push(favorite_products); }
     updates.push('updated_at = ?');
     params.push(new Date().toISOString());
   }
