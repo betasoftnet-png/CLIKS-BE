@@ -276,9 +276,9 @@ const accountingController = {
                 const purchaseNum = `EXP-${Date.now().toString().slice(-6)}`;
                 await db.prepare(`
                     INSERT INTO business_purchases (
-                        user_id, purchase_number, purchase_date, supplier_name, payment_status, payment_mode, paid_amount, grand_total, created_at, updated_at
-                    ) VALUES (?, ?, ?, 'Generic Cash Supplier', 'paid', ?, ?, ?, ?, ?)
-                `).run(req.user.id, purchaseNum, dateStr, mode || 'Cash in Hand', parsedAmount, parsedAmount, now, now);
+                        user_id, purchase_number, purchase_date, due_date, supplier_name, payment_status, payment_mode, paid_amount, grand_total, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'Generic Cash Supplier', 'paid', ?, ?, ?, ?, ?)
+                `).run(req.user.id, purchaseNum, dateStr, dateStr, mode || 'Cash in Hand', parsedAmount, parsedAmount, now, now);
 
                 const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
                 return sendSuccess(res, inserted, 'Expense recorded successfully', 201);
