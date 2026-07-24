@@ -16,6 +16,30 @@ const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') 
     }
 };
 
+function normalizePaymentMode(mode) {
+    if (!mode) return 'Cash in Hand';
+    const m = String(mode).toLowerCase();
+    if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) {
+        return 'Cash in Hand';
+    }
+    if (m.includes('hdfc')) {
+        return 'HDFC Bank Account';
+    }
+    if (m.includes('icici')) {
+        return 'ICICI Bank Account';
+    }
+    if (m.includes('sbi') || m.includes('state bank')) {
+        return 'SBI Current Account';
+    }
+    if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) {
+        return 'UPI / Razorpay';
+    }
+    if (m === 'bank' || m.includes('bank')) {
+        return 'HDFC Bank Account';
+    }
+    return mode;
+}
+
 const purchaseController = {
     // 1. Create Purchase (PO, BILL, RETURN)
     createPurchase: async (req, res) => {
@@ -67,6 +91,15 @@ const purchaseController = {
 
             const created = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(purchaseId);
             created.items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(purchaseId);
+
+            const totalPaid = (parseFloat(paid_amount) || 0) + (parseFloat(advance_amount) || 0);
+            if (totalPaid > 0) {
+                const normalizedMode = normalizePaymentMode(payment_mode);
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'expense', ?, ?, ?, ?, ?, 'posted', ?, ?)
+                `).run(req.user.id, purchase_date || now.split('T')[0], totalPaid, 'Inventory Purchases', normalizedMode, `Purchase #${purchase_number}`, now, now);
+            }
 
             await logBusinessAudit(req.user.id, 'PURCHASE_CREATE', `Created purchase document ${purchase_number} (${doc_type}) for supplier ${supplier_name} (amount: ₹${grand_total})`, 'SUCCESS');
             return sendSuccess(res, created, 'Purchase document created successfully', 201);
@@ -194,8 +227,10 @@ const purchaseController = {
     deletePurchase: async (req, res) => {
         const { id } = req.params;
         try {
-            const purchase = await db.prepare('SELECT id FROM business_purchases WHERE id = ? AND user_id = ?').get(id, req.user.id);
-            if (!purchase) return sendError(res, 'Purchase record not found', 404);
+            const pur = await db.prepare('SELECT purchase_number FROM business_purchases WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (pur) {
+                await db.prepare("DELETE FROM accounting WHERE user_id = ? AND notes = ?").run(req.user.id, `Purchase #${pur.purchase_number}`);
+            }
 
             await db.prepare('DELETE FROM business_purchases WHERE id = ?').run(id);
             await logBusinessAudit(req.user.id, 'PURCHASE_DELETE', `Deleted purchase record ID ${id}`, 'WARN');

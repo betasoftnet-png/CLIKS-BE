@@ -1,6 +1,30 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 
+function normalizePaymentMode(mode) {
+    if (!mode) return 'Cash in Hand';
+    const m = String(mode).toLowerCase();
+    if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) {
+        return 'Cash in Hand';
+    }
+    if (m.includes('hdfc')) {
+        return 'HDFC Bank Account';
+    }
+    if (m.includes('icici')) {
+        return 'ICICI Bank Account';
+    }
+    if (m.includes('sbi') || m.includes('state bank')) {
+        return 'SBI Current Account';
+    }
+    if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) {
+        return 'UPI / Razorpay';
+    }
+    if (m === 'bank' || m.includes('bank')) {
+        return 'HDFC Bank Account';
+    }
+    return mode;
+}
+
 const initTables = async () => {
     try {
         const dbType = process.env.DB_TYPE || 'sqlite';
@@ -360,6 +384,16 @@ const customerCrmController = {
                 INSERT INTO customer_ledger (customer_id, user_id, description, amount, type, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
             `).run(id, req.user.id, ledgerDescription, amount, ledgerType, now);
+
+            // Sync to accounting
+            const normalizedMode = normalizePaymentMode(payment_method);
+            const entryType = isPaymentOut ? 'expense' : 'income';
+            const categoryName = isPaymentOut ? 'Supplier Payments' : 'Customer Payments';
+            const paymentId = result.lastInsertRowid;
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?)
+            `).run(req.user.id, entryType, now.split('T')[0], amount, categoryName, normalizedMode, `Customer Payment #${paymentId}`, now, now);
 
             return sendSuccess(res, { id: result.lastInsertRowid, outstanding_balance: newBalance }, 'Payment recorded successfully', 201);
         } catch (error) {

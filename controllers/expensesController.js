@@ -1,6 +1,30 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 
+function normalizePaymentMode(mode) {
+    if (!mode) return 'Cash in Hand';
+    const m = String(mode).toLowerCase();
+    if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) {
+        return 'Cash in Hand';
+    }
+    if (m.includes('hdfc')) {
+        return 'HDFC Bank Account';
+    }
+    if (m.includes('icici')) {
+        return 'ICICI Bank Account';
+    }
+    if (m.includes('sbi') || m.includes('state bank')) {
+        return 'SBI Current Account';
+    }
+    if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) {
+        return 'UPI / Razorpay';
+    }
+    if (m === 'bank' || m.includes('bank')) {
+        return 'HDFC Bank Account';
+    }
+    return mode;
+}
+
 const initTableAndColumns = async () => {
     try {
         const dbType = process.env.DB_TYPE || 'sqlite';
@@ -126,6 +150,13 @@ const expensesController = {
             );
 
             const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
+            
+            const normalizedMode = normalizePaymentMode(payment_mode);
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'expense', ?, ?, ?, ?, ?, 'posted', ?, ?)
+            `).run(req.user.id, now.split('T')[0], amt, category_name || 'General', normalizedMode, `Expense #${expNum}`, now, now);
+
             return sendSuccess(res, inserted, 'Expense recorded successfully', 201);
         } catch (error) {
             console.error('[Expense] Error:', error);
@@ -153,6 +184,10 @@ const expensesController = {
 
     deleteExpense: async (req, res) => {
         try {
+            const exp = await db.prepare('SELECT expense_number FROM expenses WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+            if (exp) {
+                await db.prepare("DELETE FROM accounting WHERE user_id = ? AND notes = ?").run(req.user.id, `Expense #${exp.expense_number}`);
+            }
             await db.prepare('DELETE FROM expenses WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
             return sendSuccess(res, null, 'Expense deleted');
         } catch (error) {

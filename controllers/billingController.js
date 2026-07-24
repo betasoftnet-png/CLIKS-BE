@@ -16,6 +16,30 @@ const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') 
     }
 };
 
+function normalizePaymentMode(mode) {
+    if (!mode) return 'Cash in Hand';
+    const m = String(mode).toLowerCase();
+    if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) {
+        return 'Cash in Hand';
+    }
+    if (m.includes('hdfc')) {
+        return 'HDFC Bank Account';
+    }
+    if (m.includes('icici')) {
+        return 'ICICI Bank Account';
+    }
+    if (m.includes('sbi') || m.includes('state bank')) {
+        return 'SBI Current Account';
+    }
+    if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) {
+        return 'UPI / Razorpay';
+    }
+    if (m === 'bank' || m.includes('bank')) {
+        return 'HDFC Bank Account';
+    }
+    return mode;
+}
+
 const billingController = {
     // 1. Get Invoices with Filtering
     getInvoices: async (req, res) => {
@@ -125,6 +149,14 @@ const billingController = {
                 try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) {}
             }
 
+            if (numPaid > 0) {
+                const normalizedMode = normalizePaymentMode(payment_mode);
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'income', ?, ?, ?, ?, ?, 'posted', ?, ?)
+                `).run(req.user.id, now.split('T')[0], numPaid, 'Sales Revenue', normalizedMode, `Invoice #${invNum}`, now, now);
+            }
+
             await logBusinessAudit(req.user.id, 'INVOICE_CREATE', `Created invoice ${invNum} for client ${client_name} (amount: ₹${numTotal})`, 'SUCCESS');
             return sendSuccess(res, createdInvoice, 'Invoice created successfully', 201);
         } catch (error) {
@@ -200,6 +232,16 @@ const billingController = {
                 try { updatedInvoice.items = JSON.parse(updatedInvoice.items); } catch (e) {}
             }
 
+            // Sync to accounting: clear old logs and write updated ones
+            await db.prepare("DELETE FROM accounting WHERE user_id = ? AND notes = ?").run(req.user.id, `Invoice #${updatedInvoice.invoice_number}`);
+            if (numPaid > 0) {
+                const normalizedMode = normalizePaymentMode(payment_mode);
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'income', ?, ?, ?, ?, ?, 'posted', ?, ?)
+                `).run(req.user.id, now.split('T')[0], numPaid, 'Sales Revenue', normalizedMode, `Invoice #${updatedInvoice.invoice_number}`, now, now);
+            }
+
             await logBusinessAudit(req.user.id, 'INVOICE_UPDATE', `Updated invoice ID ${id} for client ${client_name} (amount: ₹${numTotal})`, 'INFO');
             return sendSuccess(res, updatedInvoice, 'Invoice updated successfully');
         } catch (error) {
@@ -212,8 +254,10 @@ const billingController = {
     deleteInvoice: async (req, res) => {
         const { id } = req.params;
         try {
-            const invoice = await db.prepare('SELECT id FROM business_invoices WHERE id = ? AND user_id = ?').get(id, req.user.id);
-            if (!invoice) return sendError(res, 'Invoice not found', 404);
+            const inv = await db.prepare('SELECT invoice_number FROM business_invoices WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (inv) {
+                await db.prepare("DELETE FROM accounting WHERE user_id = ? AND notes = ?").run(req.user.id, `Invoice #${inv.invoice_number}`);
+            }
 
             await db.prepare('DELETE FROM business_invoices WHERE id = ?').run(id);
             await logBusinessAudit(req.user.id, 'INVOICE_DELETE', `Deleted invoice ID ${id}`, 'WARN');
@@ -386,12 +430,34 @@ const billingController = {
         const { id } = req.params;
         const { amount, payment_method, reference_number, notes } = req.body;
         try {
+            const invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!invoice) {
+                return sendError(res, 'Invoice not found or access denied', 404);
+            }
+
+            const parsedAmount = parseFloat(amount) || 0;
+            const now = new Date().toISOString();
+
+            // Insert payment record
             await db.prepare('INSERT INTO business_invoice_payments (invoice_id, amount, payment_method, payment_date, reference_number, notes) VALUES (?, ?, ?, ?, ?, ?)')
-                .run(id, amount, payment_method, new Date().toISOString(), reference_number || null, notes || null);
+                .run(id, parsedAmount, payment_method, now, reference_number || null, notes || null);
+
+            // Update invoice balances and status
             await db.prepare('UPDATE business_invoices SET paid_amount = paid_amount + ?, due_amount = due_amount - ?, status = CASE WHEN due_amount - ? <= 0 THEN \'Paid\' ELSE \'Partially Paid\' END WHERE id = ?')
-                .run(amount, amount, amount, id);
+                .run(parsedAmount, parsedAmount, parsedAmount, id);
+
+            // Sync to cash/bank ledger (accounting table)
+            const normalizedMode = normalizePaymentMode(payment_method);
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'income', ?, ?, ?, ?, ?, 'posted', ?, ?)
+            `).run(req.user.id, now.split('T')[0], parsedAmount, 'Sales Revenue', normalizedMode, `Payment for Invoice #${invoice.invoice_number}`, now, now);
+
             return sendSuccess(res, null, 'Payment captured successfully');
-        } catch (e) { return sendError(res, 'Failed to save payment', 500); }
+        } catch (e) { 
+            console.error('[Billing Controller] createInvoicePayment error:', e);
+            return sendError(res, 'Failed to save payment', 500); 
+        }
     },
     getInvoicePayments: async (req, res) => {
         const { id } = req.params;

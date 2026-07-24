@@ -185,6 +185,7 @@ app.use('/api/v1/returns',       auth, require('./routes/returns'));
 app.use('/api/v1/suppliers',     auth, require('./routes/suppliers'));
 app.use('/api/v1/reports',       auth, require('./routes/reports'));
 app.use('/api/v1/expenses',      auth, require('./routes/expenses'));
+app.use('/api/v1/search',        auth, require('./routes/search'));
 app.use('/api/v1/calculator',    auth, require('./routes/calculator'));
 app.use('/api/v1/currency',      auth, require('./routes/currency'));
 app.use('/api/v1/ca',            auth, require('./routes/ca'));

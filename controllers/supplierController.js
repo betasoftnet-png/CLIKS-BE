@@ -1,6 +1,30 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 
+function normalizePaymentMode(mode) {
+    if (!mode) return 'Cash in Hand';
+    const m = String(mode).toLowerCase();
+    if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) {
+        return 'Cash in Hand';
+    }
+    if (m.includes('hdfc')) {
+        return 'HDFC Bank Account';
+    }
+    if (m.includes('icici')) {
+        return 'ICICI Bank Account';
+    }
+    if (m.includes('sbi') || m.includes('state bank')) {
+        return 'SBI Current Account';
+    }
+    if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) {
+        return 'UPI / Razorpay';
+    }
+    if (m === 'bank' || m.includes('bank')) {
+        return 'HDFC Bank Account';
+    }
+    return mode;
+}
+
 const supplierController = {
     // 1. Create Supplier
     createSupplier: async (req, res) => {
@@ -206,6 +230,15 @@ const supplierController = {
                 INSERT INTO supplier_ledger (supplier_id, user_id, description, amount, type, created_at)
                 VALUES (?, ?, ?, ?, 'credit', ?)
             `).run(id, req.user.id, `Payment made via ${payment_method}`, amount, new Date().toISOString());
+
+            // Sync to accounting
+            const normalizedMode = normalizePaymentMode(payment_method);
+            const now = new Date().toISOString();
+            const paymentId = result.lastInsertRowid;
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'expense', ?, ?, ?, ?, ?, 'posted', ?, ?)
+            `).run(req.user.id, now.split('T')[0], amount, 'Supplier Payments', normalizedMode, `Supplier Payment #${paymentId}`, now, now);
 
             const created = await db.prepare('SELECT * FROM supplier_payments WHERE id = ?').get(result.lastInsertRowid);
             return sendSuccess(res, created, 'Payment registered successfully', 201);
