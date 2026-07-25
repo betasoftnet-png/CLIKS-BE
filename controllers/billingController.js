@@ -448,10 +448,19 @@ const billingController = {
 
             // Sync to cash/bank ledger (accounting table)
             const normalizedMode = normalizePaymentMode(payment_method);
+            const existingLedger = await db.prepare(`
+                SELECT id FROM accounting 
+                WHERE user_id = ? AND entry_type = 'income' 
+                AND (mode = 'Receivables' OR mode = 'Accounts Receivable (Credit Sale)') 
+                AND (notes LIKE ? OR notes LIKE ?)
+            `).get(req.user.id, `%${invoice.invoice_number}%`, `%Credit Sale #${invoice.invoice_number}%`);
+
+            const categoryName = existingLedger ? 'Invoice Payment' : 'Sales Revenue';
+
             await db.prepare(`
                 INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
                 VALUES (?, 'income', ?, ?, ?, ?, ?, 'posted', ?, ?)
-            `).run(req.user.id, now.split('T')[0], parsedAmount, 'Sales Revenue', normalizedMode, `Payment for Invoice #${invoice.invoice_number}`, now, now);
+            `).run(req.user.id, now.split('T')[0], parsedAmount, categoryName, normalizedMode, `Payment for Invoice #${invoice.invoice_number}`, now, now);
 
             return sendSuccess(res, null, 'Payment captured successfully');
         } catch (e) { 

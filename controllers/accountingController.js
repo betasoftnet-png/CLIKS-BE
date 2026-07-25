@@ -177,33 +177,59 @@ const accountingController = {
             }
 
             if (entry_type === 'income') {
-                // Income / Sales (Cash Sale)
+                // Income / Sales (Cash Sale or Credit Sale)
                 if (!customer_name) return sendError(res, 'Customer name is required', 400);
 
                 const invNum = invoice_number || `INV-${Date.now().toString().slice(-6)}`;
                 
-                // 1. Create a paid sales invoice
-                await db.prepare(`
-                    INSERT INTO business_invoices (
-                        user_id, invoice_number, client_name, amount, tax_amount, total_amount,
-                        paid_amount, due_amount, status, due_date, payment_mode, created_at, updated_at, items
-                    ) VALUES (?, ?, ?, ?, 0, ?, ?, 0, 'Paid', ?, ?, ?, ?, '[]')
-                `).run(req.user.id, invNum, customer_name, parsedAmount, parsedAmount, parsedAmount, dateStr, mode || 'Cash in Hand', now, now);
+                if (mode === 'Accounts Receivable (Credit Sale)') {
+                    // Credit Sale through Income form
+                    const dueStr = due_date || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-                const inv = await db.prepare('SELECT id FROM business_invoices WHERE invoice_number = ? AND user_id = ?').get(invNum, req.user.id);
-                if (inv) {
-                    await db.prepare('INSERT INTO business_invoice_payments (invoice_id, amount, payment_method, payment_date, reference_number, notes) VALUES (?, ?, ?, ?, ?, ?)')
-                        .run(inv.id, parsedAmount, mode || 'Cash in Hand', now, reference_number || null, notes || null);
+                    // Prevent duplicate invoice numbers
+                    const exists = await db.prepare('SELECT id FROM business_invoices WHERE invoice_number = ? AND user_id = ?').get(invNum, req.user.id);
+                    if (exists) return sendError(res, 'Invoice number already exists', 400);
+
+                    // 1. Create unpaid sales invoice
+                    await db.prepare(`
+                        INSERT INTO business_invoices (
+                            user_id, invoice_number, client_name, amount, tax_amount, total_amount,
+                            paid_amount, due_amount, status, due_date, payment_mode, created_at, updated_at, items
+                        ) VALUES (?, ?, ?, ?, 0, ?, 0, ?, 'Unpaid', ?, 'Credit', ?, ?, '[]')
+                    `).run(req.user.id, invNum, customer_name, parsedAmount, parsedAmount, parsedAmount, dueStr, now, now);
+
+                    // 2. Create accounting entry (revenue but without affecting cash/bank)
+                    const result = await db.prepare(`
+                        INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                        VALUES (?, 'income', ?, ?, ?, 'Accounts Receivable (Credit Sale)', ?, 'posted', ?, ?)
+                    `).run(req.user.id, dateStr, parsedAmount, category || 'Sales Revenue', notes ? `${notes} (Invoice #${invNum})` : `Credit Sale #${invNum}`, now, now);
+
+                    const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
+                    return sendSuccess(res, inserted, 'Credit Sale created successfully', 201);
+                } else {
+                    // 1. Create a paid sales invoice
+                    await db.prepare(`
+                        INSERT INTO business_invoices (
+                            user_id, invoice_number, client_name, amount, tax_amount, total_amount,
+                            paid_amount, due_amount, status, due_date, payment_mode, created_at, updated_at, items
+                        ) VALUES (?, ?, ?, ?, 0, ?, ?, 0, 'Paid', ?, ?, ?, ?, '[]')
+                    `).run(req.user.id, invNum, customer_name, parsedAmount, parsedAmount, parsedAmount, dateStr, mode || 'Cash in Hand', now, now);
+
+                    const inv = await db.prepare('SELECT id FROM business_invoices WHERE invoice_number = ? AND user_id = ?').get(invNum, req.user.id);
+                    if (inv) {
+                        await db.prepare('INSERT INTO business_invoice_payments (invoice_id, amount, payment_method, payment_date, reference_number, notes) VALUES (?, ?, ?, ?, ?, ?)')
+                            .run(inv.id, parsedAmount, mode || 'Cash in Hand', now, reference_number || null, notes || null);
+                    }
+
+                    // 2. Create accounting entry
+                    const result = await db.prepare(`
+                        INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                        VALUES (?, 'income', ?, ?, ?, ?, ?, 'posted', ?, ?)
+                    `).run(req.user.id, dateStr, parsedAmount, category || 'Sales Revenue', mode || 'Cash in Hand', notes || `Cash Sale #${invNum}`, now, now);
+
+                    const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
+                    return sendSuccess(res, inserted, 'Income recorded successfully', 201);
                 }
-
-                // 2. Create accounting entry
-                const result = await db.prepare(`
-                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                    VALUES (?, 'income', ?, ?, ?, ?, ?, 'posted', ?, ?)
-                `).run(req.user.id, dateStr, parsedAmount, category || 'Sales Revenue', mode || 'Cash in Hand', notes || `Cash Sale #${invNum}`, now, now);
-
-                const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
-                return sendSuccess(res, inserted, 'Income recorded successfully', 201);
             }
             
             else if (entry_type === 'credit_sale') {
@@ -217,19 +243,19 @@ const accountingController = {
                 const exists = await db.prepare('SELECT id FROM business_invoices WHERE invoice_number = ? AND user_id = ?').get(invNum, req.user.id);
                 if (exists) return sendError(res, 'Invoice number already exists', 400);
 
-                // 1. Create invoice in business_invoices
+                // 1. Create invoice in business_invoices with Unpaid status
                 await db.prepare(`
                     INSERT INTO business_invoices (
                         user_id, invoice_number, client_name, amount, tax_amount, total_amount,
                         paid_amount, due_amount, status, due_date, payment_mode, created_at, updated_at, items
-                    ) VALUES (?, ?, ?, ?, 0, ?, 0, ?, 'Pending', ?, 'Credit', ?, ?, '[]')
+                    ) VALUES (?, ?, ?, ?, 0, ?, 0, ?, 'Unpaid', ?, 'Credit', ?, ?, '[]')
                 `).run(req.user.id, invNum, customer_name, parsedAmount, parsedAmount, parsedAmount, due_date, now, now);
 
                 // 2. Create accounting entry (revenue but without affecting cash/bank)
                 const result = await db.prepare(`
                     INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                    VALUES (?, 'income', ?, ?, ?, 'Receivables', ?, 'posted', ?, ?)
-                `).run(req.user.id, dateStr, parsedAmount, category || 'Sales Revenue', notes || `Credit Sale #${invNum}`, now, now);
+                    VALUES (?, 'income', ?, ?, ?, 'Accounts Receivable (Credit Sale)', ?, 'posted', ?, ?)
+                `).run(req.user.id, dateStr, parsedAmount, category || 'Sales Revenue', notes ? `${notes} (Invoice #${invNum})` : `Credit Sale #${invNum}`, now, now);
 
                 const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
                 return sendSuccess(res, inserted, 'Credit Sale created successfully', 201);
