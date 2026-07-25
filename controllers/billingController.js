@@ -451,7 +451,7 @@ const billingController = {
             const existingLedger = await db.prepare(`
                 SELECT id FROM accounting 
                 WHERE user_id = ? AND entry_type = 'income' 
-                AND (mode = 'Receivables' OR mode = 'Accounts Receivable (Credit Sale)') 
+                AND (mode = 'Receivables' OR mode = 'Accounts Receivable (Credit Sale)' OR mode LIKE '%Accounts Receivable%' OR mode LIKE '%Credit Sale%') 
                 AND (notes LIKE ? OR notes LIKE ?)
             `).get(req.user.id, `%${invoice.invoice_number}%`, `%Credit Sale #${invoice.invoice_number}%`);
 

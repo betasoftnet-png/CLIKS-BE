@@ -182,7 +182,12 @@ const accountingController = {
 
                 const invNum = invoice_number || `INV-${Date.now().toString().slice(-6)}`;
                 
-                if (mode === 'Accounts Receivable (Credit Sale)') {
+                const isCreditSale = mode === 'Accounts Receivable (Credit Sale)' || 
+                                     (mode && typeof mode === 'string' && 
+                                      (mode.toLowerCase().includes('accounts receivable') || 
+                                       mode.toLowerCase().includes('credit sale')));
+
+                if (isCreditSale) {
                     // Credit Sale through Income form
                     const dueStr = due_date || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
