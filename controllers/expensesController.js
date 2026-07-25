@@ -233,7 +233,7 @@ const expensesController = {
     },
 
     createExpense: async (req, res) => {
-        const { category_name, subcategory, payee_name, expense_amount, gst_percentage, payment_mode, transaction_reference } = req.body;
+        const { category_name, subcategory, payee_name, expense_amount, gst_percentage, payment_mode, transaction_reference, expense_date } = req.body;
         try {
             const now = new Date().toISOString();
             const expNum = `EXP-2026-${Date.now().toString().slice(-3)}`;
@@ -241,6 +241,7 @@ const expensesController = {
             const gst = parseFloat(gst_percentage) || 0;
             const sub = Math.round(amt / (1 + gst / 100));
             const tax = amt - sub;
+            const finalDate = expense_date || now.split('T')[0];
 
             const result = await db.prepare(`
                 INSERT INTO expenses (
@@ -249,7 +250,7 @@ const expensesController = {
                     payment_mode, transaction_reference, input_tax_credit, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, 'paid', ?, ?, ?, '+91 xxxxx xxxxx', '27XXXXX0000X0Z0', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                req.user.id, amt, expNum, now.split('T')[0], category_name || 'General', subcategory || 'Service Description',
+                req.user.id, amt, expNum, finalDate, category_name || 'General', subcategory || 'Service Description',
                 payee_name || 'Vendor Profile', amt, gst, sub, tax, payment_mode || 'UPI', transaction_reference || 'TXN-908122',
                 gst > 0 ? 'Eligible (ITC Claimed)' : 'Not Applicable', now, now
             );
@@ -260,7 +261,7 @@ const expensesController = {
             await db.prepare(`
                 INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
                 VALUES (?, 'expense', ?, ?, ?, ?, ?, 'posted', ?, ?)
-            `).run(req.user.id, now.split('T')[0], amt, category_name || 'General', normalizedMode, `Expense #${expNum}`, now, now);
+            `).run(req.user.id, finalDate, amt, category_name || 'General', normalizedMode, `Expense #${expNum}`, now, now);
 
             return sendSuccess(res, inserted, 'Expense recorded successfully', 201);
         } catch (error) {
