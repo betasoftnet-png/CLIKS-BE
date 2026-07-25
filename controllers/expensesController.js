@@ -161,7 +161,7 @@ async function autoPostDueRecurringExpenses(userId) {
     }
 }
 
-async function createExpenseForClaim(claimId, userId) {
+async function createExpenseForClaim(claimId, userId, paymentMode, paymentDate) {
     const ref = `REIMB-CLAIM-${claimId}`;
     const exists = await db.prepare("SELECT id FROM expenses WHERE user_id = ? AND transaction_reference = ? AND is_claim = 'false'").get(userId, ref);
     if (exists) return;
@@ -172,22 +172,24 @@ async function createExpenseForClaim(claimId, userId) {
     const now = new Date().toISOString();
     const amt = parseFloat(claim.claim_amount) || 0;
     const expNum = `EXP-REIMB-${Date.now().toString().slice(-4)}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const finalMode = paymentMode || 'UPI / Razorpay';
+    const finalDate = paymentDate || claim.date || now.split('T')[0];
 
-    // 1. Create expense row
+    // 1. Create expense row in expenses table (is_claim = 'false')
     await db.prepare(`
         INSERT INTO expenses (
             user_id, expense_number, expense_date, expense_status, category_name, subcategory,
             payee_name, expense_amount, amount, subtotal, tax_amount, payment_mode, transaction_reference,
             is_claim, is_budget, is_recurring, created_at, updated_at
-        ) VALUES (?, ?, ?, 'paid', 'Staff Welfare & Reimbursement', ?, ?, ?, ?, ?, 0, 'UPI', ?, 'false', 'false', 0, ?, ?)
-    `).run(userId, expNum, claim.date || now.split('T')[0], claim.travel_expense || '', claim.employee_name || '', amt, amt, amt, ref, now, now);
+        ) VALUES (?, ?, ?, 'paid', 'Staff Welfare & Reimbursement', ?, ?, ?, ?, ?, 0, ?, ?, 'false', 'false', 0, ?, ?)
+    `).run(userId, expNum, finalDate, claim.travel_expense || '', claim.employee_name || '', amt, amt, amt, finalMode, ref, now, now);
 
-    // 2. Create accounting entry
+    // 2. Create accounting entry to register the expense and reduce selected Cash/Bank balance
     await db.prepare(`
         INSERT INTO accounting (
             user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at
-        ) VALUES (?, 'expense', ?, ?, 'Staff Welfare & Reimbursement', 'UPI / Razorpay', ?, 'posted', ?, ?)
-    `).run(userId, claim.date || now.split('T')[0], amt, `Staff claim reimbursement: ${claim.employee_name || ''} - ${claim.travel_expense || ''}`, now, now);
+        ) VALUES (?, 'expense', ?, ?, 'Staff Welfare & Reimbursement', ?, ?, 'posted', ?, ?)
+    `).run(userId, finalDate, amt, finalMode, `Staff claim reimbursement: ${claim.employee_name || ''} - ${claim.travel_expense || ''}`, now, now);
 }
 
 const expensesController = {
@@ -348,8 +350,8 @@ const expensesController = {
     // 6. Approval Queue
     approveExpense: async (req, res) => {
         try {
-            await db.prepare("UPDATE expenses SET reimbursement_status = 'Approved', approval_by = 'Ankit Sharma (Manager)' WHERE id = ? AND user_id = ?").run(req.params.id, req.user.id);
-            await createExpenseForClaim(req.params.id, req.user.id);
+            const now = new Date().toISOString();
+            await db.prepare("UPDATE expenses SET reimbursement_status = 'Approved', approval_by = 'Ankit Sharma (Manager)', updated_at = ? WHERE id = ? AND user_id = ?").run(now, req.params.id, req.user.id);
             return sendSuccess(res, null, 'Reimbursement approved');
         } catch (error) {
             console.error('[Expense Claim] Approve Error:', error);
@@ -357,8 +359,14 @@ const expensesController = {
         }
     },
     rejectExpense: async (req, res) => {
+        const { reason } = req.body;
         try {
-            await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected' WHERE id = ? AND user_id = ?").run(req.params.id, req.user.id);
+            const now = new Date().toISOString();
+            if (reason) {
+                await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', description = ?, updated_at = ? WHERE id = ? AND user_id = ?").run(reason, now, req.params.id, req.user.id);
+            } else {
+                await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', updated_at = ? WHERE id = ? AND user_id = ?").run(now, req.params.id, req.user.id);
+            }
             return sendSuccess(res, null, 'Reimbursement rejected');
         } catch (error) {
             console.error('[Expense Claim] Reject Error:', error);
@@ -366,9 +374,12 @@ const expensesController = {
         }
     },
     payExpenseClaim: async (req, res) => {
+        const { paymentMode, paymentDate } = req.body;
         try {
-            await db.prepare("UPDATE expenses SET reimbursement_status = 'Paid' WHERE id = ? AND user_id = ?").run(req.params.id, req.user.id);
-            await createExpenseForClaim(req.params.id, req.user.id);
+            const now = new Date().toISOString();
+            const finalDate = paymentDate || now.split('T')[0];
+            await db.prepare("UPDATE expenses SET reimbursement_status = 'Paid', expense_date = ?, updated_at = ? WHERE id = ? AND user_id = ?").run(finalDate, now, req.params.id, req.user.id);
+            await createExpenseForClaim(req.params.id, req.user.id, paymentMode, finalDate);
             return sendSuccess(res, null, 'Reimbursement marked as Paid');
         } catch (error) {
             console.error('[Expense Claim] Pay Error:', error);
