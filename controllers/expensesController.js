@@ -77,7 +77,9 @@ const initTableAndColumns = async () => {
         'recurring_type',
         'next_due_date',
         'auto_create',
-        'recurring_status'
+        'recurring_status',
+        'receipt',
+        'subscription_name'
     ];
     for (const col of columns) {
         try {
@@ -89,11 +91,112 @@ const initTableAndColumns = async () => {
 };
 initTableAndColumns();
 
+const advanceDate = (dateStr, frequency) => {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const freq = String(frequency).toLowerCase();
+    if (freq.includes('quarter')) {
+        d.setMonth(d.getMonth() + 3);
+    } else if (freq.includes('year')) {
+        d.setFullYear(d.getFullYear() + 1);
+    } else {
+        d.setMonth(d.getMonth() + 1);
+    }
+    return d.toISOString().split('T')[0];
+};
+
+async function autoPostDueRecurringExpenses(userId) {
+    try {
+        const todayStr = new Date().toISOString().split('T')[0];
+        const subscriptions = await db.prepare(`
+            SELECT * FROM expenses 
+            WHERE user_id = ? AND is_recurring = 1 
+            AND auto_create = 'Active' AND recurring_status = 'Active'
+        `).all(userId);
+
+        const now = new Date().toISOString();
+
+        for (const sub of subscriptions) {
+            if (!sub.next_due_date) continue;
+            let currentDue = sub.next_due_date;
+            
+            while (currentDue <= todayStr) {
+                const expNum = `EXP-AUTO-${Date.now().toString().slice(-4)}-${Math.floor(1000 + Math.random() * 9000)}`;
+                const amt = parseFloat(sub.expense_amount) || 0;
+                
+                // 1. Insert into expenses table
+                await db.prepare(`
+                    INSERT INTO expenses (
+                        user_id, expense_number, expense_date, expense_status, category_name, subcategory,
+                        payee_name, expense_amount, amount, subtotal, tax_amount, payment_mode, transaction_reference, 
+                        is_claim, is_budget, is_recurring, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'paid', ?, ?, ?, ?, ?, ?, 0, 'UPI', 'AUTO-POSTED', 'false', 'false', 0, ?, ?)
+                `).run(
+                    userId, expNum, currentDue, sub.category_name || 'General', sub.subscription_name || 'Recurring Subscription',
+                    sub.payee_name || 'Vendor', amt, amt, amt, now, now
+                );
+
+                // 2. Sync to accounting ledger
+                await db.prepare(`
+                    INSERT INTO accounting (
+                        user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at
+                    ) VALUES (?, 'expense', ?, ?, ?, 'UPI / Razorpay', ?, 'posted', ?, ?)
+                `).run(
+                    userId, currentDue, amt, sub.category_name || 'Office spent', 
+                    `Recurring: ${sub.subscription_name || 'Subscription'}`, now, now
+                );
+
+                currentDue = advanceDate(currentDue, sub.recurring_type);
+            }
+
+            if (currentDue !== sub.next_due_date) {
+                await db.prepare(`
+                    UPDATE expenses SET next_due_date = ?, updated_at = ? 
+                    WHERE id = ? AND user_id = ?
+                `).run(currentDue, now, sub.id, userId);
+            }
+        }
+    } catch (err) {
+        console.error('[autoPostDueRecurringExpenses] error:', err);
+    }
+}
+
+async function createExpenseForClaim(claimId, userId) {
+    const ref = `REIMB-CLAIM-${claimId}`;
+    const exists = await db.prepare("SELECT id FROM expenses WHERE user_id = ? AND transaction_reference = ? AND is_claim = 'false'").get(userId, ref);
+    if (exists) return;
+
+    const claim = await db.prepare("SELECT * FROM expenses WHERE id = ? AND user_id = ?").get(claimId, userId);
+    if (!claim) return;
+
+    const now = new Date().toISOString();
+    const amt = parseFloat(claim.claim_amount) || 0;
+    const expNum = `EXP-REIMB-${Date.now().toString().slice(-4)}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    // 1. Create expense row
+    await db.prepare(`
+        INSERT INTO expenses (
+            user_id, expense_number, expense_date, expense_status, category_name, subcategory,
+            payee_name, expense_amount, amount, subtotal, tax_amount, payment_mode, transaction_reference,
+            is_claim, is_budget, is_recurring, created_at, updated_at
+        ) VALUES (?, ?, ?, 'paid', 'Staff Welfare & Reimbursement', ?, ?, ?, ?, ?, 0, 'UPI', ?, 'false', 'false', 0, ?, ?)
+    `).run(userId, expNum, claim.date || now.split('T')[0], claim.travel_expense || '', claim.employee_name || '', amt, amt, amt, ref, now, now);
+
+    // 2. Create accounting entry
+    await db.prepare(`
+        INSERT INTO accounting (
+            user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at
+        ) VALUES (?, 'expense', ?, ?, 'Staff Welfare & Reimbursement', 'UPI / Razorpay', ?, 'posted', ?, ?)
+    `).run(userId, claim.date || now.split('T')[0], amt, `Staff claim reimbursement: ${claim.employee_name || ''} - ${claim.travel_expense || ''}`, now, now);
+}
+
 const expensesController = {
     // 1. Expense Registry & Filters
     getExpenses: async (req, res) => {
         const { category, status, payment_mode, date, q } = req.query;
         try {
+            await autoPostDueRecurringExpenses(req.user.id);
+
             let sql = "SELECT * FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')";
             const params = [req.user.id];
 
@@ -246,8 +349,10 @@ const expensesController = {
     approveExpense: async (req, res) => {
         try {
             await db.prepare("UPDATE expenses SET reimbursement_status = 'Approved', approval_by = 'Ankit Sharma (Manager)' WHERE id = ? AND user_id = ?").run(req.params.id, req.user.id);
+            await createExpenseForClaim(req.params.id, req.user.id);
             return sendSuccess(res, null, 'Reimbursement approved');
         } catch (error) {
+            console.error('[Expense Claim] Approve Error:', error);
             return sendError(res, 'Approval failed', 500);
         }
     },
@@ -256,21 +361,32 @@ const expensesController = {
             await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected' WHERE id = ? AND user_id = ?").run(req.params.id, req.user.id);
             return sendSuccess(res, null, 'Reimbursement rejected');
         } catch (error) {
+            console.error('[Expense Claim] Reject Error:', error);
             return sendError(res, 'Rejection failed', 500);
+        }
+    },
+    payExpenseClaim: async (req, res) => {
+        try {
+            await db.prepare("UPDATE expenses SET reimbursement_status = 'Paid' WHERE id = ? AND user_id = ?").run(req.params.id, req.user.id);
+            await createExpenseForClaim(req.params.id, req.user.id);
+            return sendSuccess(res, null, 'Reimbursement marked as Paid');
+        } catch (error) {
+            console.error('[Expense Claim] Pay Error:', error);
+            return sendError(res, 'Pay claim failed', 500);
         }
     },
 
     // 7. Reimbursements claims
     reimburseExpense: async (req, res) => {
-        const { employee_name, travel_expense, claim_amount } = req.body;
+        const { employee_name, travel_expense, claim_amount, receipt } = req.body;
         try {
             const now = new Date().toISOString();
             const val = parseFloat(claim_amount) || 0;
             const result = await db.prepare(`
                 INSERT INTO expenses (
-                    user_id, amount, employee_name, travel_expense, claim_amount, reimbursement_status, is_claim, date, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'Pending', 'true', ?, ?, ?)
-            `).run(req.user.id, val, employee_name, travel_expense, val, now.split('T')[0], now, now);
+                    user_id, amount, employee_name, travel_expense, claim_amount, reimbursement_status, is_claim, receipt, date, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'Pending', 'true', ?, ?, ?, ?)
+            `).run(req.user.id, val, employee_name, travel_expense, val, receipt || null, now.split('T')[0], now, now);
 
             const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
             return sendSuccess(res, inserted, 'Reimbursement claim lodged successfully', 201);
@@ -290,21 +406,71 @@ const expensesController = {
 
     // 8. Recurrings
     createRecurring: async (req, res) => {
-        return sendSuccess(res, req.body, 'Recurring expense created');
+        const { subscription_name, payee_name, category_name, expense_amount, recurring_type, next_due_date, auto_create, recurring_status } = req.body;
+        try {
+            const now = new Date().toISOString();
+            const amt = parseFloat(expense_amount) || 0;
+            const result = await db.prepare(`
+                INSERT INTO expenses (
+                    user_id, subscription_name, payee_name, category_name, expense_amount, amount,
+                    recurring_type, next_due_date, auto_create, recurring_status, is_recurring, is_claim, is_budget, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'false', 'false', ?, ?)
+            `).run(
+                req.user.id, subscription_name || '', payee_name || '', category_name || 'General', amt, amt,
+                recurring_type || 'monthly', next_due_date || now.split('T')[0], auto_create || 'Active', recurring_status || 'Active',
+                now, now
+            );
+
+            const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
+            return sendSuccess(res, inserted, 'Recurring expense created', 201);
+        } catch (error) {
+            console.error('[Expense Recurring] Create Error:', error);
+            return sendError(res, 'Create recurring subscription failed', 500);
+        }
     },
     getRecurrings: async (req, res) => {
         try {
+            await autoPostDueRecurringExpenses(req.user.id);
+
             const list = await db.prepare("SELECT * FROM expenses WHERE user_id = ? AND is_recurring = 1 ORDER BY id DESC").all(req.user.id);
             return sendSuccess(res, list, 'Recurring automations retrieved');
         } catch (error) {
+            console.error('[Expense Recurring] Get Error:', error);
             return sendError(res, 'Retrieve recurrings failed', 500);
         }
     },
     updateRecurring: async (req, res) => {
-        return sendSuccess(res, req.body, 'Recurring expense updated');
+        const { id } = req.params;
+        const { subscription_name, payee_name, category_name, expense_amount, recurring_type, next_due_date, auto_create, recurring_status } = req.body;
+        try {
+            const now = new Date().toISOString();
+            const amt = parseFloat(expense_amount) || 0;
+            await db.prepare(`
+                UPDATE expenses SET 
+                    subscription_name = ?, payee_name = ?, category_name = ?, expense_amount = ?, amount = ?,
+                    recurring_type = ?, next_due_date = ?, auto_create = ?, recurring_status = ?, updated_at = ?
+                WHERE id = ? AND user_id = ? AND is_recurring = 1
+            `).run(
+                subscription_name, payee_name, category_name, amt, amt,
+                recurring_type, next_due_date, auto_create, recurring_status, now,
+                id, req.user.id
+            );
+            const updated = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(id);
+            return sendSuccess(res, updated, 'Recurring expense updated');
+        } catch (error) {
+            console.error('[Expense Recurring] Update Error:', error);
+            return sendError(res, 'Update recurring subscription failed', 500);
+        }
     },
     deleteRecurring: async (req, res) => {
-        return sendSuccess(res, null, 'Recurring expense deleted');
+        const { id } = req.params;
+        try {
+            await db.prepare("DELETE FROM expenses WHERE id = ? AND user_id = ? AND is_recurring = 1").run(id, req.user.id);
+            return sendSuccess(res, null, 'Recurring expense deleted');
+        } catch (error) {
+            console.error('[Expense Recurring] Delete Error:', error);
+            return sendError(res, 'Delete recurring subscription failed', 500);
+        }
     },
 
     // 9. Budgets
@@ -332,6 +498,33 @@ const expensesController = {
             return sendSuccess(res, list, 'Budgets targets retrieved');
         } catch (error) {
             return sendError(res, 'Retrieve budgets failed', 500);
+        }
+    },
+    updateBudget: async (req, res) => {
+        const { id } = req.params;
+        const { category_name, budget_limit } = req.body;
+        try {
+            const now = new Date().toISOString();
+            const limit = parseFloat(budget_limit) || 5000;
+            await db.prepare(`
+                UPDATE expenses SET category_name = ?, amount = ?, budget_limit = ?, updated_at = ?
+                WHERE id = ? AND user_id = ? AND is_budget = 'true'
+            `).run(category_name, limit, limit, now, id, req.user.id);
+            const updated = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(id);
+            return sendSuccess(res, updated, 'Budget target updated');
+        } catch (error) {
+            console.error('[Expense Budget] Update Error:', error);
+            return sendError(res, 'Update budget failed', 500);
+        }
+    },
+    deleteBudget: async (req, res) => {
+        const { id } = req.params;
+        try {
+            await db.prepare("DELETE FROM expenses WHERE id = ? AND user_id = ? AND is_budget = 'true'").run(id, req.user.id);
+            return sendSuccess(res, null, 'Budget target deleted');
+        } catch (error) {
+            console.error('[Expense Budget] Delete Error:', error);
+            return sendError(res, 'Delete budget failed', 500);
         }
     },
 

@@ -23,6 +23,8 @@ router.get('/reimbursements', expensesController.getReimbursements);
 // Budgets targets
 router.post('/budgets', expensesController.createBudget);
 router.get('/budgets', expensesController.getBudgets);
+router.put('/budgets/:id', expensesController.updateBudget);
+router.delete('/budgets/:id', expensesController.deleteBudget);
 
 router.get('/reports/summary', expensesController.getReportSummary);
 router.get('/reports/category', expensesController.getReportCategory);
@@ -55,6 +57,7 @@ router.get('/:id/tags', expensesController.getTags);
 
 router.post('/:id/approve', expensesController.approveExpense);
 router.post('/:id/reject', expensesController.rejectExpense);
+router.post('/:id/pay', expensesController.payExpenseClaim);
 
 router.post('/:id/reimburse', expensesController.reimburseExpense);
 router.get('/:id/reimbursements', expensesController.getReimbursements);
