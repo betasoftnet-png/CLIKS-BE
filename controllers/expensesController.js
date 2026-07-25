@@ -79,7 +79,8 @@ const initTableAndColumns = async () => {
         'auto_create',
         'recurring_status',
         'receipt',
-        'subscription_name'
+        'subscription_name',
+        'time'
     ];
     for (const col of columns) {
         try {
@@ -390,15 +391,17 @@ const expensesController = {
 
     // 7. Reimbursements claims
     reimburseExpense: async (req, res) => {
-        const { employee_name, travel_expense, claim_amount, receipt } = req.body;
+        const { employee_name, travel_expense, claim_amount, receipt, date, time } = req.body;
         try {
             const now = new Date().toISOString();
             const val = parseFloat(claim_amount) || 0;
+            const finalDate = date || now.split('T')[0];
+            const finalTime = time || now.split('T')[1].slice(0, 5);
             const result = await db.prepare(`
                 INSERT INTO expenses (
-                    user_id, amount, employee_name, travel_expense, claim_amount, reimbursement_status, is_claim, receipt, date, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'Pending', 'true', ?, ?, ?, ?)
-            `).run(req.user.id, val, employee_name, travel_expense, val, receipt || null, now.split('T')[0], now, now);
+                    user_id, amount, employee_name, travel_expense, claim_amount, reimbursement_status, is_claim, receipt, date, time, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'Pending', 'true', ?, ?, ?, ?, ?)
+            `).run(req.user.id, val, employee_name, travel_expense, val, receipt || null, finalDate, finalTime, now, now);
 
             const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
             return sendSuccess(res, inserted, 'Reimbursement claim lodged successfully', 201);
