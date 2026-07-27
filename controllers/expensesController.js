@@ -565,7 +565,7 @@ const expensesController = {
         return sendSuccess(res, [], 'Timeline log retrieved');
     },
     getAnalytics: async (req, res) => {
-        return sendSuccess(res, { score: 98 }, 'Operational analytics retrieved');
+        return sendSuccess(res, { score: 0 }, 'Operational analytics retrieved');
     },
     getReportSummary: async (req, res) => {
         return sendSuccess(res, {}, 'Summary report retrieved');

@@ -128,7 +128,7 @@ const getDashboard = async (req, res) => {
     },
     taxSummary: taxDue,
     primaryIncomeSource: userRow?.primary_income_source,
-    globalBudget: userRow?.global_budget || 20000
+    globalBudget: userRow?.global_budget || 0
   });
 };
 

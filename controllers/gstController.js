@@ -14,15 +14,15 @@ const gstController = {
                 }
             }
             return sendSuccess(res, {
-                gstin: settings.gstin || '27AAAAA1111A1Z1',
-                legal_name: settings.company_name || settings.legal_name || 'CLIKS Digital Services',
-                business_type: settings.business_type || 'Private Limited',
-                place_of_business: settings.city || settings.place_of_business || 'Maharashtra',
-                state_code: settings.state_code || '27'
+                gstin: settings.gstin || '',
+                legal_name: settings.company_name || settings.legal_name || '',
+                business_type: settings.business_type || '',
+                place_of_business: settings.city || settings.place_of_business || '',
+                state_code: settings.state_code || ''
             }, 'GST settings fetched');
         } catch (e) {
             console.error('[GST Controller] getSettings error:', e);
-            return sendError(res, 'Internal server error', 500);
+            return sendError(res, `GST Settings Error: ${e.message}`, 500);
         }
     },
 
@@ -32,7 +32,7 @@ const gstController = {
             return sendSuccess(res, invoices, 'GST Invoices fetched');
         } catch (e) {
             console.error('[GST Controller] getInvoices error:', e);
-            return sendError(res, 'Internal server error', 500);
+            return sendError(res, `Get Invoices Error: ${e.message}`, 500);
         }
     },
 
@@ -69,7 +69,7 @@ const gstController = {
             return sendSuccess(res, { id: result.lastInsertRowid, invoice_number }, 'Tax Invoice successfully generated');
         } catch (e) {
             console.error('[GST Controller] generateInvoice error:', e);
-            return sendError(res, 'Internal server error', 500);
+            return sendError(res, `Generate Invoice Error: ${e.message}`, 500);
         }
     },
 
@@ -79,7 +79,7 @@ const gstController = {
             return sendSuccess(res, eways, 'E-Way bills fetched');
         } catch (e) {
             console.error('[GST Controller] getEways error:', e);
-            return sendError(res, 'Internal server error', 500);
+            return sendError(res, `Get E-Ways Error: ${e.message}`, 500);
         }
     },
 
@@ -105,9 +105,32 @@ const gstController = {
                 goods_total_value,
                 items
             } = req.body;
-            
+
+            // 1. Mandatory Fields Validation
+            if (!invoice_number) return sendError(res, 'Invoice number is required', 400);
+            if (!invoice_date) return sendError(res, 'Invoice date is required', 400);
+            if (!transporter_name) return sendError(res, 'Transport company name is required', 400);
+            if (!dispatch_location) return sendError(res, 'Dispatch location is required', 400);
+            if (!delivery_location) return sendError(res, 'Delivery destination is required', 400);
+            if (transport_distance === undefined || transport_distance === null || transport_distance === '') {
+                return sendError(res, 'Transport distance is required', 400);
+            }
+            if (transport_mode === 'Road' && !vehicle_number) {
+                return sendError(res, 'Vehicle number is required for Road transport', 400);
+            }
+
             const eway_bill_number = `EWB-${Date.now().toString().slice(-8)}`;
             
+            // 2. Prepare Data with sanitized types
+            const dist = parseInt(transport_distance) || 0;
+            const qty = (goods_quantity !== undefined && goods_quantity !== null && goods_quantity !== '') ? parseFloat(goods_quantity) : null;
+            const taxable = (goods_taxable_value !== undefined && goods_taxable_value !== null && goods_taxable_value !== '') ? parseFloat(goods_taxable_value) : 0;
+            const gstRate = (goods_gst_rate !== undefined && goods_gst_rate !== null && goods_gst_rate !== '') ? parseFloat(goods_gst_rate) : 18;
+            const total = (goods_total_value !== undefined && goods_total_value !== null && goods_total_value !== '') ? parseFloat(goods_total_value) : (taxable * (1 + gstRate / 100));
+            const itemsJson = items ? (typeof items === 'string' ? items : JSON.stringify(items)) : null;
+            const createdAt = invoice_date || new Date().toISOString();
+
+            // 3. Database Insertion
             const result = await db.prepare(`
                 INSERT INTO gst_invoices (
                     user_id, invoice_number, transporter_name, vehicle_number, 
@@ -119,27 +142,46 @@ const gstController = {
                     created_at, reference_invoice
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Generated', ?, 'true', 'false', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                req.user.id, invoice_number, transporter_name, vehicle_number || null,
-                parseInt(transport_distance) || 0, dispatch_location, delivery_location,
-                eway_bill_number, transport_mode || 'Road', transporter_gstin || null,
-                goods_product_name || null, goods_hsn_code || null, 
-                goods_quantity ? parseFloat(goods_quantity) : null, goods_unit || null,
-                goods_taxable_value ? parseFloat(goods_taxable_value) : null,
-                goods_gst_rate ? parseFloat(goods_gst_rate) : null,
-                goods_total_value ? parseFloat(goods_total_value) : null,
-                items ? (typeof items === 'string' ? items : JSON.stringify(items)) : null,
-                invoice_date || new Date().toISOString(), invoice_number
+                req.user.id,
+                invoice_number,
+                transporter_name,
+                vehicle_number || null,
+                dist,
+                dispatch_location,
+                delivery_location,
+                eway_bill_number,
+                transport_mode || 'Road',
+                transporter_gstin || null,
+                goods_product_name || null,
+                goods_hsn_code || null,
+                qty,
+                goods_unit || null,
+                taxable,
+                gstRate,
+                total,
+                itemsJson,
+                createdAt,
+                invoice_number
             );
 
-            // If the sales invoice exists in gst_invoices, update its eway_bill_number
-            if (invoice_number) {
-                await db.prepare("UPDATE gst_invoices SET eway_bill_number = ? WHERE user_id = ? AND invoice_number = ?").run(eway_bill_number, req.user.id, invoice_number);
+            // 4. Link to Sales Invoice (Update existing record if it exists)
+            try {
+                await db.prepare("UPDATE gst_invoices SET eway_bill_number = ? WHERE user_id = ? AND invoice_number = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL)").run(eway_bill_number, req.user.id, invoice_number);
+            } catch (updateErr) {
+                console.warn('[GST Controller] Reference invoice update failed:', updateErr.message);
             }
 
-            return sendSuccess(res, { id: result.lastInsertRowid, eway_bill_number }, 'e-Way Bill generated successfully');
+            // 5. Fetch and return the created record
+            const createdEway = await db.prepare("SELECT * FROM gst_invoices WHERE id = ?").get(result.lastInsertRowid);
+            if (createdEway && createdEway.items && typeof createdEway.items === 'string') {
+                try { createdEway.items = JSON.parse(createdEway.items); } catch (e) {}
+            }
+
+            return sendSuccess(res, createdEway, 'Government e-Way Bill generated successfully', 201);
+
         } catch (e) {
             console.error('[GST Controller] createEway error:', e);
-            return sendError(res, 'Internal server error', 500);
+            return sendError(res, `Failed to generate e-Way Bill: ${e.message}`, 500);
         }
     },
 
@@ -149,7 +191,7 @@ const gstController = {
             return sendSuccess(res, reconciliations, 'Reconciliations fetched');
         } catch (e) {
             console.error('[GST Controller] getReconciliations error:', e);
-            return sendError(res, 'Internal server error', 500);
+            return sendError(res, `Get Reconciliations Error: ${e.message}`, 500);
         }
     },
 
@@ -180,7 +222,7 @@ const gstController = {
             return sendSuccess(res, { id: result.lastInsertRowid }, 'Reconciliation entry added');
         } catch (e) {
             console.error('[GST Controller] runReconciliation error:', e);
-            return sendError(res, 'Internal server error', 500);
+            return sendError(res, `Run Reconciliation Error: ${e.message}`, 500);
         }
     },
 
@@ -191,7 +233,7 @@ const gstController = {
             return sendSuccess(res, { id }, 'Record deleted successfully');
         } catch (e) {
             console.error('[GST Controller] deleteInvoice error:', e);
-            return sendError(res, 'Internal server error', 500);
+            return sendError(res, `Delete Invoice Error: ${e.message}`, 500);
         }
     },
 
@@ -212,7 +254,7 @@ const gstController = {
             }, 'GSTR-3B report fetched');
         } catch (e) {
             console.error('[GST Controller] getGSTR3B error:', e);
-            return sendError(res, 'Internal server error', 500);
+            return sendError(res, `GSTR-3B Error: ${e.message}`, 500);
         }
     },
 
@@ -226,7 +268,7 @@ const gstController = {
             }, 'GSTR-9 report fetched');
         } catch (e) {
             console.error('[GST Controller] getGSTR9 error:', e);
-            return sendError(res, 'Internal server error', 500);
+            return sendError(res, `GSTR-9 Error: ${e.message}`, 500);
         }
     }
 };

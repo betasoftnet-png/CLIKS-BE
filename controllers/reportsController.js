@@ -34,7 +34,7 @@ const reportsController = {
     getSalesSummary: async (req, res) => {
         try {
             const sales = await db.prepare("SELECT SUM(grand_total) as total FROM business_orders WHERE user_id = ?").get(req.user.id);
-            return sendSuccess(res, { total_sales: sales?.total || 0, margin: '22%' }, 'Sales summary compiled');
+            return sendSuccess(res, { total_sales: sales?.total || 0, margin: '0%' }, 'Sales summary compiled');
         } catch (error) {
             console.error('Error in getSalesSummary:', error);
             return sendError(res, 'Failed to compile sales summary', 500);
@@ -73,7 +73,7 @@ const reportsController = {
         return sendSuccess(res, [], 'Purchases records compiled');
     },
     getPurchaseSummary: async (req, res) => {
-        return sendSuccess(res, { total_purchases: 320000 }, 'Purchase summary compiled');
+        return sendSuccess(res, { total_purchases: 0 }, 'Purchase summary compiled');
     },
     getPurchasesBySupplier: async (req, res) => {
         return sendSuccess(res, [], 'Purchases by supplier compiled');
@@ -87,10 +87,10 @@ const reportsController = {
         return sendSuccess(res, [], 'Payments records compiled');
     },
     getPaymentSummary: async (req, res) => {
-        return sendSuccess(res, { settled: 420000, pending: 15000 }, 'Payment summary compiled');
+        return sendSuccess(res, { settled: 0, pending: 0 }, 'Payment summary compiled');
     },
     getPaymentMethods: async (req, res) => {
-        return sendSuccess(res, { UPI: 180000, Cards: 120000, Cash: 120000 }, 'Payment methods compiled');
+        return sendSuccess(res, { UPI: 0, Cards: 0, Cash: 0 }, 'Payment methods compiled');
     },
     getPaymentPending: async (req, res) => {
         return sendSuccess(res, [], 'Pending payments compiled');
@@ -101,24 +101,24 @@ const reportsController = {
         return sendSuccess(res, [], 'Expenses records compiled');
     },
     getExpenseSummary: async (req, res) => {
-        return sendSuccess(res, { total_expenses: 85000 }, 'Expense summary compiled');
+        return sendSuccess(res, { total_expenses: 0 }, 'Expense summary compiled');
     },
     getExpensesByCategory: async (req, res) => {
-        return sendSuccess(res, { Rent: 40000, Marketing: 25000, Utilities: 20000 }, 'Expenses by category compiled');
+        return sendSuccess(res, {}, 'Expenses by category compiled');
     },
 
     // Financial Statements
     getProfitLoss: async (req, res) => {
-        return sendSuccess(res, { gross_revenue: 540000, cost_of_goods: 220000, overheads: 85000, net_profit: 235000 }, 'Profit & Loss compiled');
+        return sendSuccess(res, { gross_revenue: 0, cost_of_goods: 0, overheads: 0, net_profit: 0 }, 'Profit & Loss compiled');
     },
     getBalanceSheet: async (req, res) => {
-        return sendSuccess(res, { assets: 1250000, liabilities: 450000, equity: 800000 }, 'Balance Sheet compiled');
+        return sendSuccess(res, { assets: 0, liabilities: 0, equity: 0 }, 'Balance Sheet compiled');
     },
     getCashFlow: async (req, res) => {
-        return sendSuccess(res, { inflow: 480000, outflow: 310000, net_flow: 170000 }, 'Cash Flow statement compiled');
+        return sendSuccess(res, { inflow: 0, outflow: 0, net_flow: 0 }, 'Cash Flow statement compiled');
     },
     getTrialBalance: async (req, res) => {
-        return sendSuccess(res, { debits: 1500000, credits: 1500000 }, 'Trial Balance compiled');
+        return sendSuccess(res, { debits: 0, credits: 0 }, 'Trial Balance compiled');
     },
     getGeneralLedger: async (req, res) => {
         return sendSuccess(res, [], 'General ledger compiled');
@@ -132,7 +132,7 @@ const reportsController = {
         return sendSuccess(res, [], 'Stock report compiled');
     },
     getStockValuation: async (req, res) => {
-        return sendSuccess(res, { total_value: 850000 }, 'Stock valuation report compiled');
+        return sendSuccess(res, { total_value: 0 }, 'Stock valuation report compiled');
     },
     getStockMovement: async (req, res) => {
         return sendSuccess(res, [], 'Stock movement compiled');
@@ -200,13 +200,13 @@ const reportsController = {
         return sendSuccess(res, [], 'Manufacturing report compiled');
     },
     getProductionCost: async (req, res) => {
-        return sendSuccess(res, { cost_per_unit: 450 }, 'Production cost report compiled');
+        return sendSuccess(res, { cost_per_unit: 0 }, 'Production cost report compiled');
     },
     getMaterialConsumption: async (req, res) => {
         return sendSuccess(res, [], 'Material consumption compiled');
     },
     getWastage: async (req, res) => {
-        return sendSuccess(res, { wastage_percentage: '1.2%' }, 'Wastage report compiled');
+        return sendSuccess(res, { wastage_percentage: '0%' }, 'Wastage report compiled');
     },
 
     // Date Range & Export
@@ -244,14 +244,14 @@ const reportsController = {
         }
     },
     getChartPurchases: async (req, res) => {
-        return sendSuccess(res, { labels: ['Jan', 'Feb', 'Mar'], data: [90000, 110000, 140000] }, 'Purchases chart data compiled');
+        return sendSuccess(res, { labels: [], data: [] }, 'Purchases chart data compiled');
     },
     getChartProfit: async (req, res) => {
-        return sendSuccess(res, { labels: ['Jan', 'Feb', 'Mar'], data: [30000, 40000, 80000] }, 'Profit chart data compiled');
+        return sendSuccess(res, { labels: [], data: [] }, 'Profit chart data compiled');
     },
 
     getAnalytics: async (req, res) => {
-        return sendSuccess(res, { health_score: 95 }, 'Operational analytics compiled');
+        return sendSuccess(res, { health_score: 0 }, 'Operational analytics compiled');
     },
     getHistory: async (req, res) => {
         return sendSuccess(res, [], 'Operational history compiled');

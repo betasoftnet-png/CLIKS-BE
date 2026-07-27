@@ -465,7 +465,7 @@ const accountingController = {
 
     // Trial Balance / Balance Sheet / Cash Flow / Profit-Loss
     getTrialBalance: async (req, res) => {
-        return sendSuccess(res, { debits: 1450000, credits: 1450000, status: 'balanced' }, 'Trial balance retrieved');
+        return sendSuccess(res, { debits: 0, credits: 0, status: 'balanced' }, 'Trial balance retrieved');
     },
     getProfitLoss: async (req, res) => {
         try {
@@ -554,7 +554,7 @@ const accountingController = {
         }
     },
     getCashFlow: async (req, res) => {
-        return sendSuccess(res, { operating_inflows: 85000, investing_outflows: 12000, net_change: 73000 }, 'Cash flow retrieved');
+        return sendSuccess(res, { operating_inflows: 0, investing_outflows: 0, net_change: 0 }, 'Cash flow retrieved');
     },
 
     // Opening / Closing
@@ -562,13 +562,13 @@ const accountingController = {
         return sendSuccess(res, req.body, 'Opening balance set');
     },
     getOpeningBalance: async (req, res) => {
-        return sendSuccess(res, { opening_balance: 500000 }, 'Opening balance retrieved');
+        return sendSuccess(res, { opening_balance: 0 }, 'Opening balance retrieved');
     },
     createClosingBalance: async (req, res) => {
         return sendSuccess(res, req.body, 'Closing balance set');
     },
     getClosingBalance: async (req, res) => {
-        return sendSuccess(res, { closing_balance: 780000 }, 'Closing balance retrieved');
+        return sendSuccess(res, { closing_balance: 0 }, 'Closing balance retrieved');
     },
 
     // Bank Accounts
@@ -620,11 +620,11 @@ const accountingController = {
             if (list.length === 0) {
                 const now = new Date().toISOString();
                 const defaults = [
-                    { name: 'Cash in Hand', type: 'asset', bal: 25000, num: 'CASH-01' },
-                    { name: 'HDFC Bank Account', type: 'asset', bal: 150000, num: 'HDFC-02' },
-                    { name: 'SBI Current Account', type: 'asset', bal: 80000, num: 'SBI-03' },
-                    { name: 'ICICI Bank Account', type: 'asset', bal: 45000, num: 'ICICI-04' },
-                    { name: 'UPI / Razorpay', type: 'asset', bal: 10000, num: 'UPI-05' }
+                    { name: 'Cash in Hand', type: 'asset', bal: 0, num: 'CASH-01' },
+                    { name: 'HDFC Bank Account', type: 'asset', bal: 0, num: 'HDFC-02' },
+                    { name: 'SBI Current Account', type: 'asset', bal: 0, num: 'SBI-03' },
+                    { name: 'ICICI Bank Account', type: 'asset', bal: 0, num: 'ICICI-04' },
+                    { name: 'UPI / Razorpay', type: 'asset', bal: 0, num: 'UPI-05' }
                 ];
                 for (const acc of defaults) {
                     await db.prepare(`
@@ -752,7 +752,7 @@ const accountingController = {
         return sendSuccess(res, req.body, 'Tax slab registered');
     },
     getTax: async (req, res) => {
-        return sendSuccess(res, { cgst_rate: '9%', sgst_rate: '9%', status: 'compliant' }, 'Tax retrieved');
+        return sendSuccess(res, { cgst_rate: '0%', sgst_rate: '0%', status: 'none' }, 'Tax retrieved');
     },
 
     // History / Notes / Documents / Analytics
@@ -774,7 +774,7 @@ const accountingController = {
         return sendSuccess(res, [], 'Documents retrieved');
     },
     getAnalytics: async (req, res) => {
-        return sendSuccess(res, { profit_margin: '34.7%' }, 'Analytics retrieved');
+        return sendSuccess(res, { profit_margin: '0%' }, 'Analytics retrieved');
     },
 
     // Reports

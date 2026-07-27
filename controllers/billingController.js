@@ -353,13 +353,8 @@ const billingController = {
 
     // 9. History / Timeline
     getInvoiceHistory: async (req, res) => {
-        const { _id } = req.params;
         try {
-            const timeline = [
-                { title: 'Invoice Created', date: new Date().toISOString() },
-                { title: 'Status changed to Pending', date: new Date().toISOString() }
-            ];
-            return sendSuccess(res, timeline, 'Timeline fetched successfully');
+            return sendSuccess(res, [], 'Timeline fetched successfully');
         } catch (e) { return sendError(res, 'Failed to fetch timeline', 500); }
     },
 
