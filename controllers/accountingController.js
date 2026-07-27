@@ -616,23 +616,6 @@ const accountingController = {
     getBankAccounts: async (req, res) => {
         try {
             let list = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
-            if (list.length === 0) {
-                const now = new Date().toISOString();
-                const defaults = [
-                    { name: 'Cash in Hand', type: 'asset', bal: 0, num: 'CASH-01' },
-                    { name: 'HDFC Bank Account', type: 'asset', bal: 0, num: 'HDFC-02' },
-                    { name: 'SBI Current Account', type: 'asset', bal: 0, num: 'SBI-03' },
-                    { name: 'ICICI Bank Account', type: 'asset', bal: 0, num: 'ICICI-04' },
-                    { name: 'UPI / Razorpay', type: 'asset', bal: 0, num: 'UPI-05' }
-                ];
-                for (const acc of defaults) {
-                    await db.prepare(`
-                        INSERT INTO accounting (user_id, account_name, account_type, balance, account_number, entry_type, status, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, 'AccountConfig', 'active', ?, ?)
-                    `).run(req.user.id, acc.name, acc.type, String(acc.bal), acc.num, now, now);
-                }
-                list = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
-            }
 
             const updatedList = [];
             for (const acc of list) {
