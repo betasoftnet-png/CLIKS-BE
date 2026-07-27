@@ -88,11 +88,22 @@ const gstController = {
             const { 
                 invoice_number, 
                 invoice_date, 
+                transport_mode,
                 transporter_name, 
+                transporter_gstin,
                 vehicle_number, 
                 transport_distance, 
                 dispatch_location, 
-                delivery_location 
+                delivery_location,
+                // Goods Details fields
+                goods_product_name,
+                goods_hsn_code,
+                goods_quantity,
+                goods_unit,
+                goods_taxable_value,
+                goods_gst_rate,
+                goods_total_value,
+                items
             } = req.body;
             
             const eway_bill_number = `EWB-${Date.now().toString().slice(-8)}`;
@@ -101,13 +112,29 @@ const gstController = {
                 INSERT INTO gst_invoices (
                     user_id, invoice_number, transporter_name, vehicle_number, 
                     transport_distance, dispatch_location, delivery_location, 
-                    status, eway_bill_number, is_eway_bill, is_reconciliation, created_at, reference_invoice
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Generated', ?, 'true', 'false', ?, ?)
+                    status, eway_bill_number, is_eway_bill, is_reconciliation, 
+                    transport_mode, transporter_gstin, 
+                    goods_product_name, goods_hsn_code, goods_quantity, goods_unit,
+                    taxable_value, gst_percentage, amount, items,
+                    created_at, reference_invoice
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Generated', ?, 'true', 'false', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, invoice_number, transporter_name, vehicle_number || null,
                 parseInt(transport_distance) || 0, dispatch_location, delivery_location,
-                eway_bill_number, invoice_date || new Date().toISOString(), invoice_number
+                eway_bill_number, transport_mode || 'Road', transporter_gstin || null,
+                goods_product_name || null, goods_hsn_code || null, 
+                goods_quantity ? parseFloat(goods_quantity) : null, goods_unit || null,
+                goods_taxable_value ? parseFloat(goods_taxable_value) : null,
+                goods_gst_rate ? parseFloat(goods_gst_rate) : null,
+                goods_total_value ? parseFloat(goods_total_value) : null,
+                items ? (typeof items === 'string' ? items : JSON.stringify(items)) : null,
+                invoice_date || new Date().toISOString(), invoice_number
             );
+
+            // If the sales invoice exists in gst_invoices, update its eway_bill_number
+            if (invoice_number) {
+                await db.prepare("UPDATE gst_invoices SET eway_bill_number = ? WHERE user_id = ? AND invoice_number = ?").run(eway_bill_number, req.user.id, invoice_number);
+            }
 
             return sendSuccess(res, { id: result.lastInsertRowid, eway_bill_number }, 'e-Way Bill generated successfully');
         } catch (e) {
