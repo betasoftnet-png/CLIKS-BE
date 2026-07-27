@@ -291,7 +291,7 @@ const bomController = {
 
     // GET /bom/:id/finished-product
     getFinishedProduct: async (req, res) => {
-        return sendSuccess(res, { product_id: 1, name: 'Finished Product' }, 'Finished product fetched');
+        return sendSuccess(res, null, 'No finished product associated');
     },
 
     // GET /bom/:id/stock-availability

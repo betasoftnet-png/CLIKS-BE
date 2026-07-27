@@ -409,7 +409,7 @@ const payrollController = {
 
     // Analytics
     getAnalytics: async (req, res) => {
-        return sendSuccess(res, { month_over_month_change: '+1.4%' }, 'Analytics retrieved');
+        return sendSuccess(res, { month_over_month_change: '0%' }, 'Analytics retrieved');
     },
 
     // Reports

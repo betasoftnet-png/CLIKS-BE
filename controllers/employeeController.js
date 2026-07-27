@@ -62,15 +62,11 @@ const employeeController = {
     },
 
     getActivityLogs: async (req, res) => {
-        return sendSuccess(res, [
-            { id: 1, action: 'Check-in', details: 'Checked in at 09:00 AM', timestamp: new Date().toISOString() }
-        ], 'Activity logs fetched successfully');
+        return sendSuccess(res, [], 'Activity logs fetched successfully');
     },
 
     getPerformanceReports: async (req, res) => {
-        return sendSuccess(res, [
-            { id: 1, name: 'Alice', score: 'Excellent', reviews: [] }
-        ], 'Performance reports fetched successfully');
+        return sendSuccess(res, [], 'Performance reports fetched successfully');
     }
 };
 

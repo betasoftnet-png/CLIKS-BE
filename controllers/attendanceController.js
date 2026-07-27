@@ -413,7 +413,20 @@ const attendanceController = {
 
     // Summary and reports
     getSummary: async (req, res) => {
-        return sendSuccess(res, { total_present: 20, total_late: 2, total_absent: 1 }, 'Attendance summary retrieved');
+        try {
+            const userId = req.user.id;
+            const present = await db.prepare("SELECT COUNT(*) as count FROM attendance WHERE user_id = ? AND status = 'Present'").get(userId);
+            const late = await db.prepare("SELECT COUNT(*) as count FROM attendance WHERE user_id = ? AND status = 'Late'").get(userId);
+            const absent = await db.prepare("SELECT COUNT(*) as count FROM attendance WHERE user_id = ? AND status = 'Absent'").get(userId);
+
+            return sendSuccess(res, {
+                total_present: present?.count || 0,
+                total_late: late?.count || 0,
+                total_absent: absent?.count || 0
+            }, 'Attendance summary retrieved');
+        } catch (error) {
+            return sendError(res, 'Summary failed', 500);
+        }
     },
     getMonthlySummary: async (req, res) => {
         return sendSuccess(res, { present_days: 22, late_days: 3, half_days: 0 }, 'Monthly summary retrieved');

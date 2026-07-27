@@ -521,11 +521,10 @@ const accountingController = {
             const recSum = await db.prepare("SELECT SUM(due_amount) as total FROM business_invoices WHERE user_id = ? AND status != 'Paid'").get(req.user.id);
             const receivablesAsset = parseFloat(recSum?.total) || 0;
 
-            // Calculate Payables dynamically from outstanding supplier bills
-            const paySum = await db.prepare("SELECT SUM(grand_total - paid_amount) as total FROM business_purchases WHERE user_id = ? AND payment_status != 'paid'").get(req.user.id);
-            const payablesLiability = parseFloat(paySum?.total) || 0;
+            // Calculate dynamic liabilities
+            const gstResult = await db.prepare("SELECT SUM(total_tax) as total FROM gst_invoices WHERE user_id = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)").get(req.user.id);
+            const gstPayable = parseFloat(gstResult?.total) || 0;
 
-            const gstPayable = (parseFloat(cashAsset + bankAsset) * 0.18); // standard estimation
             const totalAssets = cashAsset + bankAsset + receivablesAsset;
             const liabilitiesExclEquity = payablesLiability + gstPayable;
             const equityVal = Math.max(0, totalAssets - liabilitiesExclEquity);
@@ -757,9 +756,7 @@ const accountingController = {
 
     // History / Notes / Documents / Analytics
     getHistory: async (req, res) => {
-        return sendSuccess(res, [
-            { event: 'Opening balance initialized', timestamp: new Date().toISOString() }
-        ], 'History retrieved');
+        return sendSuccess(res, [], 'History retrieved');
     },
     addNote: async (req, res) => {
         return sendSuccess(res, req.body, 'Note added');
