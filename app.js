@@ -189,6 +189,7 @@ app.use('/api/v1/search',        auth, require('./routes/search'));
 app.use('/api/v1/calculator',    auth, require('./routes/calculator'));
 app.use('/api/v1/currency',      auth, require('./routes/currency'));
 app.use('/api/v1/ca',            auth, require('./routes/ca'));
+app.use('/api/v1/gst',           auth, require('./routes/gst'));
 
 
 // ── 404 Handler ───────────────────────────────────────────────────────────────
