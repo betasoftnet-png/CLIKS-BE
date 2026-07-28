@@ -18,7 +18,4 @@ const businessOnly = (req, res, next) => {
 router.get('/stats', businessOnly, businessController.getBusinessStats);
 router.get('/operations', businessOnly, businessController.getRecentOperations);
 
-// GET /api/v1/business/subscription/:email
-router.get('/subscription/:email', require('../controllers/profileController').getSubscriptionDetails);
-
 module.exports = router;

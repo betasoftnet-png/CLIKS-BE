@@ -153,6 +153,7 @@ app.use('/api/v1/people',                         auth, require('./routes/people
 app.use('/api/v1/contacts',         auth, require('./routes/contacts'));
 app.use('/api/v1/segregation',      auth, require('./routes/segregation'));
 app.use('/api/v1/split-expenses',   auth, require('./routes/splitExpense'));
+app.get('/api/v1/business/subscription/:email', require('./controllers/profileController').getSubscriptionDetails);
 app.use('/api/v1/business',         auth, require('./routes/business'));
 app.use('/api/v1/inventory',        auth, require('./routes/inventory'));
 app.use('/api/v1/billing',          auth, require('./routes/billing'));

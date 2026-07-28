@@ -161,25 +161,34 @@ const changePassword = async (req, res) => {
 
 // ── GET /subscription/:email ──────────────────────────────────────────────────
 const getSubscriptionDetails = async (req, res) => {
-  const email = req.params.email || req.user.email;
+  const email = req.params.email;
   
-  // Make sure they are only querying their own or are admin
-  if (email !== req.user.email && req.user.role !== 'admin') {
-    return sendError(res, 'Unauthorized', 403, 'FORBIDDEN');
+  if (!email) {
+    return sendError(res, 'Email parameter is required', 400, 'BAD_REQUEST');
   }
 
   const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(email);
   if (!user) return sendError(res, 'User not found', 404, 'NOT_FOUND');
 
   const now = new Date();
-  const nextDueDate = new Date(now.getTime() + (user.subscription_days_remaining || 0) * 24 * 60 * 60 * 1000);
+  const subscribedAt = new Date(user.created_at || now.toISOString());
+  
+  // subscription_days_remaining in the DB actually acts as the total duration (e.g., 365)
+  const totalSubDays = user.subscription_days_remaining || 0;
+
+  // Next due date = Subscribed date + total days
+  const nextDueDate = new Date(subscribedAt.getTime() + totalSubDays * 24 * 60 * 60 * 1000);
+
+  // Actual remaining days = Next due date - Now
+  let actualRemaining = Math.ceil((nextDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+  if (actualRemaining < 0) actualRemaining = 0;
 
   const subscriptionDetails = {
     email: user.email,
     plan_name: user.tier || 'Free Plan',
     when_subscribed: user.created_at,
     next_due_date: nextDueDate.toISOString(),
-    subscription_days_remaining: user.subscription_days_remaining || 0
+    subscription_days_remaining: actualRemaining
   };
 
   return sendSuccess(res, subscriptionDetails);
