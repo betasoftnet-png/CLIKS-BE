@@ -35,9 +35,14 @@ app.use(helmet({
 }));
 */
 app.use(compression());
-const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173,https://cliks.beta-softnet.com,https://cliksbusiness.com,https://account.beta-softnet.com,https://account.beta-softnet.com/';
+const defaultOrigins = 'http://localhost:5173,https://cliks.beta-softnet.com,https://cliksbusiness.com,https://account.beta-softnet.com'.split(',');
+let allowedOrigins = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : defaultOrigins;
+if (!allowedOrigins.includes('https://account.beta-softnet.com')) {
+  allowedOrigins.push('https://account.beta-softnet.com');
+}
+
 app.use(cors({
-  origin: corsOrigin.includes(',') ? corsOrigin.split(',') : corsOrigin,
+  origin: allowedOrigins,
   credentials: true
 }));
 
