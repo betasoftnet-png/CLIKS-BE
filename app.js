@@ -35,7 +35,7 @@ app.use(helmet({
 }));
 */
 app.use(compression());
-const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173,https://cliks.beta-softnet.com,https://cliksbusiness.com';
+const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173,https://cliks.beta-softnet.com,https://cliksbusiness.com,https://account.beta-softnet.com,https://account.beta-softnet.com/';
 app.use(cors({
   origin: corsOrigin.includes(',') ? corsOrigin.split(',') : corsOrigin,
   credentials: true
