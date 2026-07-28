@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { getProfile, updateProfile, changePassword } = require('../controllers/profileController');
+const { getProfile, updateProfile, changePassword, getSubscriptionDetails } = require('../controllers/profileController');
+
+// GET    /profile/subscription/:email - Get subscription details
+router.get('/subscription/:email', getSubscriptionDetails);
 
 // GET    /profile                    — Get the currently authenticated user's profile
 router.get('/', getProfile);

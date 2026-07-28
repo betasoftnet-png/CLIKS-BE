@@ -159,4 +159,30 @@ const changePassword = async (req, res) => {
   return sendSuccess(res, { message: 'Password updated' }, 'Password updated');
 };
 
-module.exports = { getProfile, updateProfile, changePassword };
+// ── GET /subscription/:email ──────────────────────────────────────────────────
+const getSubscriptionDetails = async (req, res) => {
+  const email = req.params.email || req.user.email;
+  
+  // Make sure they are only querying their own or are admin
+  if (email !== req.user.email && req.user.role !== 'admin') {
+    return sendError(res, 'Unauthorized', 403, 'FORBIDDEN');
+  }
+
+  const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (!user) return sendError(res, 'User not found', 404, 'NOT_FOUND');
+
+  const now = new Date();
+  const nextDueDate = new Date(now.getTime() + (user.subscription_days_remaining || 0) * 24 * 60 * 60 * 1000);
+
+  const subscriptionDetails = {
+    email: user.email,
+    plan_name: user.tier || 'Free Plan',
+    when_subscribed: user.created_at,
+    next_due_date: nextDueDate.toISOString(),
+    subscription_days_remaining: user.subscription_days_remaining || 0
+  };
+
+  return sendSuccess(res, subscriptionDetails);
+};
+
+module.exports = { getProfile, updateProfile, changePassword, getSubscriptionDetails };
