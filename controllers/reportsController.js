@@ -134,20 +134,90 @@ const reportsController = {
     // Financial Statements
     getProfitLoss: async (req, res) => {
         try {
-            const salesResult = await db.prepare("SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?").get(req.user.id);
-            const grossRevenue = parseFloat(salesResult?.total) || 0;
+            const ledger = await db.prepare("SELECT category, amount, entry_type FROM accounting WHERE user_id = ?").all(req.user.id);
+            const expenses = await db.prepare("SELECT category, category_name, amount, is_claim, is_budget FROM expenses WHERE user_id = ?").all(req.user.id);
+            const purchases = await db.prepare("SELECT grand_total FROM business_purchases WHERE user_id = ?").all(req.user.id);
 
-            const expensesResult = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
-            const purchasesResult = await db.prepare("SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
-            const totalExpenses = (parseFloat(expensesResult?.total) || 0) + (parseFloat(purchasesResult?.total) || 0);
+            const ChartOfAccounts = {
+                'Sales Revenue': 'Revenue',
+                'Service Income': 'Revenue',
+                'Other Income': 'Revenue',
+                'Sales Income': 'Revenue',
+                'General Income': 'Revenue',
+                'Inventory Purchase (COGS)': 'Expense',
+                'Inventory Purchase': 'Expense',
+                'Travel & Meals': 'Expense',
+                'Marketing': 'Expense',
+                'Rent': 'Expense',
+                'Salary': 'Expense',
+                'Salary Expenses': 'Expense',
+                'Utilities': 'Expense',
+                'Rent & Utilities': 'Expense',
+                'Office Expenses': 'Expense',
+                'Bank Charges': 'Expense',
+                'Software Subscriptions': 'Expense',
+                'Vendor Purchase (GST)': 'Expense',
+                'General Expense': 'Expense',
+                'Operational Expense': 'Expense'
+            };
+
+            const getAccountType = (category, entryType) => {
+                if (!category) return null;
+                const cat = String(category).trim();
+                if (ChartOfAccounts[cat]) {
+                    return ChartOfAccounts[cat];
+                }
+                const lower = cat.toLowerCase();
+                if (lower === 'contra' || lower === 'invoice payment' || lower === 'supplier payment' || lower === 'customer payment') {
+                    return null;
+                }
+                if (lower.includes('sales') || lower.includes('income') || lower.includes('revenue') || lower.includes('billing')) {
+                    return 'Revenue';
+                }
+                if (lower.includes('purchase') || lower.includes('expense') || lower.includes('travel') || lower.includes('meals') || lower.includes('marketing') || lower.includes('rent') || lower.includes('salary') || lower.includes('utilities') || lower.includes('charges') || lower.includes('subscriptions') || lower.includes('office') || lower.includes('cogs') || lower.includes('bill') || lower.includes('cloud') || lower.includes('saas') || lower.includes('transport') || lower.includes('coffee')) {
+                    return 'Expense';
+                }
+                if (entryType === 'income') return 'Revenue';
+                if (entryType === 'expense') return 'Expense';
+                return null;
+            };
+
+            let grossRevenue = 0;
+            let totalExpenses = 0;
+            let costOfGoods = 0;
+            let overheads = 0;
+
+            for (const item of ledger) {
+                const type = getAccountType(item.category, item.entry_type);
+                if (type === 'Revenue') {
+                    grossRevenue += parseFloat(item.amount) || 0;
+                } else if (type === 'Expense') {
+                    totalExpenses += parseFloat(item.amount) || 0;
+                }
+            }
+
+            for (const exp of expenses) {
+                if (exp.is_claim === 'true' || exp.is_budget === 'true') continue;
+                const type = getAccountType(exp.category_name || exp.category || 'Office Expenses', 'expense');
+                if (type === 'Expense') {
+                    totalExpenses += parseFloat(exp.amount) || 0;
+                    overheads += parseFloat(exp.amount) || 0;
+                }
+            }
+
+            for (const pur of purchases) {
+                const val = parseFloat(pur.grand_total) || 0;
+                totalExpenses += val;
+                costOfGoods += val;
+            }
 
             const netProfit = grossRevenue - totalExpenses;
 
             return sendSuccess(res, {
                 gross_revenue: grossRevenue,
                 total_expenses: totalExpenses,
-                cost_of_goods: parseFloat(purchasesResult?.total) || 0,
-                overheads: parseFloat(expensesResult?.total) || 0,
+                cost_of_goods: costOfGoods,
+                overheads: overheads,
                 net_profit: netProfit
             }, 'Profit & Loss compiled');
         } catch (error) {
