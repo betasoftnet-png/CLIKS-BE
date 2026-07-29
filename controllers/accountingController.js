@@ -1,6 +1,36 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 
+const hasFinancePermission = async (req) => {
+    if (!req.user) return false;
+    const role = String(req.user.role || '').toLowerCase();
+    if (['admin', 'finance manager', 'finance_manager', 'financemanager', 'accountant'].includes(role)) {
+        return true;
+    }
+    try {
+        const emp = await db.prepare("SELECT permissions, role FROM employees WHERE user_id = ?").get(req.user.id);
+        if (emp) {
+            const empRole = String(emp.role || '').toLowerCase();
+            if (['admin', 'finance manager', 'finance_manager', 'financemanager', 'accountant'].includes(empRole)) {
+                return true;
+            }
+            const perms = String(emp.permissions || '').toLowerCase();
+            if (perms.includes('finance') || perms.includes('manage_finances') || perms.includes('accounting')) {
+                return true;
+            }
+        }
+    } catch (e) {
+        console.error('[hasFinancePermission] Error checking employees:', e);
+    }
+    if (req.user.permissions) {
+        const perms = String(req.user.permissions).toLowerCase();
+        if (perms.includes('finance') || perms.includes('manage_finances') || perms.includes('accounting')) {
+            return true;
+        }
+    }
+    return false;
+};
+
 // Ensure database table and extra helper columns exist dynamically
 const initTableAndColumns = async () => {
     try {
@@ -118,9 +148,8 @@ const accountingController = {
         const { id } = req.params;
         const fields = req.body;
         try {
-            const userRole = String(req.user?.role || '').toLowerCase();
-            if (!['admin', 'finance manager', 'finance_manager', 'financemanager'].includes(userRole)) {
-                return sendError(res, 'Access Denied: Only Admins and Finance Managers are authorized to perform this operation.', 403);
+            if (!(await hasFinancePermission(req))) {
+                return sendError(res, 'Access Denied: You are not authorized to perform this operation.', 403);
             }
 
             const updates = [];
@@ -144,9 +173,8 @@ const accountingController = {
     deleteAccount: async (req, res) => {
         const { id } = req.params;
         try {
-            const userRole = String(req.user?.role || '').toLowerCase();
-            if (!['admin', 'finance manager', 'finance_manager', 'financemanager'].includes(userRole)) {
-                return sendError(res, 'Access Denied: Only Admins and Finance Managers are authorized to perform this operation.', 403);
+            if (!(await hasFinancePermission(req))) {
+                return sendError(res, 'Access Denied: You are not authorized to perform this operation.', 403);
             }
 
             const acc = await db.prepare("SELECT * FROM accounting WHERE id = ? AND user_id = ?").get(id, req.user.id);
@@ -155,7 +183,7 @@ const accountingController = {
             // Check if any transactions exist for this account (matching on account_name)
             const txCount = await db.prepare("SELECT COUNT(*) as count FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') AND mode = ?").get(req.user.id, acc.account_name);
             if (txCount && txCount.count > 0) {
-                return sendError(res, 'This account contains transactions. You cannot delete this account. Please archive it instead.', 400);
+                return sendError(res, 'This account contains transactions and cannot be deleted. Please deactivate or archive the account instead.', 400);
             }
 
             await db.prepare('DELETE FROM accounting WHERE id = ? AND user_id = ?').run(id, req.user.id);
@@ -788,9 +816,8 @@ const accountingController = {
         const { id } = req.params;
         const { amount, date, reference_number, description } = req.body;
         try {
-            const userRole = String(req.user?.role || '').toLowerCase();
-            if (!['admin', 'finance manager', 'finance_manager', 'financemanager'].includes(userRole)) {
-                return sendError(res, 'Access Denied: Only Admins and Finance Managers are authorized to perform this operation.', 403);
+            if (!(await hasFinancePermission(req))) {
+                return sendError(res, 'Access Denied: You are not authorized to perform this operation.', 403);
             }
 
             const acc = await db.prepare("SELECT * FROM accounting WHERE id = ? AND user_id = ? AND entry_type = 'AccountConfig'").get(id, req.user.id);
@@ -822,9 +849,8 @@ const accountingController = {
         const { id } = req.params;
         const { amount, date, reference_number, description } = req.body;
         try {
-            const userRole = String(req.user?.role || '').toLowerCase();
-            if (!['admin', 'finance manager', 'finance_manager', 'financemanager'].includes(userRole)) {
-                return sendError(res, 'Access Denied: Only Admins and Finance Managers are authorized to perform this operation.', 403);
+            if (!(await hasFinancePermission(req))) {
+                return sendError(res, 'Access Denied: You are not authorized to perform this operation.', 403);
             }
 
             const acc = await db.prepare("SELECT * FROM accounting WHERE id = ? AND user_id = ? AND entry_type = 'AccountConfig'").get(id, req.user.id);
@@ -855,9 +881,8 @@ const accountingController = {
     recordTransfer: async (req, res) => {
         const { from_account_id, to_account_id, amount, date, reference_number, description } = req.body;
         try {
-            const userRole = String(req.user?.role || '').toLowerCase();
-            if (!['admin', 'finance manager', 'finance_manager', 'financemanager'].includes(userRole)) {
-                return sendError(res, 'Access Denied: Only Admins and Finance Managers are authorized to perform this operation.', 403);
+            if (!(await hasFinancePermission(req))) {
+                return sendError(res, 'Access Denied: You are not authorized to perform this operation.', 403);
             }
 
             const fromAcc = await db.prepare("SELECT * FROM accounting WHERE id = ? AND user_id = ? AND entry_type = 'AccountConfig'").get(from_account_id, req.user.id);
