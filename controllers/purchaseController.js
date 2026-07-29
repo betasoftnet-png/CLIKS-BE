@@ -370,7 +370,20 @@ const purchaseController = {
             const purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (!purchase) return sendError(res, 'Purchase not found', 404);
 
-            await db.prepare('UPDATE business_purchases SET paid_amount = paid_amount + ?, payment_mode = ?, payment_status = \'paid\' WHERE id = ? AND user_id = ?').run(paid_amount, payment_mode, id, req.user.id);
+            const newPaidAmount = (parseFloat(purchase.paid_amount) || 0) + (parseFloat(paid_amount) || 0);
+            const totalToPay = parseFloat(purchase.grand_total) || 0;
+
+            let newPaymentStatus = 'pending';
+            let newStatus = 'Pending';
+            if (newPaidAmount >= totalToPay) {
+                newPaymentStatus = 'paid';
+                newStatus = 'Paid';
+            } else if (newPaidAmount > 0) {
+                newPaymentStatus = 'partial';
+                newStatus = 'Partially Paid';
+            }
+
+            await db.prepare('UPDATE business_purchases SET paid_amount = ?, payment_mode = ?, payment_status = ?, status = ? WHERE id = ? AND user_id = ?').run(newPaidAmount, payment_mode, newPaymentStatus, newStatus, id, req.user.id);
             
             // Sync to cash/bank ledger (accounting table)
             const normalizedMode = normalizePaymentMode(payment_mode);

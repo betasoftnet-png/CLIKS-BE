@@ -140,7 +140,8 @@ const reportsController = {
                 if (!category) return null;
                 const cat = String(category).trim();
                 const lower = cat.toLowerCase();
-                if (lower === 'contra' || lower === 'invoice payment' || lower === 'supplier payment' || lower === 'customer payment') {
+                if (lower === 'contra' || lower === 'invoice payment' || lower === 'supplier payment' || lower === 'customer payment' ||
+                    lower.includes('purchase') || lower.includes('cogs') || lower.includes('raw material') || lower.includes('raw materials') || lower.includes('inventory')) {
                     return null;
                 }
 
@@ -150,8 +151,6 @@ const reportsController = {
                     'Other Income': 'Revenue',
                     'Sales Income': 'Revenue',
                     'General Income': 'Revenue',
-                    'Inventory Purchase (COGS)': 'Expense',
-                    'Inventory Purchase': 'Expense',
                     'Travel & Meals': 'Expense',
                     'Marketing': 'Expense',
                     'Rent': 'Expense',
@@ -162,7 +161,6 @@ const reportsController = {
                     'Office Expenses': 'Expense',
                     'Bank Charges': 'Expense',
                     'Software Subscriptions': 'Expense',
-                    'Vendor Purchase (GST)': 'Expense',
                     'General Expense': 'Expense',
                     'Operational Expense': 'Expense'
                 };
@@ -173,7 +171,7 @@ const reportsController = {
                 if (lower.includes('sales') || lower.includes('income') || lower.includes('revenue') || lower.includes('billing')) {
                     return 'Revenue';
                 }
-                if (lower.includes('purchase') || lower.includes('expense') || lower.includes('travel') || lower.includes('meals') || lower.includes('marketing') || lower.includes('rent') || lower.includes('salary') || lower.includes('utilities') || lower.includes('charges') || lower.includes('subscriptions') || lower.includes('office') || lower.includes('cogs') || lower.includes('bill') || lower.includes('cloud') || lower.includes('saas') || lower.includes('transport') || lower.includes('coffee')) {
+                if (lower.includes('expense') || lower.includes('travel') || lower.includes('meals') || lower.includes('marketing') || lower.includes('rent') || lower.includes('salary') || lower.includes('utilities') || lower.includes('charges') || lower.includes('subscriptions') || lower.includes('office') || lower.includes('transport') || lower.includes('coffee')) {
                     return 'Expense';
                 }
                 if (entryType === 'income') return 'Revenue';
