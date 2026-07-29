@@ -575,6 +575,30 @@ const accountingController = {
     },
     getBalanceSheet: async (req, res) => {
         try {
+            const normalizePaymentMode = (mode) => {
+                if (!mode) return 'Cash in Hand';
+                const m = String(mode).trim().toLowerCase();
+                if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) {
+                    return 'Cash in Hand';
+                }
+                if (m.includes('hdfc')) {
+                    return 'HDFC Bank Account';
+                }
+                if (m.includes('icici')) {
+                    return 'ICICI Bank Account';
+                }
+                if (m.includes('sbi') || m.includes('state bank')) {
+                    return 'SBI Current Account';
+                }
+                if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) {
+                    return 'UPI / Razorpay';
+                }
+                if (m === 'bank' || m.includes('bank')) {
+                    return 'HDFC Bank Account';
+                }
+                return mode;
+            };
+
             // Compute dynamic cash & bank assets
             const accounts = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
             const transactions = await db.prepare("SELECT mode, entry_type, SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') GROUP BY mode, entry_type").all(req.user.id);
@@ -612,29 +636,44 @@ const accountingController = {
             const recSum = await db.prepare("SELECT SUM(due_amount) as total FROM business_invoices WHERE user_id = ? AND status != 'Paid'").get(req.user.id);
             const receivablesAsset = parseFloat(recSum?.total) || 0;
 
+            // Inventory Asset Value
+            const productsVal = await db.prepare("SELECT SUM(quantity * purchase_price) as total FROM business_products WHERE user_id = ?").get(req.user.id);
+            const legacyVal = await db.prepare("SELECT SUM(quantity * price) as total FROM inventory WHERE user_id = ?").get(req.user.id);
+            const inventoryAsset = (parseFloat(productsVal?.total) || 0) + (parseFloat(legacyVal?.total) || 0);
+
+            // Fixed Assets from ledger
+            const faSum = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND category = 'Fixed Assets'").get(req.user.id);
+            const fixedAssetsAsset = parseFloat(faSum?.total) || 0;
+
             // Calculate dynamic liabilities
             const payResult = await db.prepare("SELECT SUM(grand_total - paid_amount) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
             const payablesLiability = parseFloat(payResult?.total) || 0;
 
-            const gstResult = await db.prepare("SELECT SUM(total_tax) as total FROM gst_invoices WHERE user_id = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)").get(req.user.id);
-            const gstPayable = parseFloat(gstResult?.total) || 0;
+            // GST Payable
+            const gstSales = await db.prepare("SELECT SUM(tax_amount) as total FROM business_invoices WHERE user_id = ?").get(req.user.id);
+            const gstPurchases = await db.prepare("SELECT SUM(total_tax) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
+            const gstPayable = (parseFloat(gstSales?.total) || 0) - (parseFloat(gstPurchases?.total) || 0);
 
-            const totalAssets = cashAsset + bankAsset + receivablesAsset;
-            const liabilitiesExclEquity = payablesLiability + gstPayable;
+            // Loans liability (debts)
+            const loanResult = await db.prepare("SELECT SUM(amount - amount_paid) as total FROM debts WHERE user_id = ?").get(req.user.id);
+            const loansLiability = parseFloat(loanResult?.total) || 0;
+
+            const totalAssets = cashAsset + bankAsset + inventoryAsset + receivablesAsset + fixedAssetsAsset;
+            const liabilitiesExclEquity = payablesLiability + gstPayable + loansLiability;
             const equityVal = totalAssets - liabilitiesExclEquity;
 
             return sendSuccess(res, {
                 assets: { 
                     cash: Math.max(0, cashAsset), 
                     bank: Math.max(0, bankAsset), 
-                    inventory: 0, 
+                    inventory: Math.max(0, inventoryAsset), 
                     receivables: receivablesAsset, 
-                    fixed_assets: 0 
+                    fixed_assets: fixedAssetsAsset 
                 },
                 liabilities: { 
                     payables: payablesLiability, 
                     gst_payable: gstPayable, 
-                    loans: 0, 
+                    loans: loansLiability, 
                     equity: equityVal
                 }
             }, 'Balance sheet calculated');
