@@ -490,42 +490,41 @@ const accountingController = {
     getProfitLoss: async (req, res) => {
         try {
             const ledger = await db.prepare("SELECT category, amount, entry_type FROM accounting WHERE user_id = ?").all(req.user.id);
-            const expenses = await db.prepare("SELECT category, category_name, amount, is_claim, is_budget FROM expenses WHERE user_id = ?").all(req.user.id);
-            const purchases = await db.prepare("SELECT grand_total FROM business_purchases WHERE user_id = ?").all(req.user.id);
-
-            const ChartOfAccounts = {
-                'Sales Revenue': 'Revenue',
-                'Service Income': 'Revenue',
-                'Other Income': 'Revenue',
-                'Sales Income': 'Revenue',
-                'General Income': 'Revenue',
-                'Inventory Purchase (COGS)': 'Expense',
-                'Inventory Purchase': 'Expense',
-                'Travel & Meals': 'Expense',
-                'Marketing': 'Expense',
-                'Rent': 'Expense',
-                'Salary': 'Expense',
-                'Salary Expenses': 'Expense',
-                'Utilities': 'Expense',
-                'Rent & Utilities': 'Expense',
-                'Office Expenses': 'Expense',
-                'Bank Charges': 'Expense',
-                'Software Subscriptions': 'Expense',
-                'Vendor Purchase (GST)': 'Expense',
-                'General Expense': 'Expense',
-                'Operational Expense': 'Expense'
-            };
 
             const getAccountType = (category, entryType) => {
                 if (!category) return null;
                 const cat = String(category).trim();
-                if (ChartOfAccounts[cat]) {
-                    return ChartOfAccounts[cat];
-                }
                 const lower = cat.toLowerCase();
                 if (lower === 'contra' || lower === 'invoice payment' || lower === 'supplier payment' || lower === 'customer payment') {
                     return null;
                 }
+
+                const ChartOfAccounts = {
+                    'Sales Revenue': 'Revenue',
+                    'Service Income': 'Revenue',
+                    'Other Income': 'Revenue',
+                    'Sales Income': 'Revenue',
+                    'General Income': 'Revenue',
+                    'Inventory Purchase (COGS)': 'Expense',
+                    'Inventory Purchase': 'Expense',
+                    'Travel & Meals': 'Expense',
+                    'Marketing': 'Expense',
+                    'Rent': 'Expense',
+                    'Salary': 'Expense',
+                    'Salary Expenses': 'Expense',
+                    'Utilities': 'Expense',
+                    'Rent & Utilities': 'Expense',
+                    'Office Expenses': 'Expense',
+                    'Bank Charges': 'Expense',
+                    'Software Subscriptions': 'Expense',
+                    'Vendor Purchase (GST)': 'Expense',
+                    'General Expense': 'Expense',
+                    'Operational Expense': 'Expense'
+                };
+                if (ChartOfAccounts[cat]) {
+                    return ChartOfAccounts[cat];
+                }
+
                 if (lower.includes('sales') || lower.includes('income') || lower.includes('revenue') || lower.includes('billing')) {
                     return 'Revenue';
                 }
@@ -547,18 +546,6 @@ const accountingController = {
                 } else if (type === 'Expense') {
                     totalExpenses += parseFloat(item.amount) || 0;
                 }
-            }
-
-            for (const exp of expenses) {
-                if (exp.is_claim === 'true' || exp.is_budget === 'true') continue;
-                const type = getAccountType(exp.category_name || exp.category || 'Office Expenses', 'expense');
-                if (type === 'Expense') {
-                    totalExpenses += parseFloat(exp.amount) || 0;
-                }
-            }
-
-            for (const pur of purchases) {
-                totalExpenses += parseFloat(pur.grand_total) || 0;
             }
 
             const netProfit = grossRevenue - totalExpenses;
