@@ -2,16 +2,20 @@ const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 
 const reportsController = {
-    // Dashboard & Analytics
     getDashboardSummary: async (req, res) => {
         try {
-            const sales = await db.prepare("SELECT SUM(grand_total) as total FROM business_orders WHERE user_id = ?").get(req.user.id);
+            const sales = await db.prepare("SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?").get(req.user.id);
             const purchases = await db.prepare("SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
-            const expenses = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type = 'expense'").get(req.user.id);
+            const expenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
+            
+            const salesTotal = parseFloat(sales?.total) || 0;
+            const purchasesTotal = parseFloat(purchases?.total) || 0;
+            const expensesTotal = parseFloat(expenses?.total) || 0;
+
             return sendSuccess(res, {
-                total_sales: sales?.total || 0,
-                total_purchases: purchases?.total || 0,
-                total_expenses: expenses?.total || 0,
+                total_sales: salesTotal,
+                total_purchases: purchasesTotal,
+                total_expenses: expensesTotal + purchasesTotal,
                 status: 'healthy',
                 updated_at: new Date().toISOString()
             }, 'Dashboard summary compiled');
@@ -98,33 +102,231 @@ const reportsController = {
 
     // Expenses Reports
     getExpenses: async (req, res) => {
-        return sendSuccess(res, [], 'Expenses records compiled');
+        try {
+            const list = await db.prepare("SELECT * FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false') ORDER BY id DESC").all(req.user.id);
+            return sendSuccess(res, list, 'Expenses records compiled');
+        } catch (error) {
+            console.error('Error in reportsController.getExpenses:', error);
+            return sendError(res, 'Failed to fetch expenses', 500);
+        }
     },
     getExpenseSummary: async (req, res) => {
-        return sendSuccess(res, { total_expenses: 0 }, 'Expense summary compiled');
+        try {
+            const result = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
+            return sendSuccess(res, { total_expenses: parseFloat(result?.total) || 0 }, 'Expense summary compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to fetch expense summary', 500);
+        }
     },
     getExpensesByCategory: async (req, res) => {
-        return sendSuccess(res, {}, 'Expenses by category compiled');
+        try {
+            const list = await db.prepare("SELECT category_name as category, SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false') GROUP BY category_name").all(req.user.id);
+            const result = {};
+            for (const row of list) {
+                result[row.category || 'General'] = row.total || 0;
+            }
+            return sendSuccess(res, result, 'Expenses by category compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to fetch expenses by category', 500);
+        }
     },
 
     // Financial Statements
     getProfitLoss: async (req, res) => {
-        return sendSuccess(res, { gross_revenue: 0, cost_of_goods: 0, overheads: 0, net_profit: 0 }, 'Profit & Loss compiled');
+        try {
+            const salesResult = await db.prepare("SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?").get(req.user.id);
+            const grossRevenue = parseFloat(salesResult?.total) || 0;
+
+            const expensesResult = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
+            const purchasesResult = await db.prepare("SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
+            const totalExpenses = (parseFloat(expensesResult?.total) || 0) + (parseFloat(purchasesResult?.total) || 0);
+
+            const netProfit = grossRevenue - totalExpenses;
+
+            return sendSuccess(res, {
+                gross_revenue: grossRevenue,
+                total_expenses: totalExpenses,
+                cost_of_goods: parseFloat(purchasesResult?.total) || 0,
+                overheads: parseFloat(expensesResult?.total) || 0,
+                net_profit: netProfit
+            }, 'Profit & Loss compiled');
+        } catch (error) {
+            console.error('Error in reportsController.getProfitLoss:', error);
+            return sendError(res, 'Failed to compile Profit & Loss', 500);
+        }
     },
     getBalanceSheet: async (req, res) => {
-        return sendSuccess(res, { assets: 0, liabilities: 0, equity: 0 }, 'Balance Sheet compiled');
+        try {
+            const normalizePaymentMode = (mode) => {
+                if (!mode) return 'Cash in Hand';
+                const m = String(mode).trim().toLowerCase();
+                if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) {
+                    return 'Cash in Hand';
+                }
+                if (m.includes('hdfc')) {
+                    return 'HDFC Bank Account';
+                }
+                if (m.includes('icici')) {
+                    return 'ICICI Bank Account';
+                }
+                if (m.includes('sbi') || m.includes('state bank')) {
+                    return 'SBI Current Account';
+                }
+                if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) {
+                    return 'UPI / Razorpay';
+                }
+                if (m === 'bank' || m.includes('bank')) {
+                    return 'HDFC Bank Account';
+                }
+                return mode;
+            };
+
+            const accounts = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
+            const transactions = await db.prepare("SELECT mode, entry_type, SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') GROUP BY mode, entry_type").all(req.user.id);
+
+            let cashAsset = 0;
+            let bankAsset = 0;
+
+            for (const acc of accounts) {
+                const normName = normalizePaymentMode(acc.account_name);
+                let totalIncome = 0;
+                let totalExpenses = 0;
+
+                for (const tx of transactions) {
+                    const normMode = normalizePaymentMode(tx.mode);
+                    if (normMode === normName) {
+                        if (tx.entry_type === 'income') {
+                            totalIncome += tx.total || 0;
+                        } else {
+                            totalExpenses += tx.total || 0;
+                        }
+                    }
+                }
+
+                const initialBal = parseFloat(acc.balance) || 0;
+                const currentBalance = initialBal + totalIncome - totalExpenses;
+
+                if (normName === 'Cash in Hand') {
+                    cashAsset += currentBalance;
+                } else {
+                    bankAsset += currentBalance;
+                }
+            }
+
+            const recSum = await db.prepare("SELECT SUM(due_amount) as total FROM business_invoices WHERE user_id = ? AND status != 'Paid'").get(req.user.id);
+            const receivablesAsset = parseFloat(recSum?.total) || 0;
+
+            const payResult = await db.prepare("SELECT SUM(grand_total - paid_amount) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
+            const payablesLiability = parseFloat(payResult?.total) || 0;
+
+            const gstResult = await db.prepare("SELECT SUM(total_tax) as total FROM gst_invoices WHERE user_id = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)").get(req.user.id);
+            const gstPayable = parseFloat(gstResult?.total) || 0;
+
+            const totalAssets = cashAsset + bankAsset + receivablesAsset;
+            const liabilitiesExclEquity = payablesLiability + gstPayable;
+            const equityVal = totalAssets - liabilitiesExclEquity;
+
+            return sendSuccess(res, {
+                assets: { 
+                    cash: Math.max(0, cashAsset), 
+                    bank: Math.max(0, bankAsset), 
+                    inventory: 0, 
+                    receivables: receivablesAsset, 
+                    fixed_assets: 0 
+                },
+                liabilities: { 
+                    payables: payablesLiability, 
+                    gst_payable: gstPayable, 
+                    loans: 0, 
+                    equity: equityVal
+                }
+            }, 'Balance sheet calculated');
+        } catch (error) {
+            console.error('Error in reportsController.getBalanceSheet:', error);
+            return sendError(res, 'Failed to compile Balance Sheet', 500);
+        }
     },
     getCashFlow: async (req, res) => {
-        return sendSuccess(res, { inflow: 0, outflow: 0, net_flow: 0 }, 'Cash Flow statement compiled');
+        try {
+            const accounts = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
+            const transactions = await db.prepare("SELECT mode, entry_type, SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') GROUP BY mode, entry_type").all(req.user.id);
+
+            let totalInflows = 0;
+            let totalOutflows = 0;
+
+            const normalizePaymentMode = (mode) => {
+                if (!mode) return 'Cash in Hand';
+                const m = String(mode).trim().toLowerCase();
+                if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) {
+                    return 'Cash in Hand';
+                }
+                if (m.includes('hdfc')) {
+                    return 'HDFC Bank Account';
+                }
+                if (m.includes('icici')) {
+                    return 'ICICI Bank Account';
+                }
+                if (m.includes('sbi') || m.includes('state bank')) {
+                    return 'SBI Current Account';
+                }
+                if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) {
+                    return 'UPI / Razorpay';
+                }
+                if (m === 'bank' || m.includes('bank')) {
+                    return 'HDFC Bank Account';
+                }
+                return mode;
+            };
+
+            const configuredNames = accounts.map(a => normalizePaymentMode(a.account_name));
+
+            for (const tx of transactions) {
+                const normMode = normalizePaymentMode(tx.mode);
+                if (configuredNames.includes(normMode)) {
+                    if (tx.entry_type === 'income') {
+                        totalInflows += tx.total || 0;
+                    } else {
+                        totalOutflows += tx.total || 0;
+                    }
+                }
+            }
+
+            return sendSuccess(res, {
+                inflow: totalInflows,
+                outflow: totalOutflows,
+                net_flow: totalInflows - totalOutflows
+            }, 'Cash Flow statement compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to compile Cash Flow', 500);
+        }
     },
     getTrialBalance: async (req, res) => {
-        return sendSuccess(res, { debits: 0, credits: 0 }, 'Trial Balance compiled');
+        try {
+            const debits = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type = 'expense'").get(req.user.id);
+            const credits = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type = 'income'").get(req.user.id);
+            return sendSuccess(res, {
+                debits: parseFloat(debits?.total) || 0,
+                credits: parseFloat(credits?.total) || 0
+            }, 'Trial Balance compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to compile Trial Balance', 500);
+        }
     },
     getGeneralLedger: async (req, res) => {
-        return sendSuccess(res, [], 'General ledger compiled');
+        try {
+            const list = await db.prepare("SELECT * FROM accounting WHERE user_id = ? ORDER BY date DESC, id DESC").all(req.user.id);
+            return sendSuccess(res, list, 'General ledger compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to compile General Ledger', 500);
+        }
     },
     getDayBook: async (req, res) => {
-        return sendSuccess(res, [], 'Day book compiled');
+        try {
+            const list = await db.prepare("SELECT * FROM accounting WHERE user_id = ? ORDER BY date DESC, id DESC").all(req.user.id);
+            return sendSuccess(res, list, 'Day book compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to compile Day Book', 500);
+        }
     },
 
     // Stock Reports

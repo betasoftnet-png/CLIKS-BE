@@ -32,6 +32,9 @@ router.post('/closing-balance', accountingController.createClosingBalance);
 router.get('/closing-balance', accountingController.getClosingBalance);
 
 router.post('/bank-accounts', accountingController.createBankAccount);
+router.post('/accounts/:id/deposit', accountingController.recordDeposit);
+router.post('/accounts/:id/withdraw', accountingController.recordWithdrawal);
+router.post('/accounts/transfer', accountingController.recordTransfer);
 router.get('/bank-accounts', accountingController.getBankAccounts);
 router.put('/bank-accounts/:id', accountingController.updateBankAccount);
 router.delete('/bank-accounts/:id', accountingController.deleteBankAccount);

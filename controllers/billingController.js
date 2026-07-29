@@ -153,8 +153,15 @@ const billingController = {
                 const normalizedMode = normalizePaymentMode(payment_mode);
                 await db.prepare(`
                     INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                    VALUES (?, 'income', ?, ?, ?, ?, ?, 'posted', ?, ?)
-                `).run(req.user.id, now.split('T')[0], numPaid, 'Sales Revenue', normalizedMode, `Invoice #${invNum}`, now, now);
+                    VALUES (?, 'income', ?, ?, 'Sales Revenue', ?, ?, 'posted', ?, ?)
+                `).run(req.user.id, now.split('T')[0], numPaid, normalizedMode, `Invoice #${invNum}`, now, now);
+            }
+
+            if (numTotal - numPaid > 0) {
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'income', ?, ?, 'Sales Revenue', 'Accounts Receivable (Credit Sale)', ?, 'posted', ?, ?)
+                `).run(req.user.id, now.split('T')[0], numTotal - numPaid, `Invoice #${invNum} (Credit Sale)`, now, now);
             }
 
             await logBusinessAudit(req.user.id, 'INVOICE_CREATE', `Created invoice ${invNum} for client ${client_name} (amount: ₹${numTotal})`, 'SUCCESS');

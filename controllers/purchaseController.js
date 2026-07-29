@@ -93,12 +93,21 @@ const purchaseController = {
             created.items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(purchaseId);
 
             const totalPaid = (parseFloat(paid_amount) || 0) + (parseFloat(advance_amount) || 0);
+            const unpaidAmount = (parseFloat(grand_total) || 0) - totalPaid;
+
             if (totalPaid > 0) {
                 const normalizedMode = normalizePaymentMode(payment_mode);
                 await db.prepare(`
                     INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                    VALUES (?, 'expense', ?, ?, ?, ?, ?, 'posted', ?, ?)
-                `).run(req.user.id, purchase_date || now.split('T')[0], totalPaid, 'Inventory Purchases', normalizedMode, `Purchase #${purchase_number}`, now, now);
+                    VALUES (?, 'expense', ?, ?, 'Inventory Purchases', ?, ?, 'posted', ?, ?)
+                `).run(req.user.id, purchase_date || now.split('T')[0], totalPaid, normalizedMode, `Purchase #${purchase_number}`, now, now);
+            }
+
+            if (unpaidAmount > 0) {
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'expense', ?, ?, 'Inventory Purchases', 'Payables', ?, 'posted', ?, ?)
+                `).run(req.user.id, purchase_date || now.split('T')[0], unpaidAmount, `Purchase #${purchase_number} (Credit Purchase)`, now, now);
             }
 
             await logBusinessAudit(req.user.id, 'PURCHASE_CREATE', `Created purchase document ${purchase_number} (${doc_type}) for supplier ${supplier_name} (amount: ₹${grand_total})`, 'SUCCESS');
@@ -358,9 +367,22 @@ const purchaseController = {
         const { id } = req.params;
         const { paid_amount, payment_mode } = req.body;
         try {
-            await db.prepare('UPDATE business_purchases SET paid_amount = paid_amount + ?, payment_mode = ?, payment_status = \'paid\' WHERE id = ?').run(paid_amount, payment_mode, id);
+            const purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!purchase) return sendError(res, 'Purchase not found', 404);
+
+            await db.prepare('UPDATE business_purchases SET paid_amount = paid_amount + ?, payment_mode = ?, payment_status = \'paid\' WHERE id = ? AND user_id = ?').run(paid_amount, payment_mode, id, req.user.id);
+            
+            // Sync to cash/bank ledger (accounting table)
+            const normalizedMode = normalizePaymentMode(payment_mode);
+            const now = new Date().toISOString();
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'expense', ?, ?, 'Supplier Payment', ?, ?, 'posted', ?, ?)
+            `).run(req.user.id, now.split('T')[0], parseFloat(paid_amount) || 0, normalizedMode, `Payment for Purchase #${purchase.purchase_number}`, now, now);
+
             return sendSuccess(res, null, 'Payment processed successfully');
         } catch (error) {
+            console.error('[Purchase Controller] processPurchasePayments error:', error);
             return sendError(res, 'Failed to process payment', 500);
         }
     },

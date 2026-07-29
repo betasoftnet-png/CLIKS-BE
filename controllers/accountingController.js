@@ -118,6 +118,11 @@ const accountingController = {
         const { id } = req.params;
         const fields = req.body;
         try {
+            const userRole = String(req.user?.role || '').toLowerCase();
+            if (!['admin', 'finance manager', 'finance_manager', 'financemanager'].includes(userRole)) {
+                return sendError(res, 'Access Denied: Only Admins and Finance Managers are authorized to perform this operation.', 403);
+            }
+
             const updates = [];
             const params = [];
             for (const [key, value] of Object.entries(fields)) {
@@ -139,9 +144,24 @@ const accountingController = {
     deleteAccount: async (req, res) => {
         const { id } = req.params;
         try {
+            const userRole = String(req.user?.role || '').toLowerCase();
+            if (!['admin', 'finance manager', 'finance_manager', 'financemanager'].includes(userRole)) {
+                return sendError(res, 'Access Denied: Only Admins and Finance Managers are authorized to perform this operation.', 403);
+            }
+
+            const acc = await db.prepare("SELECT * FROM accounting WHERE id = ? AND user_id = ?").get(id, req.user.id);
+            if (!acc) return sendError(res, 'Account not found', 404);
+
+            // Check if any transactions exist for this account (matching on account_name)
+            const txCount = await db.prepare("SELECT COUNT(*) as count FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') AND mode = ?").get(req.user.id, acc.account_name);
+            if (txCount && txCount.count > 0) {
+                return sendError(res, 'This account contains transactions. You cannot delete this account. Please archive it instead.', 400);
+            }
+
             await db.prepare('DELETE FROM accounting WHERE id = ? AND user_id = ?').run(id, req.user.id);
             return sendSuccess(res, null, 'Account deleted');
         } catch (error) {
+            console.error('[Accounting deleteAccount] Error:', error);
             return sendError(res, 'Delete failed', 500);
         }
     },
@@ -469,18 +489,19 @@ const accountingController = {
     },
     getProfitLoss: async (req, res) => {
         try {
-            const revenue = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type = 'income' AND category NOT IN ('Contra', 'Invoice Payment')").get(req.user.id);
-            const expenses = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type = 'expense' AND category NOT IN ('Contra', 'Supplier Payment')").get(req.user.id);
-            const opExpenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
-            const gstPurchases = await db.prepare("SELECT SUM(CAST(COALESCE(invoice_amount, '0') AS real) + CAST(COALESCE(eligible_itc, '0') AS real)) as total FROM gst_invoices WHERE user_id = ? AND is_reconciliation = 'true'").get(req.user.id);
-            
-            const rev = parseFloat(revenue?.total) || 0;
-            const exp = (parseFloat(expenses?.total) || 0) + (parseFloat(opExpenses?.total) || 0) + (parseFloat(gstPurchases?.total) || 0);
-            const net = rev - exp;
+            const salesResult = await db.prepare("SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?").get(req.user.id);
+            const grossRevenue = parseFloat(salesResult?.total) || 0;
+
+            const expensesResult = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
+            const purchasesResult = await db.prepare("SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
+            const totalExpenses = (parseFloat(expensesResult?.total) || 0) + (parseFloat(purchasesResult?.total) || 0);
+
+            const netProfit = grossRevenue - totalExpenses;
+
             return sendSuccess(res, {
-                gross_revenue: rev,
-                total_expenses: exp,
-                net_profit: net
+                gross_revenue: grossRevenue,
+                total_expenses: totalExpenses,
+                net_profit: netProfit
             }, 'P&L retrieved');
         } catch (error) {
             console.error('[Accounting Controller] Profit & Loss failed:', error);
@@ -491,26 +512,31 @@ const accountingController = {
         try {
             // Compute dynamic cash & bank assets
             const accounts = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
+            const transactions = await db.prepare("SELECT mode, entry_type, SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') GROUP BY mode, entry_type").all(req.user.id);
+
             let cashAsset = 0;
             let bankAsset = 0;
 
             for (const acc of accounts) {
-                const incSum = await db.prepare(`
-                    SELECT SUM(amount) as total FROM accounting 
-                    WHERE user_id = ? AND entry_type = 'income' AND mode = ?
-                `).get(req.user.id, acc.account_name);
-                const totalIncome = parseFloat(incSum?.total) || 0;
+                const normName = normalizePaymentMode(acc.account_name);
+                let totalIncome = 0;
+                let totalExpenses = 0;
 
-                const expSum = await db.prepare(`
-                    SELECT SUM(amount) as total FROM accounting 
-                    WHERE user_id = ? AND entry_type = 'expense' AND mode = ?
-                `).get(req.user.id, acc.account_name);
-                const totalExpenses = parseFloat(expSum?.total) || 0;
+                for (const tx of transactions) {
+                    const normMode = normalizePaymentMode(tx.mode);
+                    if (normMode === normName) {
+                        if (tx.entry_type === 'income') {
+                            totalIncome += tx.total || 0;
+                        } else {
+                            totalExpenses += tx.total || 0;
+                        }
+                    }
+                }
 
                 const initialBal = parseFloat(acc.balance) || 0;
                 const currentBalance = initialBal + totalIncome - totalExpenses;
 
-                if (acc.account_name === 'Cash in Hand') {
+                if (normName === 'Cash in Hand') {
                     cashAsset += currentBalance;
                 } else {
                     bankAsset += currentBalance;
@@ -522,12 +548,15 @@ const accountingController = {
             const receivablesAsset = parseFloat(recSum?.total) || 0;
 
             // Calculate dynamic liabilities
+            const payResult = await db.prepare("SELECT SUM(grand_total - paid_amount) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
+            const payablesLiability = parseFloat(payResult?.total) || 0;
+
             const gstResult = await db.prepare("SELECT SUM(total_tax) as total FROM gst_invoices WHERE user_id = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)").get(req.user.id);
             const gstPayable = parseFloat(gstResult?.total) || 0;
 
             const totalAssets = cashAsset + bankAsset + receivablesAsset;
             const liabilitiesExclEquity = payablesLiability + gstPayable;
-            const equityVal = Math.max(0, totalAssets - liabilitiesExclEquity);
+            const equityVal = totalAssets - liabilitiesExclEquity;
 
             return sendSuccess(res, {
                 assets: { 
@@ -615,28 +644,35 @@ const accountingController = {
     },
     getBankAccounts: async (req, res) => {
         try {
-            let list = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
+            const accounts = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
+            const transactions = await db.prepare("SELECT mode, entry_type, SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') GROUP BY mode, entry_type").all(req.user.id);
+            const allTxs = await db.prepare("SELECT mode, date FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') ORDER BY date DESC").all(req.user.id);
 
             const updatedList = [];
-            for (const acc of list) {
-                const incSum = await db.prepare(`
-                    SELECT SUM(amount) as total FROM accounting 
-                    WHERE user_id = ? AND entry_type = 'income' AND mode = ?
-                `).get(req.user.id, acc.account_name);
-                const totalIncome = parseFloat(incSum?.total) || 0;
+            for (const acc of accounts) {
+                const normName = normalizePaymentMode(acc.account_name);
+                let totalIncome = 0;
+                let totalExpenses = 0;
 
-                const expSum = await db.prepare(`
-                    SELECT SUM(amount) as total FROM accounting 
-                    WHERE user_id = ? AND entry_type = 'expense' AND mode = ?
-                `).get(req.user.id, acc.account_name);
-                const totalExpenses = parseFloat(expSum?.total) || 0;
+                for (const tx of transactions) {
+                    const normMode = normalizePaymentMode(tx.mode);
+                    if (normMode === normName) {
+                        if (tx.entry_type === 'income') {
+                            totalIncome += tx.total || 0;
+                        } else {
+                            totalExpenses += tx.total || 0;
+                        }
+                    }
+                }
 
-                const lastTx = await db.prepare(`
-                    SELECT date FROM accounting 
-                    WHERE user_id = ? AND entry_type IN ('income', 'expense') AND mode = ?
-                    ORDER BY date DESC LIMIT 1
-                `).get(req.user.id, acc.account_name);
-                const lastTransactionDate = lastTx?.date || 'No transactions yet';
+                // Find last transaction date in JS
+                let lastTransactionDate = 'No transactions yet';
+                for (const tx of allTxs) {
+                    if (normalizePaymentMode(tx.mode) === normName) {
+                        lastTransactionDate = tx.date;
+                        break;
+                    }
+                }
 
                 const initialBal = parseFloat(acc.balance) || 0;
                 const currentBalance = initialBal + totalIncome - totalExpenses;
@@ -654,6 +690,117 @@ const accountingController = {
         } catch (error) {
             console.error('[accountingController] getBankAccounts error:', error);
             return sendError(res, 'Failed to retrieve bank accounts', 500);
+        }
+    },
+
+    recordDeposit: async (req, res) => {
+        const { id } = req.params;
+        const { amount, date, reference_number, description } = req.body;
+        try {
+            const userRole = String(req.user?.role || '').toLowerCase();
+            if (!['admin', 'finance manager', 'finance_manager', 'financemanager'].includes(userRole)) {
+                return sendError(res, 'Access Denied: Only Admins and Finance Managers are authorized to perform this operation.', 403);
+            }
+
+            const acc = await db.prepare("SELECT * FROM accounting WHERE id = ? AND user_id = ? AND entry_type = 'AccountConfig'").get(id, req.user.id);
+            if (!acc) return sendError(res, 'Account not found', 404);
+
+            const parsedAmount = parseFloat(amount) || 0;
+            if (parsedAmount <= 0) return sendError(res, 'Amount must be greater than zero', 400);
+
+            const now = new Date().toISOString();
+            const dateStr = date || now.split('T')[0];
+
+            const refStr = reference_number ? ` [Ref: ${reference_number}]` : '';
+            const finalNotes = (description || 'Deposit') + refStr;
+
+            const result = await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'income', ?, ?, 'Deposit', ?, ?, 'posted', ?, ?)
+            `).run(req.user.id, dateStr, parsedAmount, acc.account_name, finalNotes, now, now);
+
+            const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
+            return sendSuccess(res, inserted, 'Deposit recorded successfully', 201);
+        } catch (error) {
+            console.error('[Accounting] recordDeposit error:', error);
+            return sendError(res, 'Failed to record deposit', 500);
+        }
+    },
+
+    recordWithdrawal: async (req, res) => {
+        const { id } = req.params;
+        const { amount, date, reference_number, description } = req.body;
+        try {
+            const userRole = String(req.user?.role || '').toLowerCase();
+            if (!['admin', 'finance manager', 'finance_manager', 'financemanager'].includes(userRole)) {
+                return sendError(res, 'Access Denied: Only Admins and Finance Managers are authorized to perform this operation.', 403);
+            }
+
+            const acc = await db.prepare("SELECT * FROM accounting WHERE id = ? AND user_id = ? AND entry_type = 'AccountConfig'").get(id, req.user.id);
+            if (!acc) return sendError(res, 'Account not found', 404);
+
+            const parsedAmount = parseFloat(amount) || 0;
+            if (parsedAmount <= 0) return sendError(res, 'Amount must be greater than zero', 400);
+
+            const now = new Date().toISOString();
+            const dateStr = date || now.split('T')[0];
+
+            const refStr = reference_number ? ` [Ref: ${reference_number}]` : '';
+            const finalNotes = (description || 'Withdrawal') + refStr;
+
+            const result = await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'expense', ?, ?, 'Withdrawal', ?, ?, 'posted', ?, ?)
+            `).run(req.user.id, dateStr, parsedAmount, acc.account_name, finalNotes, now, now);
+
+            const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
+            return sendSuccess(res, inserted, 'Withdrawal recorded successfully', 201);
+        } catch (error) {
+            console.error('[Accounting] recordWithdrawal error:', error);
+            return sendError(res, 'Failed to record withdrawal', 500);
+        }
+    },
+
+    recordTransfer: async (req, res) => {
+        const { from_account_id, to_account_id, amount, date, reference_number, description } = req.body;
+        try {
+            const userRole = String(req.user?.role || '').toLowerCase();
+            if (!['admin', 'finance manager', 'finance_manager', 'financemanager'].includes(userRole)) {
+                return sendError(res, 'Access Denied: Only Admins and Finance Managers are authorized to perform this operation.', 403);
+            }
+
+            const fromAcc = await db.prepare("SELECT * FROM accounting WHERE id = ? AND user_id = ? AND entry_type = 'AccountConfig'").get(from_account_id, req.user.id);
+            const toAcc = await db.prepare("SELECT * FROM accounting WHERE id = ? AND user_id = ? AND entry_type = 'AccountConfig'").get(to_account_id, req.user.id);
+
+            if (!fromAcc || !toAcc) {
+                return sendError(res, 'Source or destination account not found', 404);
+            }
+
+            const parsedAmount = parseFloat(amount) || 0;
+            if (parsedAmount <= 0) return sendError(res, 'Amount must be greater than zero', 400);
+
+            const now = new Date().toISOString();
+            const dateStr = date || now.split('T')[0];
+
+            const refStr = reference_number ? ` [Ref: ${reference_number}]` : '';
+            const finalDescription = description || 'Transfer';
+
+            // 1. Debit Source Account (expense entry)
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'expense', ?, ?, 'Transfer', ?, ?, 'posted', ?, ?)
+            `).run(req.user.id, dateStr, parsedAmount, fromAcc.account_name, `Transfer to ${toAcc.account_name} - ${finalDescription}${refStr}`, now, now);
+
+            // 2. Credit Destination Account (income entry)
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'income', ?, ?, 'Transfer', ?, ?, 'posted', ?, ?)
+            `).run(req.user.id, dateStr, parsedAmount, toAcc.account_name, `Transfer from ${fromAcc.account_name} - ${finalDescription}${refStr}`, now, now);
+
+            return sendSuccess(res, null, 'Transfer recorded successfully', 201);
+        } catch (error) {
+            console.error('[Accounting] recordTransfer error:', error);
+            return sendError(res, 'Failed to process transfer', 500);
         }
     },
     updateBankAccount: async (req, res) => {

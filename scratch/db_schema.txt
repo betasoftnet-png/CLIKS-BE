@@ -1,0 +1,1458 @@
+
+--- Schema for table users ---
+CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at TEXT, updated_at TEXT, widgets TEXT, role TEXT DEFAULT 'user', refresh_token TEXT, settings TEXT, avatar_url TEXT, is_active INTEGER DEFAULT 1, license_tier TEXT DEFAULT 'Growth Tier', business_name TEXT, tier TEXT DEFAULT 'Free Plan', subscription_days_remaining INTEGER DEFAULT 0, primary_income_source TEXT, global_budget REAL DEFAULT 20000, favorite_products TEXT)
+
+--- Schema for table sqlite_sequence ---
+CREATE TABLE sqlite_sequence(name,seq)
+
+--- Schema for table accounts ---
+CREATE TABLE accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, type TEXT, balance REAL DEFAULT 0, currency TEXT DEFAULT 'INR', color TEXT, icon TEXT, created_at TEXT, updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table transactions ---
+CREATE TABLE transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, account_id INTEGER, type TEXT CHECK(type IN ('income','expense','transfer')), amount REAL NOT NULL, category TEXT, description TEXT, date TEXT, created_at TEXT, updated_at TEXT, name TEXT, time TEXT, schedule TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table income ---
+CREATE TABLE income (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, account_id INTEGER, source TEXT, amount REAL NOT NULL, frequency TEXT DEFAULT 'one-time', date TEXT, notes TEXT, created_at TEXT, updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table expenses ---
+CREATE TABLE expenses (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, account_id INTEGER, category TEXT, amount REAL NOT NULL, description TEXT, date TEXT, is_recurring INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, expense_number TEXT, expense_date TEXT, expense_status TEXT, category_name TEXT, subcategory TEXT, payee_name TEXT, payee_phone TEXT, payee_gstin TEXT, expense_amount TEXT, gst_percentage TEXT, subtotal TEXT, tax_amount TEXT, payment_mode TEXT, transaction_reference TEXT, input_tax_credit TEXT, employee_name TEXT, travel_expense TEXT, claim_amount TEXT, reimbursement_status TEXT, approval_by TEXT, is_claim TEXT, budget_limit TEXT, spent_amount TEXT, alert_status TEXT, is_budget TEXT, is_blocked TEXT, recurring_type TEXT, next_due_date TEXT, auto_create TEXT, recurring_status TEXT, receipt TEXT, subscription_name TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table budgets ---
+CREATE TABLE budgets (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, category TEXT, amount_limit REAL, amount_spent REAL DEFAULT 0, period TEXT DEFAULT 'monthly', start_date TEXT, end_date TEXT, created_at TEXT, updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table savings ---
+CREATE TABLE savings (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, target_amount REAL, current_amount REAL DEFAULT 0, deadline TEXT, notes TEXT, created_at TEXT, updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table investments ---
+CREATE TABLE investments (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, type TEXT, amount_invested REAL, current_value REAL, purchase_date TEXT, notes TEXT, created_at TEXT, updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table debts ---
+CREATE TABLE debts (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, creditor TEXT NOT NULL, amount REAL NOT NULL, amount_paid REAL DEFAULT 0, due_date TEXT, interest_rate REAL, notes TEXT, created_at TEXT, updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table planned_payments ---
+CREATE TABLE planned_payments (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, account_id INTEGER, name TEXT NOT NULL, amount REAL, due_date TEXT, frequency TEXT, category TEXT, status TEXT DEFAULT 'pending', created_at TEXT, updated_at TEXT, type TEXT, person_id INTEGER, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table stock ---
+CREATE TABLE stock (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, sku TEXT, quantity REAL DEFAULT 0, unit_price REAL, category TEXT, location TEXT, notes TEXT, created_at TEXT, updated_at TEXT, unit TEXT, sub_name TEXT, low_stock_threshold INTEGER DEFAULT 5, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table financial_plans ---
+CREATE TABLE financial_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, start_date TEXT, end_date TEXT, status TEXT DEFAULT 'draft', created_at TEXT, updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table plan_budgets ---
+CREATE TABLE plan_budgets (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL, user_id INTEGER NOT NULL, category TEXT, allocated_amount REAL, spent_amount REAL DEFAULT 0, notes TEXT, created_at TEXT, updated_at TEXT, FOREIGN KEY(plan_id) REFERENCES financial_plans(id))
+
+--- Schema for table plan_income ---
+CREATE TABLE plan_income (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL, user_id INTEGER NOT NULL, source TEXT, expected_amount REAL, actual_amount REAL, date TEXT, notes TEXT, created_at TEXT, updated_at TEXT, category TEXT, FOREIGN KEY(plan_id) REFERENCES financial_plans(id))
+
+--- Schema for table plan_expenses ---
+CREATE TABLE plan_expenses (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL, user_id INTEGER NOT NULL, category TEXT, expected_amount REAL, actual_amount REAL, date TEXT, notes TEXT, created_at TEXT, updated_at TEXT, description TEXT, FOREIGN KEY(plan_id) REFERENCES financial_plans(id))
+
+--- Schema for table plan_goals ---
+CREATE TABLE plan_goals (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL, user_id INTEGER NOT NULL, title TEXT NOT NULL, target_amount REAL, current_amount REAL DEFAULT 0, deadline TEXT, status TEXT DEFAULT 'in-progress', created_at TEXT, updated_at TEXT, FOREIGN KEY(plan_id) REFERENCES financial_plans(id))
+
+--- Schema for table plan_reminders ---
+CREATE TABLE plan_reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL, user_id INTEGER NOT NULL, title TEXT NOT NULL, message TEXT, remind_at TEXT, is_sent INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, FOREIGN KEY(plan_id) REFERENCES financial_plans(id))
+
+--- Schema for table people ---
+CREATE TABLE people (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, phone TEXT, email TEXT, relationship TEXT, notes TEXT, created_at TEXT, updated_at TEXT, role_type TEXT, company TEXT, contact_info TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table people_transactions ---
+CREATE TABLE people_transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, person_id INTEGER NOT NULL, user_id INTEGER NOT NULL, type TEXT CHECK(type IN ('lent','borrowed','settled')), amount REAL, description TEXT, date TEXT, status TEXT DEFAULT 'pending', created_at TEXT, updated_at TEXT, FOREIGN KEY(person_id) REFERENCES people(id))
+
+--- Schema for table people_reminders ---
+CREATE TABLE people_reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, person_id INTEGER NOT NULL, user_id INTEGER NOT NULL, title TEXT, message TEXT, remind_at TEXT, is_sent INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, due_date TEXT, status TEXT DEFAULT 'pending', amount REAL, FOREIGN KEY(person_id) REFERENCES people(id))
+
+--- Schema for table people_records ---
+CREATE TABLE people_records (id INTEGER PRIMARY KEY AUTOINCREMENT, person_id INTEGER NOT NULL, user_id INTEGER NOT NULL, title TEXT, content TEXT, date TEXT, created_at TEXT, updated_at TEXT, type TEXT, description TEXT, FOREIGN KEY(person_id) REFERENCES people(id))
+
+--- Schema for table contacts ---
+CREATE TABLE contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, type TEXT DEFAULT 'other', phone TEXT, email TEXT, company TEXT, notes TEXT, created_at TEXT, updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table segregation ---
+CREATE TABLE segregation (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, category TEXT, label TEXT, allocated_percentage REAL, allocated_amount REAL, notes TEXT, created_at TEXT, updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table split_expenses ---
+CREATE TABLE split_expenses (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, title TEXT NOT NULL, total_amount REAL, date TEXT, notes TEXT, created_at TEXT, updated_at TEXT, split_type TEXT, paid_by TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table split_participants ---
+CREATE TABLE split_participants (id INTEGER PRIMARY KEY AUTOINCREMENT, split_expense_id INTEGER NOT NULL, user_id INTEGER NOT NULL, name TEXT NOT NULL, share_amount REAL, is_settled INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, FOREIGN KEY(split_expense_id) REFERENCES split_expenses(id))
+
+--- Schema for table public_posts ---
+CREATE TABLE public_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, content TEXT NOT NULL, type TEXT DEFAULT 'update', likes INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table segregation_allocations ---
+CREATE TABLE segregation_allocations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rule_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  label TEXT,
+  percentage REAL,
+  notes TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(rule_id) REFERENCES segregation(id)
+)
+
+--- Schema for table refresh_tokens ---
+CREATE TABLE refresh_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  token TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table goal_wallets ---
+CREATE TABLE goal_wallets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  target_amount REAL NOT NULL,
+  current_amount REAL DEFAULT 0,
+  status TEXT DEFAULT 'active', -- active | completed
+  created_at TEXT,
+  updated_at TEXT, person_id INTEGER,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table wallet_transactions ---
+CREATE TABLE wallet_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  amount REAL NOT NULL,
+  type TEXT DEFAULT 'credit',
+  created_at TEXT,
+  FOREIGN KEY(wallet_id) REFERENCES goal_wallets(id),
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table stock_transactions ---
+CREATE TABLE stock_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  stock_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  type TEXT CHECK(type IN ('in','out')),
+  quantity REAL NOT NULL,
+  date TEXT,
+  created_at TEXT, purchase_bill_ref TEXT, received_by TEXT, warehouse_id INTEGER,
+  FOREIGN KEY(stock_id) REFERENCES stock(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table meetups ---
+CREATE TABLE meetups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  type TEXT DEFAULT 'Offline',
+  date TEXT,
+  time TEXT,
+  location TEXT,
+  price TEXT DEFAULT 'Free',
+  description TEXT,
+  category TEXT DEFAULT 'General',
+  image_url TEXT,
+  icon TEXT DEFAULT 'Users',
+  gradient TEXT DEFAULT 'linear-gradient(135deg, #1B6B3A 0%, #22C55E 100%)',
+  attendees INTEGER DEFAULT 1,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table inventory ---
+CREATE TABLE inventory (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  sku TEXT,
+  category TEXT,
+  quantity INTEGER DEFAULT 0,
+  price REAL DEFAULT 0,
+  supplier TEXT,
+  status TEXT DEFAULT 'In Stock',
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_invoices ---
+CREATE TABLE business_invoices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  invoice_number TEXT NOT NULL,
+  client_name TEXT NOT NULL,
+  client_email TEXT,
+  amount REAL DEFAULT 0,
+  status TEXT DEFAULT 'Draft',
+  due_date TEXT,
+  items TEXT, -- JSON string
+  created_at TEXT,
+  updated_at TEXT, client_gstin TEXT, billing_address TEXT, shipping_address TEXT, tax_amount REAL DEFAULT 0, total_amount REAL DEFAULT 0, paid_amount REAL DEFAULT 0, due_amount REAL DEFAULT 0, bank_account_id TEXT, discount_amount REAL DEFAULT 0, round_off REAL DEFAULT 0, payment_mode TEXT, invoice_type TEXT, tax_type TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_customers ---
+CREATE TABLE business_customers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  email TEXT,
+  phone TEXT,
+  company TEXT,
+  status TEXT DEFAULT 'lead',
+  notes TEXT,
+  city TEXT,
+  outstanding_balance REAL DEFAULT 0,
+  total_spent REAL DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT, loyalty_points INTEGER DEFAULT 0,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table customer_addresses ---
+CREATE TABLE customer_addresses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  address_line1 TEXT,
+  address_line2 TEXT,
+  city TEXT,
+  state TEXT,
+  postal_code TEXT,
+  country TEXT,
+  created_at TEXT,
+  FOREIGN KEY(customer_id) REFERENCES business_customers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table customer_notes ---
+CREATE TABLE customer_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  created_at TEXT,
+  FOREIGN KEY(customer_id) REFERENCES business_customers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table customer_payments ---
+CREATE TABLE customer_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  amount REAL DEFAULT 0,
+  payment_method TEXT,
+  reference_number TEXT,
+  created_at TEXT,
+  FOREIGN KEY(customer_id) REFERENCES business_customers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table customer_ledger ---
+CREATE TABLE customer_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  description TEXT,
+  amount REAL DEFAULT 0,
+  type TEXT, -- debit (invoice/charge), credit (payment)
+  created_at TEXT,
+  FOREIGN KEY(customer_id) REFERENCES business_customers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table customer_documents ---
+CREATE TABLE customer_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  file_name TEXT NOT NULL,
+  file_url TEXT,
+  file_size TEXT,
+  created_at TEXT,
+  FOREIGN KEY(customer_id) REFERENCES business_customers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_employees ---
+CREATE TABLE business_employees (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  role TEXT,
+  email TEXT,
+  phone TEXT,
+  salary REAL DEFAULT 0,
+  status TEXT DEFAULT 'active',
+  hire_date TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_plans ---
+CREATE TABLE business_plans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  start_date TEXT,
+  end_date TEXT,
+  total_budget REAL DEFAULT 0,
+  status TEXT DEFAULT 'Draft',
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_plan_items ---
+CREATE TABLE business_plan_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id INTEGER NOT NULL,
+  type TEXT, -- revenue, expense, capex
+  category TEXT,
+  description TEXT,
+  amount REAL DEFAULT 0,
+  date TEXT,
+  created_at TEXT,
+  FOREIGN KEY(plan_id) REFERENCES business_plans(id) ON DELETE CASCADE
+)
+
+--- Schema for table employees ---
+CREATE TABLE employees (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  role TEXT,
+  email TEXT,
+  phone TEXT,
+  salary REAL DEFAULT 0,
+  status TEXT DEFAULT 'active',
+  hire_date TEXT,
+  created_at TEXT,
+  updated_at TEXT, department TEXT, designation TEXT, emergency_contact TEXT, bank_details TEXT, address TEXT, shift TEXT, notes TEXT, salary_structure TEXT, roles TEXT, permissions TEXT, profile_photo TEXT, documents TEXT, salary_type TEXT, performance_rating TEXT, target_score TEXT, leave_balance TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table manufacturing_boms ---
+CREATE TABLE manufacturing_boms (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  items TEXT, -- JSON string of components
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table manufacturing_orders ---
+CREATE TABLE manufacturing_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  bom_id INTEGER,
+  product_name TEXT NOT NULL,
+  quantity INTEGER DEFAULT 1,
+  status TEXT DEFAULT 'Pending', -- Pending | In Progress | Completed
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table payroll ---
+CREATE TABLE payroll (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  employee_id INTEGER NOT NULL,
+  amount REAL NOT NULL,
+  month TEXT,
+  status TEXT DEFAULT 'Pending', -- Pending | Processed
+  created_at TEXT,
+  updated_at TEXT, employee_name TEXT, salary_type TEXT, basic_salary TEXT, hra_amount TEXT, special_allowance TEXT, bonus_amount TEXT, overtime_pay TEXT, pf_deduction TEXT, esi_deduction TEXT, tds_deduction TEXT, professional_tax TEXT, loan_deduction TEXT, payable_days TEXT, bank_name TEXT, account_number TEXT, payslip_number TEXT, pan_number TEXT, uan_number TEXT, esi_number TEXT, loans_data TEXT, earnings_data TEXT, deductions_data TEXT, notes TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id),
+  FOREIGN KEY(employee_id) REFERENCES employees(id)
+)
+
+--- Schema for table attendance ---
+CREATE TABLE attendance (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  employee_id INTEGER,
+  date TEXT,
+  check_in TEXT,
+  check_out TEXT,
+  status TEXT DEFAULT 'Present',
+  created_at TEXT, check_in_time TEXT, check_out_time TEXT, employee_name TEXT, first_punch TEXT, last_punch TEXT, total_work_hours TEXT, break_hours TEXT, productive_hours TEXT, overtime_hours TEXT, late_by_minutes TEXT, early_exit_minutes TEXT, geo_fence_status TEXT, location_address TEXT, device_id TEXT, missed_punch_reason TEXT, proposed_punch_in TEXT, proposed_punch_out TEXT, approval_status TEXT, approved_by TEXT, break_start TEXT, break_end TEXT, notes TEXT, shift_id TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table gst_invoices ---
+CREATE TABLE gst_invoices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  invoice_number TEXT NOT NULL,
+  client_name TEXT NOT NULL,
+  amount REAL DEFAULT 0,
+  gst_amount REAL DEFAULT 0,
+  eway_bill_number TEXT,
+  created_at TEXT, invoice_type TEXT, place_of_supply TEXT, taxable_value REAL DEFAULT 0, gst_percentage REAL DEFAULT 0, cgst_amount REAL DEFAULT 0, sgst_amount REAL DEFAULT 0, igst_amount REAL DEFAULT 0, total_tax REAL DEFAULT 0, reverse_charge TEXT, irn_number TEXT, qr_status TEXT, vendor_gstin TEXT, vendor_name TEXT, eligible_itc REAL DEFAULT 0, invoice_match_status TEXT, mismatch_reason TEXT, reconciliation_date TEXT, transporter_name TEXT, vehicle_number TEXT, transport_distance INTEGER DEFAULT 0, dispatch_location TEXT, delivery_location TEXT, status TEXT DEFAULT 'Active', reference_invoice TEXT, is_eway_bill TEXT DEFAULT 'false', is_reconciliation TEXT DEFAULT 'false', invoice_amount REAL, input_cgst REAL, input_sgst REAL, input_igst REAL,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_payments ---
+CREATE TABLE business_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  type TEXT, -- receive, pay
+  supplier_id INTEGER,
+  amount REAL DEFAULT 0,
+  status TEXT DEFAULT 'Completed',
+  created_at TEXT, party_name TEXT, reference_number TEXT, payment_mode TEXT, invoice_id TEXT, notes TEXT, reconciliation_status TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table warehouses ---
+CREATE TABLE warehouses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  location TEXT,
+  created_at TEXT, code TEXT, type TEXT DEFAULT "godown", status TEXT DEFAULT "active", address TEXT, city TEXT, state TEXT, pincode TEXT, contact_person TEXT, phone_number TEXT, email TEXT, capacity_utilization TEXT DEFAULT "0%",
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table warehouse_transfers ---
+CREATE TABLE warehouse_transfers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  from_warehouse_id INTEGER,
+  to_warehouse_id INTEGER,
+  stock_id INTEGER,
+  quantity REAL DEFAULT 0,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table product_returns ---
+CREATE TABLE product_returns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  product_name TEXT NOT NULL,
+  amount REAL DEFAULT 0,
+  status TEXT DEFAULT 'Pending', -- Pending | Approved | Refunded
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table suppliers ---
+CREATE TABLE suppliers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  email TEXT,
+  phone TEXT,
+  outstanding_balance REAL DEFAULT 0,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table supplier_ledger ---
+CREATE TABLE supplier_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  supplier_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  description TEXT,
+  amount REAL DEFAULT 0,
+  type TEXT, -- debit, credit
+  created_at TEXT,
+  FOREIGN KEY(supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_orders ---
+CREATE TABLE business_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  customer_id INTEGER,
+  order_number TEXT NOT NULL UNIQUE,
+  customer TEXT NOT NULL,
+  customer_phone TEXT,
+  customer_gstin TEXT,
+  billing_address TEXT,
+  shipping_address TEXT,
+  date TEXT,
+  delivery_date TEXT,
+  status TEXT DEFAULT 'Draft',
+  advance_amount REAL DEFAULT 0,
+  shipping_charge REAL DEFAULT 0,
+  subtotal REAL DEFAULT 0,
+  total_discount REAL DEFAULT 0,
+  total_tax REAL DEFAULT 0,
+  grand_total REAL DEFAULT 0,
+  pending_amount REAL DEFAULT 0,
+  shipping_method TEXT,
+  tracking_number TEXT,
+  dispatch_date TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_order_items ---
+CREATE TABLE business_order_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  sku TEXT,
+  hsn TEXT,
+  quantity INTEGER DEFAULT 0,
+  price REAL DEFAULT 0,
+  discount REAL DEFAULT 0,
+  gst INTEGER DEFAULT 0,
+  total REAL DEFAULT 0,
+  FOREIGN KEY(order_id) REFERENCES business_orders(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_order_notes ---
+CREATE TABLE business_order_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER NOT NULL,
+  title TEXT,
+  content TEXT,
+  created_at TEXT,
+  FOREIGN KEY(order_id) REFERENCES business_orders(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_order_documents ---
+CREATE TABLE business_order_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER NOT NULL,
+  name TEXT,
+  file_path TEXT,
+  created_at TEXT,
+  FOREIGN KEY(order_id) REFERENCES business_orders(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_invoice_payments ---
+CREATE TABLE business_invoice_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL,
+  amount REAL DEFAULT 0,
+  payment_method TEXT,
+  payment_date TEXT,
+  reference_number TEXT,
+  notes TEXT,
+  FOREIGN KEY(invoice_id) REFERENCES business_invoices(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_invoice_returns ---
+CREATE TABLE business_invoice_returns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL,
+  reason TEXT,
+  amount REAL DEFAULT 0,
+  return_date TEXT,
+  FOREIGN KEY(invoice_id) REFERENCES business_invoices(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_invoice_notes ---
+CREATE TABLE business_invoice_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL,
+  title TEXT,
+  content TEXT,
+  created_at TEXT,
+  FOREIGN KEY(invoice_id) REFERENCES business_invoices(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_invoice_documents ---
+CREATE TABLE business_invoice_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL,
+  name TEXT,
+  file_path TEXT,
+  created_at TEXT,
+  FOREIGN KEY(invoice_id) REFERENCES business_invoices(id) ON DELETE CASCADE
+)
+
+--- Schema for table bom_materials ---
+CREATE TABLE bom_materials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bom_id INTEGER NOT NULL,
+            material_id TEXT NOT NULL,
+            material_name TEXT NOT NULL,
+            required_quantity REAL,
+            unit TEXT,
+            cost_per_unit REAL,
+            created_at TEXT
+        )
+
+--- Schema for table bom_processes ---
+CREATE TABLE bom_processes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bom_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            duration REAL,
+            created_at TEXT
+        )
+
+--- Schema for table bom_labor ---
+CREATE TABLE bom_labor (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bom_id INTEGER NOT NULL,
+            worker_name TEXT NOT NULL,
+            cost REAL,
+            created_at TEXT
+        )
+
+--- Schema for table bom_machines ---
+CREATE TABLE bom_machines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bom_id INTEGER NOT NULL,
+            machine_name TEXT NOT NULL,
+            runtime REAL,
+            created_at TEXT
+        )
+
+--- Schema for table bom_versions ---
+CREATE TABLE bom_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bom_id INTEGER NOT NULL,
+            version TEXT NOT NULL,
+            items TEXT,
+            created_at TEXT
+        )
+
+--- Schema for table bom_notes ---
+CREATE TABLE bom_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bom_id INTEGER NOT NULL,
+            note TEXT NOT NULL,
+            created_at TEXT
+        )
+
+--- Schema for table bom_documents ---
+CREATE TABLE bom_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bom_id INTEGER NOT NULL,
+            file_name TEXT NOT NULL,
+            file_url TEXT,
+            created_at TEXT
+        )
+
+--- Schema for table warehouse_zones ---
+CREATE TABLE warehouse_zones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            warehouse_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            created_at TEXT
+        )
+
+--- Schema for table warehouse_racks ---
+CREATE TABLE warehouse_racks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            warehouse_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            created_at TEXT
+        )
+
+--- Schema for table warehouse_bins ---
+CREATE TABLE warehouse_bins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            warehouse_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            created_at TEXT
+        )
+
+--- Schema for table warehouse_notes ---
+CREATE TABLE warehouse_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            warehouse_id INTEGER NOT NULL,
+            note TEXT NOT NULL,
+            created_at TEXT
+        )
+
+--- Schema for table warehouse_documents ---
+CREATE TABLE warehouse_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            warehouse_id INTEGER NOT NULL,
+            file_name TEXT NOT NULL,
+            file_url TEXT,
+            created_at TEXT
+        )
+
+--- Schema for table business_returns ---
+CREATE TABLE business_returns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  return_number TEXT NOT NULL,
+  return_type TEXT NOT NULL, -- sales, purchase
+  return_date TEXT NOT NULL,
+  status TEXT DEFAULT 'Pending', -- Pending, Completed
+  invoice_id TEXT,
+  purchase_id TEXT,
+  customer_name TEXT,
+  supplier_name TEXT,
+  refund_amount REAL DEFAULT 0,
+  adjustment_amount REAL DEFAULT 0,
+  tax_adjustment REAL DEFAULT 0,
+  refund_mode TEXT,
+  refund_status TEXT DEFAULT 'pending',
+  refund_date TEXT,
+  refund_reference TEXT,
+  reason_code TEXT,
+  inspection_status TEXT DEFAULT 'Pending Check',
+  warehouse_id TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_return_items ---
+CREATE TABLE business_return_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  return_id INTEGER NOT NULL,
+  product_id TEXT,
+  product_name TEXT NOT NULL,
+  batch_number TEXT,
+  serial_number TEXT,
+  return_quantity INTEGER DEFAULT 1,
+  replacement_quantity INTEGER DEFAULT 0,
+  price REAL DEFAULT 0,
+  gst_percentage REAL DEFAULT 18,
+  tax_amount REAL DEFAULT 0,
+  total REAL DEFAULT 0,
+  FOREIGN KEY(return_id) REFERENCES business_returns(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_return_notes ---
+CREATE TABLE business_return_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  return_id INTEGER NOT NULL,
+  title TEXT,
+  content TEXT,
+  created_at TEXT,
+  FOREIGN KEY(return_id) REFERENCES business_returns(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_return_documents ---
+CREATE TABLE business_return_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  return_id INTEGER NOT NULL,
+  name TEXT,
+  file_path TEXT,
+  created_at TEXT,
+  FOREIGN KEY(return_id) REFERENCES business_returns(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_purchases ---
+CREATE TABLE business_purchases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  purchase_number TEXT NOT NULL,
+  purchase_type TEXT DEFAULT 'GST',
+  purchase_date TEXT NOT NULL,
+  due_date TEXT NOT NULL,
+  doc_type TEXT DEFAULT 'PO',
+  status TEXT DEFAULT 'Approved',
+  supplier_name TEXT NOT NULL,
+  supplier_gstin TEXT,
+  billing_address TEXT,
+  contact_number TEXT,
+  warehouse_id TEXT DEFAULT 'Main Godown',
+  purchase_by TEXT,
+  payment_status TEXT DEFAULT 'pending',
+  payment_mode TEXT DEFAULT 'Cash',
+  bank_account_id TEXT,
+  paid_amount REAL DEFAULT 0,
+  advance_amount REAL DEFAULT 0,
+  shipping_charge REAL DEFAULT 0,
+  round_off REAL DEFAULT 0,
+  place_of_supply TEXT DEFAULT 'Maharashtra',
+  return_reason TEXT,
+  subtotal REAL DEFAULT 0,
+  total_discount REAL DEFAULT 0,
+  total_tax REAL DEFAULT 0,
+  grand_total REAL DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_purchase_items ---
+CREATE TABLE business_purchase_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  purchase_id INTEGER NOT NULL,
+  product_name TEXT NOT NULL,
+  sku TEXT,
+  batch_number TEXT,
+  expiry_date TEXT,
+  quantity REAL DEFAULT 1,
+  received_quantity REAL DEFAULT 0,
+  free_quantity REAL DEFAULT 0,
+  primary_unit TEXT DEFAULT 'pcs',
+  purchase_price REAL DEFAULT 0,
+  discount REAL DEFAULT 0,
+  gst_percentage REAL DEFAULT 18,
+  tax_amount REAL DEFAULT 0,
+  total REAL DEFAULT 0,
+  FOREIGN KEY(purchase_id) REFERENCES business_purchases(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_purchase_notes ---
+CREATE TABLE business_purchase_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  purchase_id INTEGER NOT NULL,
+  title TEXT,
+  content TEXT,
+  created_at TEXT,
+  FOREIGN KEY(purchase_id) REFERENCES business_purchases(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_purchase_documents ---
+CREATE TABLE business_purchase_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  purchase_id INTEGER NOT NULL,
+  name TEXT,
+  file_path TEXT,
+  FOREIGN KEY(purchase_id) REFERENCES business_purchases(id) ON DELETE CASCADE
+)
+
+--- Schema for table business_suppliers ---
+CREATE TABLE business_suppliers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  email TEXT,
+  phone TEXT,
+  company TEXT,
+  gstin TEXT,
+  status TEXT DEFAULT 'active',
+  city TEXT,
+  outstanding_balance REAL DEFAULT 0,
+  total_purchased REAL DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table supplier_addresses ---
+CREATE TABLE supplier_addresses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  supplier_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  address_line1 TEXT,
+  address_line2 TEXT,
+  city TEXT,
+  state TEXT,
+  postal_code TEXT,
+  country TEXT,
+  created_at TEXT,
+  FOREIGN KEY(supplier_id) REFERENCES business_suppliers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table supplier_contacts ---
+CREATE TABLE supplier_contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  supplier_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  contact_name TEXT NOT NULL,
+  email TEXT,
+  phone TEXT,
+  designation TEXT,
+  created_at TEXT,
+  FOREIGN KEY(supplier_id) REFERENCES business_suppliers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table supplier_notes ---
+CREATE TABLE supplier_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  supplier_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  created_at TEXT,
+  FOREIGN KEY(supplier_id) REFERENCES business_suppliers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table supplier_payments ---
+CREATE TABLE supplier_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  supplier_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  amount REAL DEFAULT 0,
+  payment_method TEXT,
+  reference_number TEXT,
+  created_at TEXT,
+  FOREIGN KEY(supplier_id) REFERENCES business_suppliers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table supplier_documents ---
+CREATE TABLE supplier_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  supplier_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  file_name TEXT NOT NULL,
+  file_url TEXT,
+  file_size TEXT,
+  created_at TEXT,
+  FOREIGN KEY(supplier_id) REFERENCES business_suppliers(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_products ---
+CREATE TABLE business_products (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  sku TEXT,
+  category TEXT,
+  status TEXT DEFAULT 'active',
+  stock_status TEXT DEFAULT 'In Stock',
+  quantity REAL DEFAULT 0,
+  low_stock_threshold REAL DEFAULT 5,
+  purchase_price REAL DEFAULT 0,
+  selling_price REAL DEFAULT 0,
+  barcode TEXT,
+  serial_number TEXT,
+  batch_number TEXT,
+  expiry_date TEXT,
+  tax_percentage REAL DEFAULT 18,
+  warehouse_id TEXT DEFAULT 'Main Godown',
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table product_images ---
+CREATE TABLE product_images (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  image_url TEXT NOT NULL,
+  created_at TEXT,
+  FOREIGN KEY(product_id) REFERENCES business_products(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table product_documents ---
+CREATE TABLE product_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  file_name TEXT NOT NULL,
+  file_url TEXT,
+  created_at TEXT,
+  FOREIGN KEY(product_id) REFERENCES business_products(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table product_stock_history ---
+CREATE TABLE product_stock_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  quantity_changed REAL DEFAULT 0,
+  type TEXT,
+  description TEXT,
+  created_at TEXT,
+  FOREIGN KEY(product_id) REFERENCES business_products(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table product_notes ---
+CREATE TABLE product_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  created_at TEXT,
+  FOREIGN KEY(product_id) REFERENCES business_products(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table product_categories ---
+CREATE TABLE product_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  category_name TEXT NOT NULL,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table platform_admins ---
+CREATE TABLE platform_admins (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, name TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)
+
+--- Schema for table platform_config ---
+CREATE TABLE platform_config (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT UNIQUE NOT NULL,
+  value TEXT NOT NULL,
+  updated_at TEXT
+)
+
+--- Schema for table platform_announcements ---
+CREATE TABLE platform_announcements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  banner_type TEXT DEFAULT 'INFO', -- INFO | WARNING | CRITICAL
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT
+)
+
+--- Schema for table audit_logs ---
+CREATE TABLE audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_type TEXT NOT NULL,
+  message TEXT NOT NULL,
+  actor TEXT DEFAULT 'System',
+  severity TEXT DEFAULT 'INFO',
+  created_at TEXT
+)
+
+--- Schema for table sales_agents ---
+CREATE TABLE sales_agents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  commission_rate REAL DEFAULT 0.0,
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT
+)
+
+--- Schema for table sales_leads ---
+CREATE TABLE sales_leads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id INTEGER,
+  business_name TEXT NOT NULL,
+  contact_name TEXT,
+  email TEXT,
+  phone TEXT,
+  status TEXT DEFAULT 'NEW',
+  estimated_value REAL DEFAULT 0.0,
+  notes TEXT,
+  created_at TEXT,
+  updated_at TEXT
+)
+
+--- Schema for table calculator_history ---
+CREATE TABLE calculator_history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, tape TEXT NOT NULL, total REAL NOT NULL, timestamp TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id))
+
+--- Schema for table marketing_campaigns ---
+CREATE TABLE marketing_campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                campaign_name TEXT NOT NULL,
+                campaign_type TEXT DEFAULT 'Email',
+                campaign_status TEXT DEFAULT 'Draft',
+                target_audience TEXT,
+                total_recipients INTEGER DEFAULT 0,
+                message_title TEXT,
+                message_content TEXT,
+                scheduled_date TEXT,
+                scheduled_time TEXT,
+                sent_count INTEGER DEFAULT 0,
+                delivered_count INTEGER DEFAULT 0,
+                opened_count INTEGER DEFAULT 0,
+                clicked_count INTEGER DEFAULT 0,
+                conversion_count INTEGER DEFAULT 0,
+                roi_percentage REAL DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            )
+
+--- Schema for table accounting ---
+CREATE TABLE accounting (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                entry_type TEXT,
+                date TEXT,
+                amount REAL,
+                category TEXT,
+                mode TEXT,
+                notes TEXT,
+                account_type TEXT,
+                status TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            , account_name TEXT, account_number TEXT, balance TEXT, reconciliation_status TEXT, lock_status TEXT, bank_name TEXT, ifsc_code TEXT, branch_name TEXT)
+
+--- Schema for table meetup_registrations ---
+CREATE TABLE meetup_registrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  meetup_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  created_at TEXT,
+  UNIQUE(meetup_id, user_id),
+  FOREIGN KEY(meetup_id) REFERENCES meetups(id),
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table venture_pitches ---
+CREATE TABLE venture_pitches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  business_name TEXT NOT NULL,
+  industry TEXT,
+  funding_target REAL NOT NULL,
+  raised_amount REAL DEFAULT 0,
+  equity_offered REAL,
+  headline TEXT NOT NULL,
+  pitch_deck_url TEXT,
+  use_of_funds TEXT,
+  is_verified INTEGER DEFAULT 0,
+  listing_status TEXT DEFAULT 'DRAFT',
+  payment_reference TEXT,
+  founder_phone TEXT,
+  founder_email TEXT,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table support_agents ---
+CREATE TABLE support_agents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT
+)
+
+--- Schema for table support_tickets ---
+CREATE TABLE support_tickets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  subject TEXT NOT NULL,
+  description TEXT NOT NULL,
+  status TEXT DEFAULT 'OPEN',
+  priority TEXT DEFAULT 'MEDIUM',
+  agent_id INTEGER,
+  admin_note TEXT,
+  resolution_notes TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table ca_audits ---
+CREATE TABLE ca_audits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                compliance_score REAL,
+                status TEXT,
+                anomalies_found INTEGER,
+                items_checked INTEGER,
+                flagged_expenses TEXT,
+                created_at TEXT
+            )
+
+--- Schema for table ca_invitations ---
+CREATE TABLE ca_invitations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_id INTEGER NOT NULL,
+                sender_email TEXT,
+                sender_name TEXT,
+                receiver_email TEXT NOT NULL,
+                status TEXT DEFAULT 'Pending',
+                created_at TEXT,
+                updated_at TEXT
+            )
+
+--- Schema for table ca_clients ---
+CREATE TABLE ca_clients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ca_user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                email TEXT,
+                status TEXT,
+                regime TEXT,
+                income REAL,
+                pending_filings INTEGER
+            )
+
+--- Schema for table ca_client_requests ---
+CREATE TABLE ca_client_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ca_user_id INTEGER NOT NULL,
+                client_name TEXT,
+                title TEXT,
+                description TEXT,
+                status TEXT,
+                due_date TEXT,
+                priority TEXT,
+                doc_type TEXT,
+                attached_file TEXT
+            )
+
+--- Schema for table ca_tasks ---
+CREATE TABLE ca_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ca_user_id INTEGER NOT NULL,
+                client_name TEXT,
+                title TEXT,
+                status TEXT,
+                priority TEXT,
+                due_date TEXT
+            , ask_for_document INTEGER DEFAULT 0, attached_file TEXT)
+
+--- Schema for table ca_timesheets ---
+CREATE TABLE ca_timesheets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ca_user_id INTEGER NOT NULL,
+                client_name TEXT,
+                task_name TEXT,
+                date TEXT,
+                duration TEXT,
+                billable INTEGER
+            )
+
+--- Schema for table ca_folders ---
+CREATE TABLE ca_folders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ca_user_id INTEGER NOT NULL,
+                name TEXT,
+                count INTEGER
+            )
+
+--- Schema for table ca_files ---
+CREATE TABLE ca_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ca_user_id INTEGER NOT NULL,
+                name TEXT,
+                size TEXT,
+                folder_name TEXT,
+                date TEXT
+            )
+
+--- Schema for table split_tickets ---
+CREATE TABLE split_tickets (
+  id VARCHAR(255) PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  currency TEXT,
+  currency_symbol TEXT,
+  description TEXT,
+  participants TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table split_ticket_expenses ---
+CREATE TABLE split_ticket_expenses (
+  id VARCHAR(255) PRIMARY KEY,
+  split_ticket_id VARCHAR(255) NOT NULL,
+  user_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  amount REAL,
+  paid_by TEXT,
+  date TEXT,
+  attachment TEXT,
+  split_type TEXT,
+  shares TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(split_ticket_id) REFERENCES split_tickets(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table shifts ---
+CREATE TABLE shifts (
+        shift_id TEXT PRIMARY KEY,
+        user_id INTEGER,
+        shift_name TEXT,
+        shift_start_time TEXT,
+        shift_end_time TEXT,
+        shift_type TEXT,
+        grace_time INTEGER
+    )
+
+--- Schema for table business_wallets ---
+CREATE TABLE business_wallets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL UNIQUE,
+  balance REAL DEFAULT 0,
+  reward_points INTEGER DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table business_wallet_transactions ---
+CREATE TABLE business_wallet_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet_id INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  amount REAL NOT NULL,
+  description TEXT,
+  transaction_ref TEXT,
+  created_at TEXT,
+  FOREIGN KEY(wallet_id) REFERENCES business_wallets(id)
+)
+
+--- Schema for table ca_team_members ---
+CREATE TABLE ca_team_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ca_user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                role TEXT,
+                status TEXT DEFAULT 'Active'
+            )
+
+--- Schema for table ca_team_requests ---
+CREATE TABLE ca_team_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ca_user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                role TEXT,
+                type TEXT,
+                status TEXT DEFAULT 'Pending'
+            )
+
+--- Schema for table financial_goals ---
+CREATE TABLE financial_goals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  target_amount REAL NOT NULL,
+  current_savings REAL DEFAULT 0,
+  target_date TEXT,
+  category TEXT, -- Emergency Fund, Retirement, etc.
+  status TEXT DEFAULT 'in_progress',
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table salary_records ---
+CREATE TABLE salary_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  company_name TEXT,
+  employee_id TEXT,
+  salary_date TEXT,
+  basic_salary REAL DEFAULT 0,
+  hra REAL DEFAULT 0,
+  da REAL DEFAULT 0,
+  bonus REAL DEFAULT 0,
+  other_allowances REAL DEFAULT 0,
+  gross_salary REAL DEFAULT 0,
+  net_salary REAL DEFAULT 0,
+  salary_slip_url TEXT,
+  wallet_id INTEGER,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table property_records ---
+CREATE TABLE property_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  property_name TEXT NOT NULL,
+  address TEXT,
+  tenant_name TEXT,
+  monthly_rent REAL DEFAULT 0,
+  security_deposit REAL DEFAULT 0,
+  due_date INTEGER, -- Day of month
+  last_received_date TEXT,
+  maintenance_cost REAL DEFAULT 0,
+  property_tax REAL DEFAULT 0,
+  occupancy_status TEXT DEFAULT 'Occupied',
+  wallet_id INTEGER,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table pension_records ---
+CREATE TABLE pension_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  provider TEXT,
+  pension_number TEXT,
+  monthly_amount REAL DEFAULT 0,
+  payment_date TEXT,
+  is_family_pension INTEGER DEFAULT 0,
+  pension_type TEXT,
+  wallet_id INTEGER,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table tax_records ---
+CREATE TABLE tax_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  tax_year TEXT,
+  income_tax REAL DEFAULT 0,
+  tds_paid REAL DEFAULT 0,
+  epf REAL DEFAULT 0,
+  esi REAL DEFAULT 0,
+  prof_tax REAL DEFAULT 0,
+  advance_tax REAL DEFAULT 0,
+  tax_savings REAL DEFAULT 0,
+  notes TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table notifications ---
+CREATE TABLE notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  title TEXT,
+  message TEXT,
+  type TEXT, -- Alert | Info | Success
+  is_read INTEGER DEFAULT 0,
+  link TEXT,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table finance_reports ---
+CREATE TABLE finance_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  report_name TEXT,
+  report_type TEXT, -- Monthly | Annual | Tax | etc.
+  file_url TEXT,
+  period TEXT,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+--- Schema for table money_trackers ---
+CREATE TABLE money_trackers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  name TEXT NOT NULL,
+  place TEXT,
+  date TEXT,
+  budget REAL DEFAULT 0,
+  details TEXT,
+  expenses TEXT,
+  locations TEXT,
+  photos TEXT,
+  timeline TEXT,
+  memories TEXT,
+  route_map TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+)

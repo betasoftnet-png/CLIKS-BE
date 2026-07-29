@@ -324,9 +324,21 @@ const payrollController = {
     postPayment: async (req, res) => {
         const { id } = req.params;
         try {
+            const payroll = await db.prepare("SELECT * FROM payroll WHERE id = ? AND user_id = ?").get(id, req.user.id);
+            if (!payroll) return sendError(res, 'Payroll record not found', 404);
+
             await db.prepare("UPDATE payroll SET status = 'paid' WHERE id = ? AND user_id = ?").run(id, req.user.id);
+
+            // Sync to cash/bank ledger (accounting table) as Salary Expense from HDFC Bank Account
+            const now = new Date().toISOString();
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'expense', ?, ?, 'Salary Expenses', 'HDFC Bank Account', ?, 'posted', ?, ?)
+            `).run(req.user.id, now.split('T')[0], payroll.amount, `Salary paid to ${payroll.employee_name} for ${payroll.month || 'Current Month'}`, now, now);
+
             return sendSuccess(res, null, 'NEFT Bank payout processed successfully');
         } catch (error) {
+            console.error('[Payroll Controller] postPayment error:', error);
             return sendError(res, 'NEFT Payout failed', 500);
         }
     },
