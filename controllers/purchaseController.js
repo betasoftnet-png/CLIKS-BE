@@ -409,7 +409,7 @@ const purchaseController = {
             `).run(req.user.id, now.split('T')[0], parseFloat(paid_amount) || 0, normalizedMode, `Payment for Purchase #${purchase.purchase_number}`, now, now);
 
             // Update matching Credit Purchase in accounting ledger
-            const creditLedger = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND category = 'Inventory Purchases' AND mode = 'Payables' AND notes LIKE ?").get(req.user.id, `%Purchase #${purchase.purchase_number}%`);
+            const creditLedger = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND mode = 'Payables' AND notes LIKE ?").get(req.user.id, `%#${purchase.purchase_number}%`);
             if (creditLedger) {
                 const updatedStatus = newPaidAmount >= totalToPay ? 'Paid' : 'Partially Paid';
                 await db.prepare("UPDATE accounting SET status = ? WHERE id = ?").run(updatedStatus, creditLedger.id);

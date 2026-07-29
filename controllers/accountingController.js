@@ -379,13 +379,13 @@ const accountingController = {
                     INSERT INTO business_purchases (
                         user_id, purchase_number, purchase_date, due_date, status, supplier_name,
                         payment_status, payment_mode, paid_amount, grand_total, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 'Approved', ?, 'pending', 'Credit', 0, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, 'Pending', ?, 'pending', 'Credit', 0, ?, ?, ?)
                 `).run(req.user.id, billNum, dateStr, due_date, supplier_name, parsedAmount, now, now);
 
                 // 2. Create accounting entry (P&L accrual expense, without affecting Cash/Bank balances)
                 const result = await db.prepare(`
                     INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                    VALUES (?, 'expense', ?, ?, ?, 'Payables', ?, 'posted', ?, ?)
+                    VALUES (?, 'expense', ?, ?, ?, 'Payables', ?, 'Pending', ?, ?)
                 `).run(req.user.id, dateStr, parsedAmount, category || 'Inventory Purchases', notes || `Credit Purchase #${billNum}`, now, now);
 
                 const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
@@ -402,17 +402,23 @@ const accountingController = {
                 const parsedAmt = parsedAmount;
                 const newPaid = (parseFloat(bill.paid_amount) || 0) + parsedAmt;
                 const grandTotal = parseFloat(bill.grand_total) || 0;
-                const newStatus = newPaid >= grandTotal ? 'paid' : 'partially paid';
+                const newStatus = newPaid >= grandTotal ? 'Paid' : 'Partially Paid';
 
                 // 1. Update bill
-                await db.prepare('UPDATE business_purchases SET paid_amount = ?, payment_status = ? WHERE id = ?')
-                    .run(newPaid, newStatus, bill.id);
+                await db.prepare('UPDATE business_purchases SET paid_amount = ?, payment_status = ?, status = ? WHERE id = ?')
+                    .run(newPaid, newPaid >= grandTotal ? 'paid' : 'partial', newStatus, bill.id);
 
                 // 2. Create accounting entry (Supplier Payment category to avoid P&L double-counting)
                 const result = await db.prepare(`
                     INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                    VALUES (?, 'expense', ?, ?, 'Supplier Payment', ?, ?, 'posted', ?, ?)
+                    VALUES (?, 'expense', ?, ?, 'Supplier Payment', ?, ?, 'Paid', ?, ?)
                 `).run(req.user.id, dateStr, parsedAmt, mode || 'Cash in Hand', notes || `Payment for Bill #${bill_number}`, now, now);
+
+                // 3. Update matching Credit Purchase in accounting ledger
+                const creditLedger = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND mode = 'Payables' AND notes LIKE ?").get(req.user.id, `%#${bill_number}%`);
+                if (creditLedger) {
+                    await db.prepare("UPDATE accounting SET status = ? WHERE id = ?").run(newStatus, creditLedger.id);
+                }
 
                 const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
                 return sendSuccess(res, inserted, 'Supplier payment recorded successfully', 201);
