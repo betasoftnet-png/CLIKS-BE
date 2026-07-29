@@ -46,6 +46,58 @@ const paymentController = {
                  VALUES (?, 'pay', ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
             ).run(req.user.id, amount, supplier_name || 'General Supplier', purchase_id || null, payment_mode || 'Bank Transfer', reference_number || null, notes || null, now);
 
+            // Locate credit purchase bill using Bill Number (purchase_id)
+            const purchase = await db.prepare("SELECT * FROM business_purchases WHERE user_id = ? AND (purchase_number = ? OR id = ? || 0)").get(req.user.id, purchase_id, purchase_id);
+            
+            if (purchase) {
+                const amountVal = parseFloat(amount) || 0;
+                const newPaidAmount = (parseFloat(purchase.paid_amount) || 0) + amountVal;
+                const totalToPay = parseFloat(purchase.grand_total) || 0;
+
+                let newPaymentStatus = 'pending';
+                let newStatus = 'Pending';
+                if (newPaidAmount >= totalToPay) {
+                    newPaymentStatus = 'paid';
+                    newStatus = 'Paid';
+                } else if (newPaidAmount > 0) {
+                    newPaymentStatus = 'partial';
+                    newStatus = 'Partially Paid';
+                }
+
+                // Update the Credit Purchase bill status and paid amount
+                await db.prepare('UPDATE business_purchases SET paid_amount = ?, payment_status = ?, status = ? WHERE id = ?').run(newPaidAmount, newPaymentStatus, newStatus, purchase.id);
+
+                // Update matching Credit Purchase in accounting ledger
+                const creditLedger = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND category = 'Inventory Purchases' AND mode = 'Payables' AND notes LIKE ?").get(req.user.id, `%Purchase #${purchase.purchase_number}%`);
+                if (creditLedger) {
+                    const updatedStatus = newPaidAmount >= totalToPay ? 'Paid' : 'Partially Paid';
+                    await db.prepare("UPDATE accounting SET status = ? WHERE id = ?").run(updatedStatus, creditLedger.id);
+                }
+
+                // Reduce Accounts Payable balance and update Cash/Bank
+                const normalizePaymentMode = (mode) => {
+                    if (!mode) return 'Cash in Hand';
+                    const m = String(mode).toLowerCase();
+                    if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) return 'Cash in Hand';
+                    if (m.includes('hdfc')) return 'HDFC Bank Account';
+                    if (m.includes('icici')) return 'ICICI Bank Account';
+                    if (m.includes('sbi') || m.includes('state bank')) return 'SBI Current Account';
+                    if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) return 'UPI / Razorpay';
+                    if (m === 'bank' || m.includes('bank')) return 'HDFC Bank Account';
+                    return mode;
+                };
+
+                const normalizedMode = normalizePaymentMode(payment_mode);
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'expense', ?, ?, 'Supplier Payment', ?, ?, 'Paid', ?, ?)
+                `).run(req.user.id, now.split('T')[0], amountVal, normalizedMode, `Payment for Purchase #${purchase.purchase_number}`, now, now);
+            }
+
+            if (supplier_name) {
+                await db.prepare("UPDATE business_suppliers SET outstanding_balance = outstanding_balance - ? WHERE name = ? AND user_id = ?").run(amount, supplier_name, req.user.id);
+            }
+
             return sendSuccess(res, { id: result.lastInsertRowid, amount }, 'Payment to supplier recorded successfully', 201);
         } catch (error) {
             console.error('[Payment Controller] Error paying supplier:', error);

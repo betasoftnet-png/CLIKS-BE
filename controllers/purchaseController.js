@@ -55,6 +55,21 @@ const purchaseController = {
 
         try {
             const now = new Date().toISOString();
+            let finalStatus = status || 'Approved';
+            let finalPaymentStatus = payment_status || 'pending';
+
+            if (doc_type === 'BILL') {
+                const totalPaid = (parseFloat(paid_amount) || 0) + (parseFloat(advance_amount) || 0);
+                const gTotal = parseFloat(grand_total) || 0;
+                if (payment_mode === 'Credit' || payment_mode === 'Payables' || totalPaid < gTotal) {
+                    finalStatus = 'Pending';
+                    finalPaymentStatus = 'pending';
+                } else {
+                    finalStatus = 'Paid';
+                    finalPaymentStatus = 'paid';
+                }
+            }
+
             const result = await db.prepare(`
                 INSERT INTO business_purchases (
                     user_id, purchase_number, purchase_type, purchase_date, due_date, doc_type, status,
@@ -64,9 +79,9 @@ const purchaseController = {
                     subtotal, total_discount, total_tax, grand_total, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                req.user.id, purchase_number, purchase_type || 'GST', purchase_date, due_date, doc_type || 'PO', status || 'Approved',
+                req.user.id, purchase_number, purchase_type || 'GST', purchase_date, due_date, doc_type || 'PO', finalStatus,
                 supplier_name, supplier_gstin || null, billing_address || null, contact_number || null, warehouse_id || 'Main Godown',
-                purchase_by || null, payment_status || 'pending', payment_mode || 'Cash', bank_account_id || null, paid_amount || 0,
+                purchase_by || null, finalPaymentStatus, payment_mode || 'Cash', bank_account_id || null, paid_amount || 0,
                 advance_amount || 0, shipping_charge || 0, round_off || 0, place_of_supply || 'Maharashtra', return_reason || null,
                 subtotal || 0, total_discount || 0, total_tax || 0, grand_total || 0, now, now
             );
