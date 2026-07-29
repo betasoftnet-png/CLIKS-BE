@@ -99,14 +99,14 @@ const purchaseController = {
                 const normalizedMode = normalizePaymentMode(payment_mode);
                 await db.prepare(`
                     INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                    VALUES (?, 'expense', ?, ?, 'Inventory Purchases', ?, ?, 'posted', ?, ?)
+                    VALUES (?, 'expense', ?, ?, 'Inventory Purchases', ?, ?, 'Paid', ?, ?)
                 `).run(req.user.id, purchase_date || now.split('T')[0], totalPaid, normalizedMode, `Purchase #${purchase_number}`, now, now);
             }
 
             if (unpaidAmount > 0) {
                 await db.prepare(`
                     INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                    VALUES (?, 'expense', ?, ?, 'Inventory Purchases', 'Payables', ?, 'posted', ?, ?)
+                    VALUES (?, 'expense', ?, ?, 'Inventory Purchases', 'Payables', ?, 'Pending', ?, ?)
                 `).run(req.user.id, purchase_date || now.split('T')[0], unpaidAmount, `Purchase #${purchase_number} (Credit Purchase)`, now, now);
             }
 
@@ -390,8 +390,15 @@ const purchaseController = {
             const now = new Date().toISOString();
             await db.prepare(`
                 INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                VALUES (?, 'expense', ?, ?, 'Supplier Payment', ?, ?, 'posted', ?, ?)
+                VALUES (?, 'expense', ?, ?, 'Supplier Payment', ?, ?, 'Paid', ?, ?)
             `).run(req.user.id, now.split('T')[0], parseFloat(paid_amount) || 0, normalizedMode, `Payment for Purchase #${purchase.purchase_number}`, now, now);
+
+            // Update matching Credit Purchase in accounting ledger
+            const creditLedger = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND category = 'Inventory Purchases' AND mode = 'Payables' AND notes LIKE ?").get(req.user.id, `%Purchase #${purchase.purchase_number}%`);
+            if (creditLedger) {
+                const updatedStatus = newPaidAmount >= totalToPay ? 'Paid' : 'Partially Paid';
+                await db.prepare("UPDATE accounting SET status = ? WHERE id = ?").run(updatedStatus, creditLedger.id);
+            }
 
             return sendSuccess(res, null, 'Payment processed successfully');
         } catch (error) {

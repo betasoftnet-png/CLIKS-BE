@@ -517,15 +517,30 @@ const accountingController = {
     },
     getProfitLoss: async (req, res) => {
         try {
-            const ledger = await db.prepare("SELECT category, amount, entry_type FROM accounting WHERE user_id = ?").all(req.user.id);
+            const ledger = await db.prepare("SELECT category, amount, entry_type, status, mode FROM accounting WHERE user_id = ?").all(req.user.id);
 
-            const getAccountType = (category, entryType) => {
+            const getAccountType = (category, status, mode, entryType) => {
                 if (!category) return null;
                 const cat = String(category).trim();
                 const lower = cat.toLowerCase();
-                if (lower === 'contra' || lower === 'invoice payment' || lower === 'supplier payment' || lower === 'customer payment' ||
-                    lower.includes('purchase') || lower.includes('cogs') || lower.includes('raw material') || lower.includes('raw materials') || lower.includes('inventory')) {
+                if (lower === 'contra' || lower === 'invoice payment' || lower === 'customer payment') {
                     return null;
+                }
+
+                if (lower.includes('supplier payment')) {
+                    return 'Expense';
+                }
+
+                if (lower.includes('purchase') || lower.includes('cogs') || lower.includes('raw material') || lower.includes('raw materials') || lower.includes('inventory')) {
+                    // Credit purchase (mode === 'Payables') is not an expense directly (supplier payment is the cash expense)
+                    if (mode && String(mode).toLowerCase() === 'payables') {
+                        return null;
+                    }
+                    // Pending purchases are excluded
+                    if (status && String(status).toLowerCase() === 'pending') {
+                        return null;
+                    }
+                    return 'Expense';
                 }
 
                 const ChartOfAccounts = {
@@ -566,7 +581,7 @@ const accountingController = {
             let totalExpenses = 0;
 
             for (const item of ledger) {
-                const type = getAccountType(item.category, item.entry_type);
+                const type = getAccountType(item.category, item.status, item.mode, item.entry_type);
                 if (type === 'Revenue') {
                     grossRevenue += parseFloat(item.amount) || 0;
                 } else if (type === 'Expense') {
