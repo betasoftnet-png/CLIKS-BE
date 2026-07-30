@@ -80,7 +80,8 @@ const initTableAndColumns = async () => {
         'recurring_status',
         'receipt',
         'subscription_name',
-        'time'
+        'time',
+        'team_members'
     ];
     for (const col of columns) {
         try {
@@ -517,15 +518,16 @@ const expensesController = {
 
     // 9. Budgets
     createBudget: async (req, res) => {
-        const { category_name, budget_limit } = req.body;
+        const { category_name, budget_limit, team_members } = req.body;
         try {
             const now = new Date().toISOString();
             const limit = parseFloat(budget_limit) || 5000;
+            const membersJson = typeof team_members === 'string' ? team_members : JSON.stringify(team_members || []);
             const result = await db.prepare(`
                 INSERT INTO expenses (
-                    user_id, amount, category_name, budget_limit, spent_amount, alert_status, is_budget, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 0, 'Optimal', 'true', ?, ?)
-            `).run(req.user.id, limit, category_name, limit, now, now);
+                    user_id, amount, category_name, budget_limit, spent_amount, alert_status, is_budget, team_members, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 0, 'Optimal', 'true', ?, ?, ?)
+            `).run(req.user.id, limit, category_name, limit, membersJson, now, now);
 
             const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
             return sendSuccess(res, inserted, 'Budget limit allocated', 201);
@@ -544,14 +546,15 @@ const expensesController = {
     },
     updateBudget: async (req, res) => {
         const { id } = req.params;
-        const { category_name, budget_limit } = req.body;
+        const { category_name, budget_limit, team_members } = req.body;
         try {
             const now = new Date().toISOString();
             const limit = parseFloat(budget_limit) || 5000;
+            const membersJson = typeof team_members === 'string' ? team_members : JSON.stringify(team_members || []);
             await db.prepare(`
-                UPDATE expenses SET category_name = ?, amount = ?, budget_limit = ?, updated_at = ?
+                UPDATE expenses SET category_name = ?, amount = ?, budget_limit = ?, team_members = ?, updated_at = ?
                 WHERE id = ? AND user_id = ? AND is_budget = 'true'
-            `).run(category_name, limit, limit, now, id, req.user.id);
+            `).run(category_name, limit, limit, membersJson, now, id, req.user.id);
             const updated = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(id);
             return sendSuccess(res, updated, 'Budget target updated');
         } catch (error) {
