@@ -369,7 +369,7 @@ const gstController = {
 
     runReconciliation: async (req, res) => {
         try {
-            const { vendor_gstin, vendor_name, invoice_amount, gst_rate, match_status } = req.body;
+            const { id, vendor_gstin, vendor_name, invoice_amount, gst_rate, match_status } = req.body;
             const amt = parseFloat(invoice_amount) || 0;
             const pct = parseFloat(gst_rate) || 18;
             const tax = amt * (pct / (100 + pct));
@@ -381,18 +381,42 @@ const gstController = {
             const igst = isLocal ? 0 : tax;
             
             const now = new Date().toISOString();
-            const result = await db.prepare(`
-                INSERT INTO gst_invoices (
-                    user_id, vendor_gstin, vendor_name, amount, taxable_value, total_tax,
-                    cgst_amount, sgst_amount, igst_amount, eligible_itc, 
-                    invoice_match_status, is_reconciliation, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'true', ?, ?)
-            `).run(
-                req.user.id, vendor_gstin, vendor_name, amt, taxable, tax,
-                cgst, sgst, igst, tax, match_status || 'matched', now, now
-            );
 
-            return sendSuccess(res, { id: result.lastInsertRowid }, 'Reconciliation entry added');
+            if (id) {
+                // Update existing record
+                await db.prepare(`
+                    UPDATE gst_invoices SET
+                        vendor_gstin = ?,
+                        vendor_name = ?,
+                        amount = ?,
+                        taxable_value = ?,
+                        total_tax = ?,
+                        cgst_amount = ?,
+                        sgst_amount = ?,
+                        igst_amount = ?,
+                        eligible_itc = ?,
+                        invoice_match_status = ?,
+                        updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                `).run(
+                    vendor_gstin, vendor_name, amt, taxable, tax,
+                    cgst, sgst, igst, tax, match_status, now, id, req.user.id
+                );
+                return sendSuccess(res, { id }, 'Reconciliation status updated');
+            } else {
+                // Insert new record
+                const result = await db.prepare(`
+                    INSERT INTO gst_invoices (
+                        user_id, vendor_gstin, vendor_name, amount, taxable_value, total_tax,
+                        cgst_amount, sgst_amount, igst_amount, eligible_itc,
+                        invoice_match_status, is_reconciliation, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'true', ?, ?)
+                `).run(
+                    req.user.id, vendor_gstin, vendor_name, amt, taxable, tax,
+                    cgst, sgst, igst, tax, match_status || 'matched', now, now
+                );
+                return sendSuccess(res, { id: result.lastInsertRowid }, 'Reconciliation entry added');
+            }
         } catch (e) {
             console.error('[GST Controller] runReconciliation error:', e);
             return sendError(res, `Run Reconciliation Error: ${e.message}`, 500);

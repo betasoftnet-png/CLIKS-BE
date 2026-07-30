@@ -126,6 +126,36 @@ const purchaseController = {
                 `).run(req.user.id, purchase_date || now.split('T')[0], unpaidAmount, `Purchase #${purchase_number} (Credit Purchase)`, now, now);
             }
 
+            // --- Update Vendor / Supplier Ledger & Outstanding Balance ---
+            let supplier = await db.prepare("SELECT id FROM suppliers WHERE user_id = ? AND (name = ? OR name = ?)").get(req.user.id, supplier_name, supplier_name);
+            if (!supplier) {
+                // Try business_suppliers if not in general suppliers
+                supplier = await db.prepare("SELECT id FROM business_suppliers WHERE user_id = ? AND name = ?").get(req.user.id, supplier_name);
+            }
+
+            if (supplier) {
+                const supId = supplier.id;
+                // Add Purchase to Ledger (Debit)
+                await db.prepare(`
+                    INSERT INTO supplier_ledger (supplier_id, user_id, description, amount, type, created_at)
+                    VALUES (?, ?, ?, ?, 'debit', ?)
+                `).run(supId, req.user.id, `Purchase Bill #${purchase_number}`, grand_total, now);
+
+                // Add Payment to Ledger if paid (Credit)
+                if (totalPaid > 0) {
+                    await db.prepare(`
+                        INSERT INTO supplier_ledger (supplier_id, user_id, description, amount, type, created_at)
+                        VALUES (?, ?, ?, ?, 'credit', ?)
+                    `).run(supId, req.user.id, `Payment for Bill #${purchase_number} (${payment_mode})`, totalPaid, now);
+                }
+
+                // Update Outstanding Balance
+                const outstandingDiff = unpaidAmount;
+                await db.prepare("UPDATE suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?").run(outstandingDiff, supId);
+                await db.prepare("UPDATE business_suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?").run(outstandingDiff, supId);
+            }
+
+
             await gstHelper.syncPurchaseToGstr2b(purchaseId, req.user.id);
             await logBusinessAudit(req.user.id, 'PURCHASE_CREATE', `Created purchase document ${purchase_number} (${doc_type}) for supplier ${supplier_name} (amount: ₹${grand_total})`, 'SUCCESS');
             return sendSuccess(res, created, 'Purchase document created successfully', 201);
