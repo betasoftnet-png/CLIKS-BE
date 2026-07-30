@@ -1,6 +1,39 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 
+const initGstTableAndColumns = async () => {
+    const columns = [
+        'customer_name',
+        'customer_gstin',
+        'customer_state',
+        'sender_name',
+        'sender_gstin',
+        'sender_state',
+        'invoice_type',
+        'place_of_supply',
+        'cgst',
+        'sgst',
+        'igst',
+        'reverse_charge',
+        'total_invoice',
+        'tax_type',
+        'cgst_amount',
+        'sgst_amount',
+        'igst_amount',
+        'total_tax',
+        'taxable_value',
+        'gst_percentage'
+    ];
+    for (const col of columns) {
+        try {
+            await db.prepare(`ALTER TABLE gst_invoices ADD COLUMN ${col} TEXT`).run();
+        } catch (e) {
+            // Column already exists
+        }
+    }
+};
+initGstTableAndColumns();
+
 const gstController = {
     getSettings: async (req, res) => {
         try {
@@ -61,11 +94,17 @@ const gstController = {
             const now = new Date().toISOString();
             
             // Determine local state code from user settings
+            let sender_name = '';
+            let sender_gstin = '';
+            let sender_state = '';
             let stateCode = '33'; // Default to Tamil Nadu code
             const user = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
             if (user && user.settings) {
                 try {
                     const parsed = JSON.parse(user.settings);
+                    sender_name = parsed.company_name || parsed.legal_name || '';
+                    sender_gstin = parsed.gstin || '';
+                    sender_state = parsed.state || parsed.registered_state || 'Tamil Nadu';
                     if (parsed.state_code) {
                         stateCode = parsed.state_code;
                     }
@@ -85,16 +124,18 @@ const gstController = {
             // 1. Insert into gst_invoices
             const result = await db.prepare(`
                 INSERT INTO gst_invoices (
-                    user_id, invoice_number, client_name, customer_gstin, amount, gst_amount, 
+                    user_id, invoice_number, client_name, customer_name, customer_gstin, customer_state,
+                    sender_name, sender_gstin, sender_state, amount, gst_amount, 
                     invoice_type, place_of_supply, taxable_value, gst_percentage, 
-                    cgst_amount, sgst_amount, igst_amount, total_tax, 
-                    reverse_charge, irn_number, qr_status, is_eway_bill, is_reconciliation, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'false', 'false', ?)
+                    cgst, sgst, igst, cgst_amount, sgst_amount, igst_amount, total_tax, 
+                    reverse_charge, total_invoice, tax_type, irn_number, qr_status, is_eway_bill, is_reconciliation, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, ?, 'false', 'false', ?)
             `).run(
-                req.user.id, invoice_number, client_name, customer_gstin || null, total, tax,
+                req.user.id, invoice_number, client_name, client_name, customer_gstin || null, place_of_supply || '33-Tamil Nadu',
+                sender_name, sender_gstin, sender_state, total, tax,
                 invoice_type || 'B2B', place_of_supply || '33-Tamil Nadu', taxable, pct,
-                cgst, sgst, igst, tax,
-                reverse_charge || 'No', irn, 'Signed', now
+                cgst, sgst, igst, cgst, sgst, igst, tax,
+                reverse_charge || 'No', total, irn, 'Signed', now
             );
 
             // 2. Insert into business_invoices (Sales Register)
