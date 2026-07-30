@@ -97,6 +97,7 @@ const gstHelper = {
                     UPDATE gst_invoices SET
                         vendor_gstin = ?,
                         vendor_name = ?,
+                        client_name = ?,
                         invoice_number = ?,
                         invoice_date = ?,
                         amount = ?,
@@ -113,6 +114,7 @@ const gstHelper = {
                 `).run(
                     pur.supplier_gstin,
                     pur.supplier_name,
+                    pur.supplier_name || 'Unknown Vendor',
                     pur.purchase_number,
                     pur.purchase_date,
                     pur.grand_total,
@@ -130,15 +132,17 @@ const gstHelper = {
             } else {
                 await db.prepare(`
                     INSERT INTO gst_invoices (
-                        user_id, purchase_invoice_id, vendor_gstin, vendor_name, invoice_number, invoice_date,
+                        user_id, purchase_invoice_id, vendor_gstin, vendor_name, client_name,
+                        invoice_number, invoice_date,
                         amount, taxable_value, total_tax, cgst_amount, sgst_amount, igst_amount,
                         eligible_itc, invoice_match_status, status, is_reconciliation, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'true', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'true', ?, ?)
                 `).run(
                     userId || pur.user_id,
                     pur.id,
                     pur.supplier_gstin,
                     pur.supplier_name,
+                    pur.supplier_name || 'Unknown Vendor',
                     pur.purchase_number,
                     pur.purchase_date,
                     pur.grand_total,

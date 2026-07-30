@@ -85,7 +85,10 @@ const gstController = {
 
     getInvoices: async (req, res) => {
         try {
-            const invoices = await db.prepare("SELECT * FROM gst_invoices WHERE user_id = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)").all(req.user.id);
+            const isPg = process.env.DB_TYPE === 'postgres';
+            const notEway = isPg ? `(is_eway_bill IS NOT TRUE AND is_eway_bill::text NOT IN ('true','1'))` : `(is_eway_bill = 'false' OR is_eway_bill IS NULL)`;
+            const notRecon = isPg ? `(is_reconciliation IS NOT TRUE AND is_reconciliation::text NOT IN ('true','1'))` : `(is_reconciliation = 'false' OR is_reconciliation IS NULL)`;
+            const invoices = await db.prepare(`SELECT * FROM gst_invoices WHERE user_id = ? AND ${notEway} AND ${notRecon}`).all(req.user.id);
             return sendSuccess(res, invoices, 'GST Invoices fetched');
         } catch (e) {
             console.error('[GST Controller] getInvoices error:', e);
@@ -437,7 +440,10 @@ const gstController = {
     getGSTR3B: async (req, res) => {
         try {
             const isPg = process.env.DB_TYPE === 'postgres';
-            const sum = (col) => isPg ? `SUM(COALESCE("${col}", 0))` : `SUM(${col})`;
+            const sum = (col) => isPg ? `SUM(COALESCE("${col}"::numeric, 0))` : `SUM(COALESCE(${col}, 0))`;
+            const notEway = isPg ? `(is_eway_bill IS NOT TRUE AND is_eway_bill::text NOT IN ('true','1'))` : `(is_eway_bill = 'false' OR is_eway_bill IS NULL)`;
+            const notRecon = isPg ? `(is_reconciliation IS NOT TRUE AND is_reconciliation::text NOT IN ('true','1'))` : `(is_reconciliation = 'false' OR is_reconciliation IS NULL)`;
+            const isRecon = isPg ? `(is_reconciliation = true OR is_reconciliation::text IN ('true','1'))` : `is_reconciliation = 'true'`;
 
             // Output supplies (sales)
             const sales = await db.prepare(`
@@ -449,8 +455,8 @@ const gstController = {
                     ${sum('total_tax')} as tax
                 FROM gst_invoices 
                 WHERE user_id = ? 
-                  AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) 
-                  AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)
+                  AND ${notEway}
+                  AND ${notRecon}
             `).get(req.user.id);
 
             // Verified Eligible ITC (purchases)
@@ -463,20 +469,20 @@ const gstController = {
                     ${sum('eligible_itc')} as eligible_itc
                 FROM gst_invoices 
                 WHERE user_id = ? 
-                  AND is_reconciliation = 'true' 
+                  AND ${isRecon}
                   AND invoice_match_status = 'Verified'
             `).get(req.user.id);
 
-            const outward_taxable = sales.taxable || 0;
-            const outward_igst = sales.igst || 0;
-            const outward_cgst = sales.cgst || 0;
-            const outward_sgst = sales.sgst || 0;
-            const total_output_tax = sales.tax || 0;
+            const outward_taxable = parseFloat(sales?.taxable) || 0;
+            const outward_igst = parseFloat(sales?.igst) || 0;
+            const outward_cgst = parseFloat(sales?.cgst) || 0;
+            const outward_sgst = parseFloat(sales?.sgst) || 0;
+            const total_output_tax = parseFloat(sales?.tax) || 0;
 
-            const eligible_itc_igst = purchases.igst || 0;
-            const eligible_itc_cgst = purchases.cgst || 0;
-            const eligible_itc_sgst = purchases.sgst || 0;
-            const total_eligible_itc = purchases.eligible_itc || 0;
+            const eligible_itc_igst = parseFloat(purchases?.igst) || 0;
+            const eligible_itc_cgst = parseFloat(purchases?.cgst) || 0;
+            const eligible_itc_sgst = parseFloat(purchases?.sgst) || 0;
+            const total_eligible_itc = parseFloat(purchases?.eligible_itc) || 0;
 
             const net_payable_igst = Math.max(0, outward_igst - eligible_itc_igst);
             const net_payable_cgst = Math.max(0, outward_cgst - eligible_itc_cgst);
@@ -505,7 +511,10 @@ const gstController = {
     getGSTR9: async (req, res) => {
         try {
             const isPg = process.env.DB_TYPE === 'postgres';
-            const sum = (col) => isPg ? `SUM(COALESCE("${col}", 0))` : `SUM(${col})`;
+            const sum = (col) => isPg ? `SUM(COALESCE("${col}"::numeric, 0))` : `SUM(COALESCE(${col}, 0))`;
+            const notEway = isPg ? `(is_eway_bill IS NOT TRUE AND is_eway_bill::text NOT IN ('true','1'))` : `(is_eway_bill = 'false' OR is_eway_bill IS NULL)`;
+            const notRecon = isPg ? `(is_reconciliation IS NOT TRUE AND is_reconciliation::text NOT IN ('true','1'))` : `(is_reconciliation = 'false' OR is_reconciliation IS NULL)`;
+            const isRecon = isPg ? `(is_reconciliation = true OR is_reconciliation::text IN ('true','1'))` : `is_reconciliation = 'true'`;
 
             const sales = await db.prepare(`
                 SELECT
@@ -513,8 +522,8 @@ const gstController = {
                     ${sum('total_tax')} as tax
                 FROM gst_invoices
                 WHERE user_id = ?
-                  AND (is_eway_bill = 'false' OR is_eway_bill IS NULL)
-                  AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)
+                  AND ${notEway}
+                  AND ${notRecon}
             `).get(req.user.id);
 
             const purchases = await db.prepare(`
@@ -522,14 +531,14 @@ const gstController = {
                     ${sum('eligible_itc')} as itc
                 FROM gst_invoices
                 WHERE user_id = ?
-                  AND is_reconciliation = 'true'
+                  AND ${isRecon}
                   AND invoice_match_status = 'Verified'
             `).get(req.user.id);
             
             return sendSuccess(res, {
-                consolidated_turnover: sales.taxable || 0,
-                total_tax_paid_outward: sales.tax || 0,
-                total_itc_availed: purchases.itc || 0,
+                consolidated_turnover: parseFloat(sales?.taxable) || 0,
+                total_tax_paid_outward: parseFloat(sales?.tax) || 0,
+                total_itc_availed: parseFloat(purchases?.itc) || 0,
                 fiscal_year: 'FY 2025-26',
                 status: 'Draft'
             }, 'GSTR-9 report fetched');
