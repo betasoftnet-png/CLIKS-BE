@@ -38,13 +38,27 @@ const gstController = {
 
     generateInvoice: async (req, res) => {
         try {
-            const { invoice_type, place_of_supply, taxable_value, gst_percentage, reverse_charge } = req.body;
+            const { invoice_type, place_of_supply, taxable_value, gst_percentage, reverse_charge, client_name, customer_gstin } = req.body;
             const taxable = parseFloat(taxable_value) || 0;
             const pct = parseFloat(gst_percentage) || 18;
             const tax = taxable * (pct / 100);
             const total = taxable + tax;
             
-            const isLocal = place_of_supply ? place_of_supply.startsWith('27') : true;
+            // Determine local state code from user settings
+            let stateCode = '33'; // Default to Tamil Nadu code
+            const user = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+            if (user && user.settings) {
+                try {
+                    const parsed = JSON.parse(user.settings);
+                    if (parsed.state_code) {
+                        stateCode = parsed.state_code;
+                    }
+                } catch (e) {
+                    // Ignore parsing error
+                }
+            }
+            
+            const isLocal = place_of_supply ? place_of_supply.startsWith(stateCode) : true;
             const cgst = isLocal ? tax / 2 : 0;
             const sgst = isLocal ? tax / 2 : 0;
             const igst = isLocal ? 0 : tax;
@@ -54,14 +68,14 @@ const gstController = {
             
             const result = await db.prepare(`
                 INSERT INTO gst_invoices (
-                    user_id, invoice_number, client_name, amount, gst_amount, 
+                    user_id, invoice_number, client_name, customer_gstin, amount, gst_amount, 
                     invoice_type, place_of_supply, taxable_value, gst_percentage, 
                     cgst_amount, sgst_amount, igst_amount, total_tax, 
                     reverse_charge, irn_number, qr_status, is_eway_bill, is_reconciliation, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'false', 'false', ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'false', 'false', ?)
             `).run(
-                req.user.id, invoice_number, 'Client Name', total, tax,
-                invoice_type || 'B2B', place_of_supply || '27-Maharashtra', taxable, pct,
+                req.user.id, invoice_number, client_name || 'Client Name', customer_gstin || null, total, tax,
+                invoice_type || 'B2B', place_of_supply || '33-Tamil Nadu', taxable, pct,
                 cgst, sgst, igst, tax,
                 reverse_charge || 'No', irn, 'Signed', new Date().toISOString()
             );
