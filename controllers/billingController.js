@@ -338,6 +338,10 @@ const billingController = {
         const { id } = req.params;
         try {
             await db.prepare("UPDATE business_invoices SET status = 'Cancelled', updated_at = ? WHERE id = ? AND user_id = ?").run(new Date().toISOString(), id, req.user.id);
+
+            // Sync status to GSTR-1
+            await gstHelper.syncInvoiceToGstr1(id, req.user.id);
+
             await logBusinessAudit(req.user.id, 'INVOICE_CANCEL', `Cancelled invoice ID ${id}`, 'WARN');
             return sendSuccess(res, { id, status: 'Cancelled' }, 'Invoice successfully cancelled');
         } catch (e) { return sendError(res, 'Failed to cancel invoice', 500); }

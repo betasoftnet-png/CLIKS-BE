@@ -172,12 +172,15 @@ const gstHelper = {
             const inv = await db.prepare("SELECT * FROM business_invoices WHERE id = ?").get(invoiceId);
             if (!inv) return;
 
-            // Only sync GST invoices or those with tax
-            const taxAmt = parseFloat(inv.tax_amount || 0);
-            if (inv.invoice_type !== 'GST' && taxAmt <= 0) return;
+            // Determine Invoice Type (B2B, B2C, Export)
+            let invoiceType = 'B2C';
+            if (inv.invoice_type === 'Export') {
+                invoiceType = 'Export';
+            } else if (inv.client_gstin && inv.client_gstin.trim() !== '' && inv.client_gstin !== 'URD-CONSUMER' && inv.client_gstin !== 'URD-UNREGISTERED') {
+                invoiceType = 'B2B';
+            }
 
-            const clientGstin = inv.client_gstin && inv.client_gstin.trim() !== '' ? inv.client_gstin : 'URD-CONSUMER';
-            const invoiceType = clientGstin === 'URD-CONSUMER' ? 'B2C' : 'B2B';
+            const clientGstin = (invoiceType === 'B2B') ? inv.client_gstin : 'URD-CONSUMER';
 
             // Determine local state code from user settings
             let senderStateCode = '33';
@@ -210,14 +213,16 @@ const gstHelper = {
             }
 
             const isLocal = senderStateCode === receiverStateCode;
-            const tax = taxAmt;
+            const tax = parseFloat(inv.tax_amount || 0);
             const cgst = isLocal ? tax / 2 : 0;
             const sgst = isLocal ? tax / 2 : 0;
             const igst = isLocal ? 0 : tax;
 
+            // Sync with existing record in gst_invoices using invoice_number as unique key
             const existing = await db.prepare("SELECT id FROM gst_invoices WHERE invoice_number = ? AND user_id = ?").get(inv.invoice_number, inv.user_id);
 
             const now = new Date().toISOString();
+            const invoiceStatus = inv.status === 'Cancelled' ? 'Cancelled' : 'READY';
 
             if (existing) {
                 await db.prepare(`
@@ -239,6 +244,7 @@ const gstHelper = {
                         igst_amount = ?,
                         total_tax = ?,
                         total_invoice = ?,
+                        status = ?,
                         updated_at = ?
                     WHERE id = ?
                 `).run(
@@ -259,6 +265,7 @@ const gstHelper = {
                     igst,
                     tax,
                     inv.total_amount,
+                    invoiceStatus,
                     now,
                     existing.id
                 );
@@ -270,7 +277,7 @@ const gstHelper = {
                         invoice_type, place_of_supply, taxable_value,
                         cgst_amount, sgst_amount, igst_amount, total_tax, total_invoice,
                         tax_type, is_eway_bill, is_reconciliation, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', 'false', 'false', 'READY', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', 'false', 'false', ?, ?, ?)
                 `).run(
                     userId || inv.user_id,
                     inv.invoice_number,
@@ -291,6 +298,7 @@ const gstHelper = {
                     igst,
                     tax,
                     inv.total_amount,
+                    invoiceStatus,
                     inv.created_at || now,
                     now
                 );
