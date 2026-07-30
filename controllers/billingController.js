@@ -277,13 +277,12 @@ const billingController = {
             const inv = await db.prepare('SELECT invoice_number FROM business_invoices WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (inv) {
                 await db.prepare("DELETE FROM accounting WHERE user_id = ? AND notes = ?").run(req.user.id, `Invoice #${inv.invoice_number}`);
+
+                // Sync to GSTR-1 (deletion)
+                await gstHelper.syncInvoiceToGstr1(id, req.user.id, inv.invoice_number);
             }
 
             await db.prepare('DELETE FROM business_invoices WHERE id = ?').run(id);
-
-            // Sync to GSTR-1 (deletion)
-            await gstHelper.syncInvoiceToGstr1(id, req.user.id);
-
             await logBusinessAudit(req.user.id, 'INVOICE_DELETE', `Deleted invoice ID ${id}`, 'WARN');
             return sendSuccess(res, null, 'Invoice deleted successfully');
         } catch (error) {

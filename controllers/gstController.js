@@ -36,11 +36,37 @@ const initGstTableAndColumns = async () => {
         'invoice_date',
         'gst_amount',
         'status',
-        'updated_at'
+        'updated_at',
+        'transport_mode',
+        'transporter_name',
+        'transporter_gstin',
+        'vehicle_number',
+        'transport_distance',
+        'dispatch_location',
+        'delivery_location',
+        'eway_bill_number',
+        'is_eway_bill',
+        'is_reconciliation',
+        'goods_product_name',
+        'goods_hsn_code',
+        'goods_quantity',
+        'goods_unit',
+        'reference_invoice',
+        'items',
+        'amount',
+        'eligible_itc',
+        'invoice_match_status',
+        'mismatch_reason',
+        'reconciliation_date'
     ];
+    const isPg = process.env.DB_TYPE === 'postgres';
     for (const col of columns) {
         try {
-            await db.prepare(`ALTER TABLE gst_invoices ADD COLUMN ${col} TEXT`).run();
+            if (isPg) {
+                await db.prepare(`ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS ${col} TEXT`).run();
+            } else {
+                await db.prepare(`ALTER TABLE gst_invoices ADD COLUMN ${col} TEXT`).run();
+            }
         } catch (e) {
             // Column already exists
         }
@@ -53,12 +79,13 @@ const initGstTableAndColumns = async () => {
             await gstHelper.syncPurchaseToGstr2b(pur.id, pur.user_id);
         }
 
-        const sales = await db.prepare("SELECT id, user_id FROM business_invoices WHERE invoice_type = 'GST' OR tax_amount > 0").all();
+        const sales = await db.prepare("SELECT id, user_id FROM business_invoices WHERE invoice_type = 'GST' OR (tax_amount IS NOT NULL AND tax_amount > 0)").all();
         for (const inv of sales) {
             await gstHelper.syncInvoiceToGstr1(inv.id, inv.user_id);
         }
+        console.log('✅ GST Tables initialization and sync completed');
     } catch (e) {
-        console.error('[GST Controller Startup Sync] Error:', e);
+        console.error('❌ [GST Controller Startup Sync] Error:', e);
     }
 };
 initGstTableAndColumns();
@@ -92,22 +119,23 @@ const gstController = {
         try {
             const isPg = process.env.DB_TYPE === 'postgres';
 
-            // Comprehensive filters to exclude e-way bills and reconciliation entries
+            // Comprehensive filters to return GSTR-1 records (Sales)
+            // Exclude e-way bills and reconciliation entries using both string and integer checks
             let query = `SELECT * FROM gst_invoices WHERE user_id = ?`;
             if (isPg) {
                 query += ` AND (is_eway_bill IS NOT TRUE AND is_eway_bill::text NOT IN ('true','1'))`;
                 query += ` AND (is_reconciliation IS NOT TRUE AND is_reconciliation::text NOT IN ('true','1'))`;
             } else {
-                query += ` AND (is_eway_bill = 'false' OR is_eway_bill = '0' OR is_eway_bill IS NULL)`;
-                query += ` AND (is_reconciliation = 'false' OR is_reconciliation = '0' OR is_reconciliation IS NULL)`;
+                query += ` AND (is_eway_bill IS NULL OR is_eway_bill NOT IN ('true', '1', 1))`;
+                query += ` AND (is_reconciliation IS NULL OR is_reconciliation NOT IN ('true', '1', 1))`;
             }
 
-            // Only include sales invoices (B2B, B2C, Export)
-            query += ` AND invoice_type IN ('B2B', 'B2C', 'Export', 'GST')`;
+            // Ensure record has an invoice number (indicates an actual document)
+            query += ` AND invoice_number IS NOT NULL AND invoice_number != ''`;
             query += ` ORDER BY created_at DESC`;
 
             const invoices = await db.prepare(query).all(req.user.id);
-            return sendSuccess(res, invoices, 'GST Invoices (GSTR-1) fetched');
+            return sendSuccess(res, invoices || [], 'GST Invoices fetched');
         } catch (e) {
             console.error('[GST Controller] getInvoices error:', e);
             return sendError(res, `Get Invoices Error: ${e.message}`, 500);

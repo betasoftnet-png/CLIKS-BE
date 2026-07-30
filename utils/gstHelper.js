@@ -161,18 +161,20 @@ const gstHelper = {
         }
     },
 
-    syncInvoiceToGstr1: async (invoiceId, userId) => {
+    syncInvoiceToGstr1: async (invoiceId, userId, deletedInvoiceNumber = null) => {
         try {
-            // 1. Fetch sales invoice record
-            const inv = await db.prepare("SELECT * FROM business_invoices WHERE id = ?").get(invoiceId);
-            if (!inv) {
-                // If invoice was deleted, delete corresponding GSTR-1 entry (unless it's an e-Invoice which should persist)
-                await db.prepare("DELETE FROM gst_invoices WHERE reference_invoice = ? AND (irn_number IS NULL OR irn_number = '')").run(invoiceId);
+            if (deletedInvoiceNumber) {
+                await db.prepare("DELETE FROM gst_invoices WHERE invoice_number = ? AND user_id = ? AND (is_reconciliation IS NULL OR is_reconciliation NOT IN ('true', '1', 1))").run(deletedInvoiceNumber, userId);
                 return;
             }
 
-            // Only sync GST invoices
-            if (inv.invoice_type !== 'GST' && (!inv.tax_amount || inv.tax_amount == 0)) return;
+            // 1. Fetch sales invoice record
+            const inv = await db.prepare("SELECT * FROM business_invoices WHERE id = ?").get(invoiceId);
+            if (!inv) return;
+
+            // Only sync GST invoices or those with tax
+            const taxAmt = parseFloat(inv.tax_amount || 0);
+            if (inv.invoice_type !== 'GST' && taxAmt <= 0) return;
 
             const clientGstin = inv.client_gstin && inv.client_gstin.trim() !== '' ? inv.client_gstin : 'URD-CONSUMER';
             const invoiceType = clientGstin === 'URD-CONSUMER' ? 'B2C' : 'B2B';
@@ -196,27 +198,28 @@ const gstHelper = {
                 } catch (e) {}
             }
 
-            const placeOfSupply = inv.billing_address || inv.shipping_address || ''; // Simplified
-            // Try to extract state code from place of supply if it follows "33-State" format
+            const placeOfSupply = inv.billing_address || inv.shipping_address || senderState;
             let receiverStateCode = senderStateCode;
             if (placeOfSupply.includes('-')) {
-                receiverStateCode = placeOfSupply.split('-')[0].trim();
+                const parts = placeOfSupply.split('-');
+                if (parts[0].trim().length === 2) {
+                    receiverStateCode = parts[0].trim();
+                }
+            } else if (inv.client_gstin && inv.client_gstin.length >= 2) {
+                receiverStateCode = inv.client_gstin.substring(0, 2);
             }
 
             const isLocal = senderStateCode === receiverStateCode;
-            const tax = parseFloat(inv.tax_amount) || 0;
+            const tax = taxAmt;
             const cgst = isLocal ? tax / 2 : 0;
             const sgst = isLocal ? tax / 2 : 0;
             const igst = isLocal ? 0 : tax;
 
-            // Check if record already exists in GSTR-1 (gst_invoices)
-            // We use invoice_number as a key to avoid duplicates with e-Invoices
-            const existing = await db.prepare("SELECT id, irn_number FROM gst_invoices WHERE invoice_number = ? AND user_id = ?").get(inv.invoice_number, inv.user_id);
+            const existing = await db.prepare("SELECT id FROM gst_invoices WHERE invoice_number = ? AND user_id = ?").get(inv.invoice_number, inv.user_id);
 
             const now = new Date().toISOString();
 
             if (existing) {
-                // Update existing record but DON'T overwrite e-Invoice fields if they exist
                 await db.prepare(`
                     UPDATE gst_invoices SET
                         client_name = ?,
@@ -242,14 +245,14 @@ const gstHelper = {
                     inv.client_name,
                     inv.client_name,
                     clientGstin,
-                    placeOfSupply || senderState,
+                    placeOfSupply,
                     senderName,
                     senderGstin,
                     senderState,
                     inv.total_amount,
                     inv.tax_amount,
                     invoiceType,
-                    placeOfSupply || senderState,
+                    placeOfSupply,
                     inv.amount,
                     cgst,
                     sgst,
@@ -274,14 +277,14 @@ const gstHelper = {
                     inv.client_name,
                     inv.client_name,
                     clientGstin,
-                    placeOfSupply || senderState,
+                    placeOfSupply,
                     senderName,
                     senderGstin,
                     senderState,
                     inv.total_amount,
                     inv.tax_amount,
                     invoiceType,
-                    placeOfSupply || senderState,
+                    placeOfSupply,
                     inv.amount,
                     cgst,
                     sgst,

@@ -1845,7 +1845,15 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS sgst NUMERIC DEFAULT 0;`,
       `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS igst NUMERIC DEFAULT 0;`,
       `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS purchase_invoice_id INTEGER;`,
-      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS invoice_date VARCHAR(100);`
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS invoice_date VARCHAR(100);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS transport_mode TEXT;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS transporter_gstin TEXT;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS goods_product_name TEXT;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS goods_hsn_code TEXT;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS goods_quantity NUMERIC;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS goods_unit TEXT;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS eway_bill_number TEXT;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS items TEXT;`
     ];
     try {
       for (const q of pgAlters) await db.pool.query(q);
