@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { recordAudit } = require('../utils/auditLogger');
+const gstHelper = require('../utils/gstHelper');
 
 const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') => {
     try {
@@ -125,6 +126,7 @@ const purchaseController = {
                 `).run(req.user.id, purchase_date || now.split('T')[0], unpaidAmount, `Purchase #${purchase_number} (Credit Purchase)`, now, now);
             }
 
+            await gstHelper.syncPurchaseToGstr2b(purchaseId, req.user.id);
             await logBusinessAudit(req.user.id, 'PURCHASE_CREATE', `Created purchase document ${purchase_number} (${doc_type}) for supplier ${supplier_name} (amount: ₹${grand_total})`, 'SUCCESS');
             return sendSuccess(res, created, 'Purchase document created successfully', 201);
         } catch (error) {
@@ -239,6 +241,7 @@ const purchaseController = {
             const updated = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(id);
             updated.items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(id);
 
+            await gstHelper.syncPurchaseToGstr2b(id, req.user.id);
             await logBusinessAudit(req.user.id, 'PURCHASE_UPDATE', `Updated purchase record ID ${id} (${doc_type}) for supplier ${supplier_name} (amount: ₹${grand_total})`, 'INFO');
             return sendSuccess(res, updated, 'Purchase record updated successfully');
         } catch (error) {
@@ -257,6 +260,7 @@ const purchaseController = {
             }
 
             await db.prepare('DELETE FROM business_purchases WHERE id = ?').run(id);
+            await gstHelper.syncPurchaseToGstr2b(id, req.user.id);
             await logBusinessAudit(req.user.id, 'PURCHASE_DELETE', `Deleted purchase record ID ${id}`, 'WARN');
             return sendSuccess(res, null, 'Purchase record deleted successfully');
         } catch (error) {
@@ -310,6 +314,7 @@ const purchaseController = {
             );
 
             const createdItem = await db.prepare('SELECT * FROM business_purchase_items WHERE id = ?').get(result.lastInsertRowid);
+            await gstHelper.syncPurchaseToGstr2b(id, req.user.id);
             return sendSuccess(res, createdItem, 'Purchase item added successfully', 201);
         } catch (error) {
             console.error('[Purchase Controller] Error adding item:', error);
@@ -339,6 +344,7 @@ const purchaseController = {
             );
 
             const updatedItem = await db.prepare('SELECT * FROM business_purchase_items WHERE id = ?').get(itemId);
+            await gstHelper.syncPurchaseToGstr2b(id, req.user.id);
             return sendSuccess(res, updatedItem, 'Purchase item updated successfully');
         } catch (error) {
             console.error('[Purchase Controller] Error updating item:', error);
@@ -354,6 +360,7 @@ const purchaseController = {
             if (!purchase) return sendError(res, 'Purchase not found', 404);
 
             await db.prepare('DELETE FROM business_purchase_items WHERE id = ? AND purchase_id = ?').run(itemId, id);
+            await gstHelper.syncPurchaseToGstr2b(id, req.user.id);
             return sendSuccess(res, null, 'Purchase item removed successfully');
         } catch (error) {
             console.error('[Purchase Controller] Error deleting item:', error);
@@ -370,6 +377,7 @@ const purchaseController = {
             if (!purchase) return sendError(res, 'Purchase record not found', 404);
 
             await db.prepare('UPDATE business_purchases SET status = ?, updated_at = ? WHERE id = ?').run(status, new Date().toISOString(), id);
+            await gstHelper.syncPurchaseToGstr2b(id, req.user.id);
             return sendSuccess(res, { id, status }, 'Purchase status updated successfully');
         } catch (error) {
             console.error('[Purchase Controller] Error updating purchase status:', error);

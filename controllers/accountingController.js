@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const gstHelper = require('../utils/gstHelper');
 
 const hasFinancePermission = async (req) => {
     if (!req.user) return false;
@@ -212,7 +213,7 @@ const accountingController = {
             entry_type, date, amount, category, mode, notes,
             customer_name, invoice_number, due_date,
             supplier_name, bill_number, reference_number,
-            payment_mode_from, payment_mode_to
+            payment_mode_from, payment_mode_to, supplier_gstin
         } = req.body;
 
         try {
@@ -353,11 +354,13 @@ const accountingController = {
 
                 // Log a simple purchase record for consistency
                 const purchaseNum = `EXP-${Date.now().toString().slice(-6)}`;
-                await db.prepare(`
+                const purResult = await db.prepare(`
                     INSERT INTO business_purchases (
                         user_id, purchase_number, purchase_date, due_date, supplier_name, payment_status, payment_mode, paid_amount, grand_total, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, 'Generic Cash Supplier', 'paid', ?, ?, ?, ?, ?)
                 `).run(req.user.id, purchaseNum, dateStr, dateStr, mode || 'Cash in Hand', parsedAmount, parsedAmount, now, now);
+
+                await gstHelper.syncPurchaseToGstr2b(purResult.lastInsertRowid, req.user.id);
 
                 const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
                 return sendSuccess(res, inserted, 'Expense recorded successfully', 201);
@@ -375,12 +378,14 @@ const accountingController = {
                 if (exists) return sendError(res, 'Bill number already exists', 400);
 
                 // 1. Create bill in business_purchases
-                await db.prepare(`
+                const purResult = await db.prepare(`
                     INSERT INTO business_purchases (
-                        user_id, purchase_number, purchase_date, due_date, status, supplier_name,
+                        user_id, purchase_number, purchase_date, due_date, status, supplier_name, supplier_gstin,
                         payment_status, payment_mode, paid_amount, grand_total, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 'Pending', ?, 'pending', 'Credit', 0, ?, ?, ?)
-                `).run(req.user.id, billNum, dateStr, due_date, supplier_name, parsedAmount, now, now);
+                    ) VALUES (?, ?, ?, ?, 'Pending', ?, ?, 'pending', 'Credit', 0, ?, ?, ?)
+                `).run(req.user.id, billNum, dateStr, due_date, supplier_name, supplier_gstin || null, parsedAmount, now, now);
+
+                await gstHelper.syncPurchaseToGstr2b(purResult.lastInsertRowid, req.user.id);
 
                 // 2. Create accounting entry (P&L accrual expense, without affecting Cash/Bank balances)
                 const result = await db.prepare(`
@@ -407,6 +412,8 @@ const accountingController = {
                 // 1. Update bill
                 await db.prepare('UPDATE business_purchases SET paid_amount = ?, payment_status = ?, status = ? WHERE id = ?')
                     .run(newPaid, newPaid >= grandTotal ? 'paid' : 'partial', newStatus, bill.id);
+
+                await gstHelper.syncPurchaseToGstr2b(bill.id, req.user.id);
 
                 // 2. Create accounting entry (Supplier Payment category to avoid P&L double-counting)
                 const result = await db.prepare(`

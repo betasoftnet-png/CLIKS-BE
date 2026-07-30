@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const gstHelper = require('../utils/gstHelper');
 
 const initGstTableAndColumns = async () => {
     const columns = [
@@ -27,7 +28,14 @@ const initGstTableAndColumns = async () => {
         'lut_document_path',
         'lut_file_name',
         'lut_uploaded_at',
-        'lut_uploaded_by'
+        'lut_uploaded_by',
+        'purchase_invoice_id',
+        'vendor_name',
+        'vendor_gstin',
+        'invoice_number',
+        'invoice_date',
+        'gst_amount',
+        'status'
     ];
     for (const col of columns) {
         try {
@@ -35,6 +43,16 @@ const initGstTableAndColumns = async () => {
         } catch (e) {
             // Column already exists
         }
+    }
+
+    // Automatically sync existing purchases to GSTR-2B
+    try {
+        const purchases = await db.prepare("SELECT id, user_id FROM business_purchases").all();
+        for (const pur of purchases) {
+            await gstHelper.syncPurchaseToGstr2b(pur.id, pur.user_id);
+        }
+    } catch (e) {
+        console.error('[GST Controller Startup Sync] Error:', e);
     }
 };
 initGstTableAndColumns();
@@ -391,18 +409,62 @@ const gstController = {
 
     getGSTR3B: async (req, res) => {
         try {
-            const sales = await db.prepare("SELECT SUM(taxable_value) as taxable, SUM(total_tax) as tax FROM gst_invoices WHERE user_id = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)").get(req.user.id);
-            const purchases = await db.prepare("SELECT SUM(taxable_value) as taxable, SUM(total_tax) as tax FROM gst_invoices WHERE user_id = ? AND is_reconciliation = 'true'").get(req.user.id);
-            
+            // Output supplies (sales)
+            const sales = await db.prepare(`
+                SELECT 
+                    SUM(taxable_value) as taxable,
+                    SUM(cgst_amount) as cgst,
+                    SUM(sgst_amount) as sgst,
+                    SUM(igst_amount) as igst,
+                    SUM(total_tax) as tax
+                FROM gst_invoices 
+                WHERE user_id = ? 
+                  AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) 
+                  AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)
+            `).get(req.user.id);
+
+            // Verified Eligible ITC (purchases)
+            const purchases = await db.prepare(`
+                SELECT 
+                    SUM(taxable_value) as taxable,
+                    SUM(cgst_amount) as cgst,
+                    SUM(sgst_amount) as sgst,
+                    SUM(igst_amount) as igst,
+                    SUM(eligible_itc) as eligible_itc
+                FROM gst_invoices 
+                WHERE user_id = ? 
+                  AND is_reconciliation = 'true' 
+                  AND invoice_match_status = 'Verified'
+            `).get(req.user.id);
+
+            const outward_taxable = sales.taxable || 0;
+            const outward_igst = sales.igst || 0;
+            const outward_cgst = sales.cgst || 0;
+            const outward_sgst = sales.sgst || 0;
+            const total_output_tax = sales.tax || 0;
+
+            const eligible_itc_igst = purchases.igst || 0;
+            const eligible_itc_cgst = purchases.cgst || 0;
+            const eligible_itc_sgst = purchases.sgst || 0;
+            const total_eligible_itc = purchases.eligible_itc || 0;
+
+            const net_payable_igst = Math.max(0, outward_igst - eligible_itc_igst);
+            const net_payable_cgst = Math.max(0, outward_cgst - eligible_itc_cgst);
+            const net_payable_sgst = Math.max(0, outward_sgst - eligible_itc_sgst);
+
             return sendSuccess(res, {
-                outward_supplies: {
-                    taxable_value: sales.taxable || 0,
-                    total_tax: sales.tax || 0
-                },
-                eligible_itc: {
-                    taxable_value: purchases.taxable || 0,
-                    total_tax: purchases.tax || 0
-                }
+                outward_taxable,
+                outward_igst,
+                outward_cgst,
+                outward_sgst,
+                total_output_tax,
+                eligible_itc_igst,
+                eligible_itc_cgst,
+                eligible_itc_sgst,
+                total_eligible_itc,
+                net_payable_igst,
+                net_payable_cgst,
+                net_payable_sgst
             }, 'GSTR-3B report fetched');
         } catch (e) {
             console.error('[GST Controller] getGSTR3B error:', e);
@@ -412,10 +474,14 @@ const gstController = {
 
     getGSTR9: async (req, res) => {
         try {
-            const result = await db.prepare("SELECT SUM(amount) as total_sales, SUM(total_tax) as total_tax FROM gst_invoices WHERE user_id = ?").get(req.user.id);
+            const sales = await db.prepare("SELECT SUM(taxable_value) as taxable, SUM(total_tax) as tax FROM gst_invoices WHERE user_id = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)").get(req.user.id);
+            const purchases = await db.prepare("SELECT SUM(eligible_itc) as itc FROM gst_invoices WHERE user_id = ? AND is_reconciliation = 'true' AND invoice_match_status = 'Verified'").get(req.user.id);
+            
             return sendSuccess(res, {
-                total_sales: result.total_sales || 0,
-                total_tax: result.total_tax || 0,
+                consolidated_turnover: sales.taxable || 0,
+                total_tax_paid_outward: sales.tax || 0,
+                total_itc_availed: purchases.itc || 0,
+                fiscal_year: 'FY 2025-26',
                 status: 'Draft'
             }, 'GSTR-9 report fetched');
         } catch (e) {
