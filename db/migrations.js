@@ -1932,7 +1932,11 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE transactions ADD COLUMN name TEXT',
       'ALTER TABLE transactions ADD COLUMN time TEXT',
       'ALTER TABLE transactions ADD COLUMN schedule TEXT',
-      'ALTER TABLE people_reminders ADD COLUMN amount REAL'
+      'ALTER TABLE people_reminders ADD COLUMN amount REAL',
+      'ALTER TABLE expenses ADD COLUMN proof_file_path TEXT',
+      'ALTER TABLE expenses ADD COLUMN proof_file_name TEXT',
+      'ALTER TABLE expenses ADD COLUMN proof_file_type TEXT',
+      'ALTER TABLE expenses ADD COLUMN proof_timestamp TEXT'
     ];
 
     alterQueries.forEach(query => {

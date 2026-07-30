@@ -391,7 +391,18 @@ const expensesController = {
 
     // 7. Reimbursements claims
     reimburseExpense: async (req, res) => {
-        const { employee_name, travel_expense, claim_amount, receipt, date, time } = req.body;
+        const { 
+            employee_name, 
+            travel_expense, 
+            claim_amount, 
+            receipt, 
+            date, 
+            time,
+            proof_file_path,
+            proof_file_name,
+            proof_file_type,
+            proof_timestamp
+        } = req.body;
         try {
             const now = new Date().toISOString();
             const val = parseFloat(claim_amount) || 0;
@@ -399,9 +410,25 @@ const expensesController = {
             const finalTime = time || now.split('T')[1].slice(0, 5);
             const result = await db.prepare(`
                 INSERT INTO expenses (
-                    user_id, amount, employee_name, travel_expense, claim_amount, reimbursement_status, is_claim, receipt, date, time, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'Pending', 'true', ?, ?, ?, ?, ?)
-            `).run(req.user.id, val, employee_name, travel_expense, val, receipt || null, finalDate, finalTime, now, now);
+                    user_id, amount, employee_name, travel_expense, claim_amount, reimbursement_status, is_claim, receipt, date, time, 
+                    proof_file_path, proof_file_name, proof_file_type, proof_timestamp, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'Pending', 'true', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                req.user.id, 
+                val, 
+                employee_name, 
+                travel_expense, 
+                val, 
+                receipt || null, 
+                finalDate, 
+                finalTime, 
+                proof_file_path || null,
+                proof_file_name || null,
+                proof_file_type || null,
+                proof_timestamp || null,
+                now, 
+                now
+            );
 
             const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
             return sendSuccess(res, inserted, 'Reimbursement claim lodged successfully', 201);
