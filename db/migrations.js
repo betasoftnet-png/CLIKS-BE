@@ -1827,7 +1827,23 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS name VARCHAR(255);`,
       `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS time VARCHAR(50);`,
       `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS schedule VARCHAR(100);`,
-      `ALTER TABLE people_reminders ADD COLUMN IF NOT EXISTS amount NUMERIC;`
+      `ALTER TABLE people_reminders ADD COLUMN IF NOT EXISTS amount NUMERIC;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS customer_gstin VARCHAR(50);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS customer_state VARCHAR(100);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS sender_name VARCHAR(255);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS sender_gstin VARCHAR(50);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS sender_state VARCHAR(100);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS export_under_lut VARCHAR(50) DEFAULT 'false';`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS lut_document_path TEXT;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS lut_file_name VARCHAR(255);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS lut_uploaded_at VARCHAR(100);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS lut_uploaded_by VARCHAR(255);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS tax_type VARCHAR(100) DEFAULT 'Exclusive';`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS total_invoice NUMERIC DEFAULT 0;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS cgst NUMERIC DEFAULT 0;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS sgst NUMERIC DEFAULT 0;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS igst NUMERIC DEFAULT 0;`
     ];
     try {
       for (const q of pgAlters) await db.pool.query(q);
@@ -1941,6 +1957,21 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE expenses ADD COLUMN proof_file_type TEXT',
       'ALTER TABLE expenses ADD COLUMN proof_timestamp TEXT',
       'ALTER TABLE gst_invoices ADD COLUMN customer_gstin TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN customer_name TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN customer_state TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN sender_name TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN sender_gstin TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN sender_state TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN export_under_lut TEXT DEFAULT \'false\'',
+      'ALTER TABLE gst_invoices ADD COLUMN lut_document_path TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN lut_file_name TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN lut_uploaded_at TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN lut_uploaded_by TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN tax_type TEXT DEFAULT \'Exclusive\'',
+      'ALTER TABLE gst_invoices ADD COLUMN total_invoice REAL DEFAULT 0',
+      'ALTER TABLE gst_invoices ADD COLUMN cgst REAL DEFAULT 0',
+      'ALTER TABLE gst_invoices ADD COLUMN sgst REAL DEFAULT 0',
+      'ALTER TABLE gst_invoices ADD COLUMN igst REAL DEFAULT 0',
       'ALTER TABLE expenses ADD COLUMN team_members TEXT'
     ];
 
