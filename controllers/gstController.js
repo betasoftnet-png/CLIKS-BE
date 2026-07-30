@@ -22,7 +22,12 @@ const initGstTableAndColumns = async () => {
         'igst_amount',
         'total_tax',
         'taxable_value',
-        'gst_percentage'
+        'gst_percentage',
+        'export_under_lut',
+        'lut_document_path',
+        'lut_file_name',
+        'lut_uploaded_at',
+        'lut_uploaded_by'
     ];
     for (const col of columns) {
         try {
@@ -71,7 +76,7 @@ const gstController = {
 
     generateInvoice: async (req, res) => {
         try {
-            const { invoice_type, place_of_supply, taxable_value, gst_percentage, reverse_charge, client_name, customer_gstin } = req.body;
+            const { invoice_type, place_of_supply, taxable_value, gst_percentage, reverse_charge, client_name, customer_gstin, export_under_lut, lut_document_path, lut_file_name, lut_uploaded_at, lut_uploaded_by } = req.body;
             
             // Validate required fields
             if (!client_name) {
@@ -84,8 +89,14 @@ const gstController = {
             if (taxable <= 0) {
                 return sendError(res, 'Taxable Value must be greater than 0', 400);
             }
-            const pct = parseFloat(gst_percentage) || 12;
-            if (![5, 12, 18, 28].includes(pct)) {
+            
+            const isLut = invoice_type === 'Export' && String(export_under_lut) === 'true';
+            if (isLut && !lut_document_path) {
+                return sendError(res, 'LUT Document is mandatory for Export under LUT/Bond', 400);
+            }
+
+            const pct = isLut ? 0 : (parseFloat(gst_percentage) || 12);
+            if (![0, 5, 12, 18, 28].includes(pct)) {
                 return sendError(res, 'Invalid GST Percentage', 400);
             }
 
@@ -128,14 +139,16 @@ const gstController = {
                     sender_name, sender_gstin, sender_state, amount, gst_amount, 
                     invoice_type, place_of_supply, taxable_value, gst_percentage, 
                     cgst, sgst, igst, cgst_amount, sgst_amount, igst_amount, total_tax, 
-                    reverse_charge, total_invoice, tax_type, irn_number, qr_status, is_eway_bill, is_reconciliation, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, ?, 'false', 'false', ?)
+                    reverse_charge, total_invoice, tax_type, irn_number, qr_status, is_eway_bill, is_reconciliation, created_at,
+                    export_under_lut, lut_document_path, lut_file_name, lut_uploaded_at, lut_uploaded_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, ?, 'false', 'false', ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, invoice_number, client_name, client_name, customer_gstin || null, place_of_supply || '33-Tamil Nadu',
                 sender_name, sender_gstin, sender_state, total, tax,
                 invoice_type || 'B2B', place_of_supply || '33-Tamil Nadu', taxable, pct,
                 cgst, sgst, igst, cgst, sgst, igst, tax,
-                reverse_charge || 'No', total, irn, 'Signed', now
+                reverse_charge || 'No', total, irn, 'Signed', now,
+                String(export_under_lut || 'false'), lut_document_path || null, lut_file_name || null, lut_uploaded_at || null, lut_uploaded_by || req.user?.username || 'Current User'
             );
 
             // 2. Insert into business_invoices (Sales Register)
