@@ -949,6 +949,7 @@ CREATE TABLE IF NOT EXISTS gst_invoices (
   goods_quantity REAL,
   goods_unit TEXT,
   created_at TEXT,
+  updated_at TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
@@ -1691,6 +1692,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS reference_invoice TEXT;',
       'ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS is_eway_bill TEXT DEFAULT \'false\';',
       'ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS is_reconciliation TEXT DEFAULT \'false\';',
+      'ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS updated_at TEXT;',
       'ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS capacity_utilization TEXT DEFAULT \'0%\';',
       `CREATE TABLE IF NOT EXISTS inventory (
         id SERIAL PRIMARY KEY,
@@ -1916,6 +1918,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE gst_invoices ADD COLUMN reference_invoice TEXT',
       'ALTER TABLE gst_invoices ADD COLUMN is_eway_bill TEXT DEFAULT \'false\'',
       'ALTER TABLE gst_invoices ADD COLUMN is_reconciliation TEXT DEFAULT \'false\'',
+      'ALTER TABLE gst_invoices ADD COLUMN updated_at TEXT',
       'ALTER TABLE gst_invoices ADD COLUMN transport_mode TEXT',
       'ALTER TABLE gst_invoices ADD COLUMN transporter_gstin TEXT',
       'ALTER TABLE gst_invoices ADD COLUMN items TEXT',

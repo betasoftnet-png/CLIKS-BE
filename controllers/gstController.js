@@ -35,7 +35,8 @@ const initGstTableAndColumns = async () => {
         'invoice_number',
         'invoice_date',
         'gst_amount',
-        'status'
+        'status',
+        'updated_at'
     ];
     for (const col of columns) {
         try {
@@ -157,15 +158,15 @@ const gstController = {
                     sender_name, sender_gstin, sender_state, amount, gst_amount, 
                     invoice_type, place_of_supply, taxable_value, gst_percentage, 
                     cgst, sgst, igst, cgst_amount, sgst_amount, igst_amount, total_tax, 
-                    reverse_charge, total_invoice, tax_type, irn_number, qr_status, is_eway_bill, is_reconciliation, created_at,
+                    reverse_charge, total_invoice, tax_type, irn_number, qr_status, is_eway_bill, is_reconciliation, created_at, updated_at,
                     export_under_lut, lut_document_path, lut_file_name, lut_uploaded_at, lut_uploaded_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, ?, 'false', 'false', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, ?, 'false', 'false', ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, invoice_number, client_name, client_name, customer_gstin || null, place_of_supply || '33-Tamil Nadu',
                 sender_name, sender_gstin, sender_state, total, tax,
                 invoice_type || 'B2B', place_of_supply || '33-Tamil Nadu', taxable, pct,
                 cgst, sgst, igst, cgst, sgst, igst, tax,
-                reverse_charge || 'No', total, irn, 'Signed', now,
+                reverse_charge || 'No', total, irn, 'Signed', now, now,
                 String(export_under_lut || 'false'), lut_document_path || null, lut_file_name || null, lut_uploaded_at || null, lut_uploaded_by || req.user?.username || 'Current User'
             );
 
@@ -309,8 +310,8 @@ const gstController = {
                     transport_mode, transporter_gstin, 
                     goods_product_name, goods_hsn_code, goods_quantity, goods_unit,
                     taxable_value, gst_percentage, amount, items,
-                    created_at, reference_invoice
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Generated', ?, 'true', 'false', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, reference_invoice
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Generated', ?, 'true', 'false', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id,
                 invoice_number,
@@ -331,12 +332,13 @@ const gstController = {
                 total,
                 itemsJson,
                 createdAt,
+                new Date().toISOString(),
                 invoice_number
             );
 
             // 4. Link to Sales Invoice (Update existing record if it exists)
             try {
-                await db.prepare("UPDATE gst_invoices SET eway_bill_number = ? WHERE user_id = ? AND invoice_number = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL)").run(eway_bill_number, req.user.id, invoice_number);
+                await db.prepare("UPDATE gst_invoices SET eway_bill_number = ?, updated_at = ? WHERE user_id = ? AND invoice_number = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL)").run(eway_bill_number, new Date().toISOString(), req.user.id, invoice_number);
             } catch (updateErr) {
                 console.warn('[GST Controller] Reference invoice update failed:', updateErr.message);
             }
@@ -378,15 +380,16 @@ const gstController = {
             const sgst = isLocal ? tax / 2 : 0;
             const igst = isLocal ? 0 : tax;
             
+            const now = new Date().toISOString();
             const result = await db.prepare(`
                 INSERT INTO gst_invoices (
                     user_id, vendor_gstin, vendor_name, amount, taxable_value, total_tax,
                     cgst_amount, sgst_amount, igst_amount, eligible_itc, 
-                    invoice_match_status, is_reconciliation, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'true', ?)
+                    invoice_match_status, is_reconciliation, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'true', ?, ?)
             `).run(
                 req.user.id, vendor_gstin, vendor_name, amt, taxable, tax,
-                cgst, sgst, igst, tax, match_status || 'matched', new Date().toISOString()
+                cgst, sgst, igst, tax, match_status || 'matched', now, now
             );
 
             return sendSuccess(res, { id: result.lastInsertRowid }, 'Reconciliation entry added');
@@ -409,14 +412,17 @@ const gstController = {
 
     getGSTR3B: async (req, res) => {
         try {
+            const isPg = process.env.DB_TYPE === 'postgres';
+            const sum = (col) => isPg ? `SUM(COALESCE("${col}", 0))` : `SUM(${col})`;
+
             // Output supplies (sales)
             const sales = await db.prepare(`
                 SELECT 
-                    SUM(taxable_value) as taxable,
-                    SUM(cgst_amount) as cgst,
-                    SUM(sgst_amount) as sgst,
-                    SUM(igst_amount) as igst,
-                    SUM(total_tax) as tax
+                    ${sum('taxable_value')} as taxable,
+                    ${sum('cgst_amount')} as cgst,
+                    ${sum('sgst_amount')} as sgst,
+                    ${sum('igst_amount')} as igst,
+                    ${sum('total_tax')} as tax
                 FROM gst_invoices 
                 WHERE user_id = ? 
                   AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) 
@@ -426,11 +432,11 @@ const gstController = {
             // Verified Eligible ITC (purchases)
             const purchases = await db.prepare(`
                 SELECT 
-                    SUM(taxable_value) as taxable,
-                    SUM(cgst_amount) as cgst,
-                    SUM(sgst_amount) as sgst,
-                    SUM(igst_amount) as igst,
-                    SUM(eligible_itc) as eligible_itc
+                    ${sum('taxable_value')} as taxable,
+                    ${sum('cgst_amount')} as cgst,
+                    ${sum('sgst_amount')} as sgst,
+                    ${sum('igst_amount')} as igst,
+                    ${sum('eligible_itc')} as eligible_itc
                 FROM gst_invoices 
                 WHERE user_id = ? 
                   AND is_reconciliation = 'true' 
@@ -474,8 +480,27 @@ const gstController = {
 
     getGSTR9: async (req, res) => {
         try {
-            const sales = await db.prepare("SELECT SUM(taxable_value) as taxable, SUM(total_tax) as tax FROM gst_invoices WHERE user_id = ? AND (is_eway_bill = 'false' OR is_eway_bill IS NULL) AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)").get(req.user.id);
-            const purchases = await db.prepare("SELECT SUM(eligible_itc) as itc FROM gst_invoices WHERE user_id = ? AND is_reconciliation = 'true' AND invoice_match_status = 'Verified'").get(req.user.id);
+            const isPg = process.env.DB_TYPE === 'postgres';
+            const sum = (col) => isPg ? `SUM(COALESCE("${col}", 0))` : `SUM(${col})`;
+
+            const sales = await db.prepare(`
+                SELECT
+                    ${sum('taxable_value')} as taxable,
+                    ${sum('total_tax')} as tax
+                FROM gst_invoices
+                WHERE user_id = ?
+                  AND (is_eway_bill = 'false' OR is_eway_bill IS NULL)
+                  AND (is_reconciliation = 'false' OR is_reconciliation IS NULL)
+            `).get(req.user.id);
+
+            const purchases = await db.prepare(`
+                SELECT
+                    ${sum('eligible_itc')} as itc
+                FROM gst_invoices
+                WHERE user_id = ?
+                  AND is_reconciliation = 'true'
+                  AND invoice_match_status = 'Verified'
+            `).get(req.user.id);
             
             return sendSuccess(res, {
                 consolidated_turnover: sales.taxable || 0,
