@@ -12,6 +12,10 @@ router.get('/', cache(120), validate.listQuery, validate.handle, getPublicFeed);
 // GET    /public/announcement — Fetch the latest active announcement for display
 router.get('/announcement', getActiveAnnouncement);
 
+// GET    /public/invoice/:id  — Fetch public invoice details for QR scans
+const gstController = require('../controllers/gstController');
+router.get('/invoice/:id', gstController.getPublicInvoice);
+
 // POST   /public              — Create a new public post (auth required)
 router.post('/', auth, validate.createPost, validate.handle, createPost);
 

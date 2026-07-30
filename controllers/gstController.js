@@ -104,8 +104,14 @@ const gstController = {
             if (!client_name) {
                 return sendError(res, 'Customer Name is required', 400);
             }
-            if (invoice_type === 'B2B' && !customer_gstin) {
-                return sendError(res, 'Customer GSTIN is required for B2B Invoice', 400);
+            if (invoice_type === 'B2B') {
+                if (!customer_gstin || !customer_gstin.trim()) {
+                    return sendError(res, 'Customer GSTIN is required for B2B Invoice', 400);
+                }
+                const gstinRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
+                if (!gstinRegex.test(customer_gstin.trim())) {
+                    return sendError(res, 'Invalid Customer GSTIN format. Must be a 15-digit alphanumeric code matching standard GSTIN layout (e.g. 33ABCDE1234F1Z5)', 400);
+                }
             }
             const taxable = parseFloat(taxable_value) || 0;
             if (taxable <= 0) {
@@ -545,6 +551,18 @@ const gstController = {
         } catch (e) {
             console.error('[GST Controller] getGSTR9 error:', e);
             return sendError(res, `GSTR-9 Error: ${e.message}`, 500);
+        }
+    },
+
+    getPublicInvoice: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const invoice = await db.prepare('SELECT * FROM gst_invoices WHERE id = ?').get(id);
+            if (!invoice) return sendError(res, 'Invoice not found', 404);
+            return sendSuccess(res, invoice, 'Public invoice details retrieved');
+        } catch (e) {
+            console.error('[GST Controller] getPublicInvoice error:', e);
+            return sendError(res, `Public Invoice Details Error: ${e.message}`, 500);
         }
     }
 };
