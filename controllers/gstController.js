@@ -39,10 +39,26 @@ const gstController = {
     generateInvoice: async (req, res) => {
         try {
             const { invoice_type, place_of_supply, taxable_value, gst_percentage, reverse_charge, client_name, customer_gstin } = req.body;
+            
+            // Validate required fields
+            if (!client_name) {
+                return sendError(res, 'Customer Name is required', 400);
+            }
+            if (invoice_type === 'B2B' && !customer_gstin) {
+                return sendError(res, 'Customer GSTIN is required for B2B Invoice', 400);
+            }
             const taxable = parseFloat(taxable_value) || 0;
-            const pct = parseFloat(gst_percentage) || 18;
+            if (taxable <= 0) {
+                return sendError(res, 'Taxable Value must be greater than 0', 400);
+            }
+            const pct = parseFloat(gst_percentage) || 12;
+            if (![5, 12, 18, 28].includes(pct)) {
+                return sendError(res, 'Invalid GST Percentage', 400);
+            }
+
             const tax = taxable * (pct / 100);
             const total = taxable + tax;
+            const now = new Date().toISOString();
             
             // Determine local state code from user settings
             let stateCode = '33'; // Default to Tamil Nadu code
@@ -66,6 +82,7 @@ const gstController = {
             const invoice_number = `GST-${Date.now().toString().slice(-6)}`;
             const irn = `IRN-${Date.now().toString()}`;
             
+            // 1. Insert into gst_invoices
             const result = await db.prepare(`
                 INSERT INTO gst_invoices (
                     user_id, invoice_number, client_name, customer_gstin, amount, gst_amount, 
@@ -74,13 +91,80 @@ const gstController = {
                     reverse_charge, irn_number, qr_status, is_eway_bill, is_reconciliation, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'false', 'false', ?)
             `).run(
-                req.user.id, invoice_number, client_name || 'Client Name', customer_gstin || null, total, tax,
+                req.user.id, invoice_number, client_name, customer_gstin || null, total, tax,
                 invoice_type || 'B2B', place_of_supply || '33-Tamil Nadu', taxable, pct,
                 cgst, sgst, igst, tax,
-                reverse_charge || 'No', irn, 'Signed', new Date().toISOString()
+                reverse_charge || 'No', irn, 'Signed', now
             );
 
-            return sendSuccess(res, { id: result.lastInsertRowid, invoice_number }, 'Tax Invoice successfully generated');
+            // 2. Insert into business_invoices (Sales Register)
+            const items = [{
+                name: `GST B2B Sale - ${invoice_type}`,
+                quantity: 1,
+                price: taxable,
+                gst: pct,
+                total: total
+            }];
+            
+            // Calculate due date (current date + 30 days)
+            const dueDateObj = new Date();
+            dueDateObj.setDate(dueDateObj.getDate() + 30);
+            const due_date = dueDateObj.toISOString().split('T')[0];
+
+            await db.prepare(`
+                INSERT INTO business_invoices (
+                    user_id, invoice_number, client_name, client_email, client_gstin,
+                    billing_address, shipping_address, amount, tax_amount, total_amount,
+                    paid_amount, due_amount, bank_account_id, discount_amount, round_off,
+                    status, due_date, payment_mode, invoice_type, tax_type, items,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                req.user.id, invoice_number, client_name, null, customer_gstin || null,
+                null, null, taxable, tax, total,
+                0, total, null, 0, 0,
+                'Unpaid', due_date, 'Credit', 'GST', 'Exclusive', JSON.stringify(items),
+                now, now
+            );
+
+            // 3. Insert into accounting ledger (Accounting Ledger & Day Book)
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'income', ?, ?, 'Sales Revenue', 'Accounts Receivable (Credit Sale)', ?, 'posted', ?, ?)
+            `).run(
+                req.user.id, now.split('T')[0], total, `e-Invoice #${invoice_number}`, now, now
+            );
+
+            // 4. Insert into customer_ledger
+            let customer = await db.prepare('SELECT id FROM business_customers WHERE user_id = ? AND name = ?').get(req.user.id, client_name);
+            if (!customer) {
+                // Check if general Walk-in Customer exists
+                customer = await db.prepare("SELECT id FROM business_customers WHERE user_id = ? AND name = 'Walk-in Customer'").get(req.user.id);
+                if (!customer) {
+                    const resCust = await db.prepare(`
+                        INSERT INTO business_customers (user_id, name, email, phone, company, status, created_at, updated_at)
+                        VALUES (?, 'Walk-in Customer', '', '', 'Walk-in Company', 'Active', ?, ?)
+                    `).run(req.user.id, now, now);
+                    customer = { id: resCust.lastInsertRowid };
+                }
+            }
+            const customer_id = customer.id;
+
+            await db.prepare(`
+                INSERT INTO customer_ledger (customer_id, user_id, description, amount, type, created_at)
+                VALUES (?, ?, ?, ?, 'debit', ?)
+            `).run(customer_id, req.user.id, `GST e-Invoice #${invoice_number}`, total, now);
+
+            // Update customer's total spent
+            await db.prepare('UPDATE business_customers SET total_spent = total_spent + ? WHERE id = ?').run(total, customer_id);
+
+            return sendSuccess(res, { 
+                id: result.lastInsertRowid, 
+                invoice_number,
+                irn,
+                status: 'Generated',
+                qr_code: 'Signed'
+            }, 'Tax Invoice successfully generated');
         } catch (e) {
             console.error('[GST Controller] generateInvoice error:', e);
             return sendError(res, `Generate Invoice Error: ${e.message}`, 500);

@@ -43,8 +43,22 @@ const initTableAndColumns = async () => {
                 updated_at TEXT
             )
         `).run();
+        
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS department_team_members (
+                id ${idType},
+                department_id INTEGER NOT NULL,
+                employee_id TEXT NOT NULL,
+                employee_name TEXT NOT NULL,
+                salary REAL,
+                allocated_budget REAL,
+                spent REAL DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        `).run();
     } catch (e) {
-        // Table already exists
+        console.error('[Expenses Controller Init Error] Table creation:', e.message);
     }
 
     const columns = [
@@ -520,16 +534,70 @@ const expensesController = {
     createBudget: async (req, res) => {
         const { category_name, budget_limit, team_members } = req.body;
         try {
+            if (!category_name || !category_name.trim()) {
+                return sendError(res, 'Department name is required.', 400);
+            }
+            const limit = parseFloat(budget_limit) || 0;
+            if (limit < 0) {
+                return sendError(res, 'Budget limit cannot be negative.', 400);
+            }
+
+            // Check duplicate department name
+            const existing = await db.prepare("SELECT id FROM expenses WHERE user_id = ? AND is_budget = 'true' AND LOWER(category_name) = ?").get(req.user.id, category_name.trim().toLowerCase());
+            if (existing) {
+                return sendError(res, 'A department budget with this name already exists.', 400);
+            }
+
+            // Parse and validate team members
+            let members = [];
+            try {
+                members = typeof team_members === 'string' ? JSON.parse(team_members || '[]') : (team_members || []);
+            } catch (e) {
+                members = [];
+            }
+
+            const seenIds = new Set();
+            for (const m of members) {
+                if (!m.name || !m.name.trim()) {
+                    return sendError(res, 'Employee name cannot be empty.', 400);
+                }
+                if (!m.employee_id || !m.employee_id.trim()) {
+                    return sendError(res, 'Employee ID is required.', 400);
+                }
+                if (seenIds.has(m.employee_id)) {
+                    return sendError(res, `Duplicate Employee ID "${m.employee_id}" within the same department.`, 400);
+                }
+                seenIds.add(m.employee_id);
+            }
+
             const now = new Date().toISOString();
-            const limit = parseFloat(budget_limit) || 5000;
-            const membersJson = typeof team_members === 'string' ? team_members : JSON.stringify(team_members || []);
+            const membersJson = JSON.stringify(members);
+
+            // 1. Insert budget into expenses table
             const result = await db.prepare(`
                 INSERT INTO expenses (
                     user_id, amount, category_name, budget_limit, spent_amount, alert_status, is_budget, team_members, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, 0, 'Optimal', 'true', ?, ?, ?)
-            `).run(req.user.id, limit, category_name, limit, membersJson, now, now);
+            `).run(req.user.id, limit, category_name.trim(), limit, membersJson, now, now);
 
-            const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
+            const department_id = result.lastInsertRowid;
+            const memberCount = members.length;
+            const allocatedBudget = memberCount > 0 ? limit / memberCount : 0;
+
+            // 2. Insert team members into department_team_members table
+            for (const m of members) {
+                await db.prepare(`
+                    INSERT INTO department_team_members (
+                        department_id, employee_id, employee_name, salary, allocated_budget, spent, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    department_id, m.employee_id, m.name, m.salary ? parseFloat(m.salary) : null,
+                    allocatedBudget, m.spent ? parseFloat(m.spent) : 0, now, now
+                );
+            }
+
+            const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(department_id);
+            inserted.team_members = members;
             return sendSuccess(res, inserted, 'Budget limit allocated', 201);
         } catch (error) {
             console.error('[Expense Budget] Error:', error);
@@ -539,8 +607,19 @@ const expensesController = {
     getBudgets: async (req, res) => {
         try {
             const list = await db.prepare("SELECT * FROM expenses WHERE user_id = ? AND is_budget = 'true' ORDER BY id DESC").all(req.user.id);
+            // Hydrate team members from relational database table for each budget record
+            for (const item of list) {
+                const members = await db.prepare("SELECT * FROM department_team_members WHERE department_id = ?").all(item.id);
+                item.team_members = members.map(m => ({
+                    employee_id: m.employee_id,
+                    name: m.employee_name,
+                    salary: m.salary,
+                    spent: m.spent || 0
+                }));
+            }
             return sendSuccess(res, list, 'Budgets targets retrieved');
         } catch (error) {
+            console.error('[Expense Budget Get] Error:', error);
             return sendError(res, 'Retrieve budgets failed', 500);
         }
     },
@@ -548,14 +627,71 @@ const expensesController = {
         const { id } = req.params;
         const { category_name, budget_limit, team_members } = req.body;
         try {
+            if (!category_name || !category_name.trim()) {
+                return sendError(res, 'Department name is required.', 400);
+            }
+            const limit = parseFloat(budget_limit) || 0;
+            if (limit < 0) {
+                return sendError(res, 'Budget limit cannot be negative.', 400);
+            }
+
+            // Check duplicate department name
+            const existing = await db.prepare("SELECT id FROM expenses WHERE user_id = ? AND is_budget = 'true' AND LOWER(category_name) = ? AND id != ?").get(req.user.id, category_name.trim().toLowerCase(), id);
+            if (existing) {
+                return sendError(res, 'A department budget with this name already exists.', 400);
+            }
+
+            // Parse and validate team members
+            let members = [];
+            try {
+                members = typeof team_members === 'string' ? JSON.parse(team_members || '[]') : (team_members || []);
+            } catch (e) {
+                members = [];
+            }
+
+            const seenIds = new Set();
+            for (const m of members) {
+                if (!m.name || !m.name.trim()) {
+                    return sendError(res, 'Employee name cannot be empty.', 400);
+                }
+                if (!m.employee_id || !m.employee_id.trim()) {
+                    return sendError(res, 'Employee ID is required.', 400);
+                }
+                if (seenIds.has(m.employee_id)) {
+                    return sendError(res, `Duplicate Employee ID "${m.employee_id}" within the same department.`, 400);
+                }
+                seenIds.add(m.employee_id);
+            }
+
             const now = new Date().toISOString();
-            const limit = parseFloat(budget_limit) || 5000;
-            const membersJson = typeof team_members === 'string' ? team_members : JSON.stringify(team_members || []);
+            const membersJson = JSON.stringify(members);
+
+            // 1. Update expenses record
             await db.prepare(`
                 UPDATE expenses SET category_name = ?, amount = ?, budget_limit = ?, team_members = ?, updated_at = ?
                 WHERE id = ? AND user_id = ? AND is_budget = 'true'
-            `).run(category_name, limit, limit, membersJson, now, id, req.user.id);
+            `).run(category_name.trim(), limit, limit, membersJson, now, id, req.user.id);
+
+            const memberCount = members.length;
+            const allocatedBudget = memberCount > 0 ? limit / memberCount : 0;
+
+            // 2. Clear old members from database table
+            await db.prepare('DELETE FROM department_team_members WHERE department_id = ?').run(id);
+
+            // 3. Write new members to database table
+            for (const m of members) {
+                await db.prepare(`
+                    INSERT INTO department_team_members (
+                        department_id, employee_id, employee_name, salary, allocated_budget, spent, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    id, m.employee_id, m.name, m.salary ? parseFloat(m.salary) : null,
+                    allocatedBudget, m.spent ? parseFloat(m.spent) : 0, now, now
+                );
+            }
+
             const updated = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(id);
+            updated.team_members = members;
             return sendSuccess(res, updated, 'Budget target updated');
         } catch (error) {
             console.error('[Expense Budget] Update Error:', error);
@@ -565,8 +701,11 @@ const expensesController = {
     deleteBudget: async (req, res) => {
         const { id } = req.params;
         try {
+            // Delete department budget record
             await db.prepare("DELETE FROM expenses WHERE id = ? AND user_id = ? AND is_budget = 'true'").run(id, req.user.id);
-            return sendSuccess(res, null, 'Budget target deleted');
+            // Delete all linked team members
+            await db.prepare("DELETE FROM department_team_members WHERE department_id = ?").run(id);
+            return sendSuccess(res, null, 'Budget target and linked team members deleted');
         } catch (error) {
             console.error('[Expense Budget] Delete Error:', error);
             return sendError(res, 'Delete budget failed', 500);
