@@ -557,6 +557,46 @@ const purchaseController = {
                 UPDATE business_purchases SET status = 'Completed', updated_at = ? WHERE id = ?
             `).run(now, id);
 
+            // 2.5 Update physical stock inventory levels for all products in this bill
+            const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(id);
+            if (items && items.length > 0) {
+                for (const item of items) {
+                    const qty = parseFloat(item.quantity) || 0;
+                    const prevRec = parseFloat(item.received_quantity) || 0;
+                    const delta = qty - prevRec;
+
+                    if (delta > 0) {
+                        // Mark received quantity as fully completed
+                        await db.prepare('UPDATE business_purchase_items SET received_quantity = ? WHERE purchase_id = ? AND product_name = ?')
+                            .run(qty, id, item.product_name);
+
+                        // If linked to a product, update physical inventory stock levels
+                        const prodId = item.product_id;
+                        if (prodId) {
+                            const prod = await db.prepare('SELECT quantity, low_stock_threshold FROM business_products WHERE id = ? AND user_id = ?').get(prodId, userId);
+                            if (prod) {
+                                const currentQty = parseFloat(prod.quantity) || 0;
+                                const newQty = currentQty + delta;
+                                const threshold = parseFloat(prod.low_stock_threshold) || 5;
+                                const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < threshold ? 'Low Stock' : 'In Stock');
+
+                                await db.prepare(`
+                                    UPDATE business_products 
+                                    SET quantity = ?, stock_status = ?, updated_at = ? 
+                                    WHERE id = ? AND user_id = ?
+                                `).run(newQty, newStatus, now, prodId, userId);
+
+                                // Log to physical stock history ledger
+                                await db.prepare(`
+                                    INSERT INTO product_stock_history (product_id, user_id, quantity_changed, type, description, created_at)
+                                    VALUES (?, ?, ?, ?, ?, ?)
+                                `).run(prodId, userId, delta, 'in', `Received via Bill: ${bill.purchase_number}`, now);
+                            }
+                        }
+                    }
+                }
+            }
+
             // 3. Update Vendor Ledger
             let supplier = await db.prepare('SELECT id, outstanding_balance FROM suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name);
             if (!supplier) {
