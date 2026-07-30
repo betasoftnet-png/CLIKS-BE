@@ -377,15 +377,27 @@ const accountingController = {
                 const exists = await db.prepare('SELECT id FROM business_purchases WHERE purchase_number = ? AND user_id = ?').get(billNum, req.user.id);
                 if (exists) return sendError(res, 'Bill number already exists', 400);
 
+                const totalTax = parsedAmount * 18 / 118;
+                const subtotalAmt = parsedAmount - totalTax;
+
                 // 1. Create bill in business_purchases with doc_type=BILL and status=Pending Goods
                 const purResult = await db.prepare(`
                     INSERT INTO business_purchases (
                         user_id, purchase_number, purchase_date, due_date, doc_type, status, supplier_name, supplier_gstin,
                         payment_status, payment_mode, paid_amount, grand_total, subtotal, total_tax, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 'BILL', 'Pending Goods', ?, ?, 'pending', 'Credit', 0, ?, ?, 0, ?, ?)
-                `).run(req.user.id, billNum, dateStr, due_date, supplier_name, supplier_gstin || null, parsedAmount, parsedAmount, now, now);
+                    ) VALUES (?, ?, ?, ?, 'BILL', 'Pending Goods', ?, ?, 'pending', 'Credit', 0, ?, ?, ?, ?, ?)
+                `).run(req.user.id, billNum, dateStr, due_date, supplier_name, supplier_gstin || null, parsedAmount, subtotalAmt, totalTax, now, now);
 
                 const newPurchaseId = purResult.lastInsertRowid;
+
+                // 1b. Create default item in business_purchase_items for invoice item details mapping
+                await db.prepare(`
+                    INSERT INTO business_purchase_items (
+                        purchase_id, product_name, quantity, received_quantity,
+                        purchase_price, discount, gst_percentage, tax_amount, total
+                    ) VALUES (?, ?, 1, 0, ?, 0, 18, ?, ?)
+                `).run(newPurchaseId, category || 'Inventory Purchases', subtotalAmt, totalTax, parsedAmount);
+
                 await gstHelper.syncPurchaseToGstr2b(newPurchaseId, req.user.id);
 
                 // 2. Create accounting entry (P&L accrual expense, without affecting Cash/Bank balances)

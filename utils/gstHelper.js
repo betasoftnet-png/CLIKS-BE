@@ -24,12 +24,7 @@ const gstHelper = {
                 return;
             }
 
-            // Evaluate whether it belongs in GSTR-2B
-            if (!pur.supplier_gstin || pur.supplier_gstin.trim() === '') {
-                // If it doesn't have a GSTIN, remove it from GSTR-2B if it exists there
-                await db.prepare("DELETE FROM gst_invoices WHERE purchase_invoice_id = ?").run(purchaseId);
-                return;
-            }
+            const supplierGstin = pur.supplier_gstin && pur.supplier_gstin.trim() !== '' ? pur.supplier_gstin : 'URD-UNREGISTERED';
 
             // Determine local state code from user settings
             let senderStateCode = '33'; // Default to Tamil Nadu
@@ -82,9 +77,12 @@ const gstHelper = {
             const existing = await db.prepare("SELECT id, invoice_match_status, status FROM gst_invoices WHERE purchase_invoice_id = ?").get(pur.id);
 
             let status = 'Pending';
+            if (pur.status === 'Completed') {
+                status = 'Verified';
+            }
             if (!isEligible) {
                 status = 'Ineligible';
-            } else if (existing) {
+            } else if (existing && pur.status !== 'Completed') {
                 status = existing.invoice_match_status || existing.status || 'Pending';
                 // If it was marked ineligible previously but is now eligible, reset to Pending
                 if (status === 'Ineligible') {
@@ -112,7 +110,7 @@ const gstHelper = {
                         updated_at = ?
                     WHERE id = ?
                 `).run(
-                    pur.supplier_gstin,
+                    supplierGstin,
                     pur.supplier_name,
                     pur.supplier_name || 'Unknown Vendor',
                     pur.purchase_number,
@@ -140,7 +138,7 @@ const gstHelper = {
                 `).run(
                     userId || pur.user_id,
                     pur.id,
-                    pur.supplier_gstin,
+                    supplierGstin,
                     pur.supplier_name,
                     pur.supplier_name || 'Unknown Vendor',
                     pur.purchase_number,

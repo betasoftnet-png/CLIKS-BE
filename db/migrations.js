@@ -1843,7 +1843,9 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS total_invoice NUMERIC DEFAULT 0;`,
       `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS cgst NUMERIC DEFAULT 0;`,
       `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS sgst NUMERIC DEFAULT 0;`,
-      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS igst NUMERIC DEFAULT 0;`
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS igst NUMERIC DEFAULT 0;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS purchase_invoice_id INTEGER;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS invoice_date VARCHAR(100);`
     ];
     try {
       for (const q of pgAlters) await db.pool.query(q);
@@ -1972,6 +1974,8 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE gst_invoices ADD COLUMN cgst REAL DEFAULT 0',
       'ALTER TABLE gst_invoices ADD COLUMN sgst REAL DEFAULT 0',
       'ALTER TABLE gst_invoices ADD COLUMN igst REAL DEFAULT 0',
+      'ALTER TABLE gst_invoices ADD COLUMN purchase_invoice_id INTEGER',
+      'ALTER TABLE gst_invoices ADD COLUMN invoice_date TEXT',
       'ALTER TABLE expenses ADD COLUMN team_members TEXT'
     ];
 
