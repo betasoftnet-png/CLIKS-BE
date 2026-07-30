@@ -43,6 +43,7 @@ router.get('/:id/returns',          purchaseController.getPurchaseReturns);
 
 // Stock Adjustments
 router.post('/:id/stock-update',    purchaseController.processStockUpdate);
+router.post('/:id/receive-goods',   purchaseController.receiveGoods);
 router.get('/:id/stock-history',    purchaseController.getStockHistory);
 
 // Invoices & Bills

@@ -377,15 +377,16 @@ const accountingController = {
                 const exists = await db.prepare('SELECT id FROM business_purchases WHERE purchase_number = ? AND user_id = ?').get(billNum, req.user.id);
                 if (exists) return sendError(res, 'Bill number already exists', 400);
 
-                // 1. Create bill in business_purchases
+                // 1. Create bill in business_purchases with doc_type=BILL and status=Pending Goods
                 const purResult = await db.prepare(`
                     INSERT INTO business_purchases (
-                        user_id, purchase_number, purchase_date, due_date, status, supplier_name, supplier_gstin,
-                        payment_status, payment_mode, paid_amount, grand_total, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 'Pending', ?, ?, 'pending', 'Credit', 0, ?, ?, ?)
-                `).run(req.user.id, billNum, dateStr, due_date, supplier_name, supplier_gstin || null, parsedAmount, now, now);
+                        user_id, purchase_number, purchase_date, due_date, doc_type, status, supplier_name, supplier_gstin,
+                        payment_status, payment_mode, paid_amount, grand_total, subtotal, total_tax, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'BILL', 'Pending Goods', ?, ?, 'pending', 'Credit', 0, ?, ?, 0, ?, ?)
+                `).run(req.user.id, billNum, dateStr, due_date, supplier_name, supplier_gstin || null, parsedAmount, parsedAmount, now, now);
 
-                await gstHelper.syncPurchaseToGstr2b(purResult.lastInsertRowid, req.user.id);
+                const newPurchaseId = purResult.lastInsertRowid;
+                await gstHelper.syncPurchaseToGstr2b(newPurchaseId, req.user.id);
 
                 // 2. Create accounting entry (P&L accrual expense, without affecting Cash/Bank balances)
                 const result = await db.prepare(`

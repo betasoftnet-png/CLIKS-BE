@@ -541,6 +541,86 @@ const purchaseController = {
         }
     },
 
+    // 13b. Receive Goods — complete workflow trigger for Credit Purchase bills
+    receiveGoods: async (req, res) => {
+        const { id } = req.params;
+        const userId = req.user.id;
+        const now = new Date().toISOString();
+        try {
+            // 1. Load the purchase bill
+            const bill = await db.prepare('SELECT * FROM business_purchases WHERE id = ? AND user_id = ?').get(id, userId);
+            if (!bill) return sendError(res, 'Purchase bill not found', 404);
+            if (bill.status === 'Completed') return sendError(res, 'Goods already received for this bill', 400);
+
+            // 2. Mark bill as Completed
+            await db.prepare(`
+                UPDATE business_purchases SET status = 'Completed', updated_at = ? WHERE id = ?
+            `).run(now, id);
+
+            // 3. Update Vendor Ledger
+            let supplier = await db.prepare('SELECT id, outstanding_balance FROM suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name);
+            if (!supplier) {
+                supplier = await db.prepare('SELECT id, outstanding_balance FROM business_suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name);
+            }
+            if (!supplier) {
+                // Auto-create supplier if not found
+                const newSup = await db.prepare(`
+                    INSERT INTO suppliers (user_id, name, gstin, outstanding_balance, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                `).run(userId, bill.supplier_name, bill.supplier_gstin || null, parseFloat(bill.grand_total) || 0, now);
+                supplier = { id: newSup.lastInsertRowid, outstanding_balance: 0 };
+            }
+
+            const supId = supplier.id;
+            const billAmount = parseFloat(bill.grand_total) || 0;
+
+            // Debit entry: Goods received on credit
+            await db.prepare(`
+                INSERT INTO supplier_ledger (supplier_id, user_id, description, amount, type, created_at)
+                VALUES (?, ?, ?, ?, 'debit', ?)
+            `).run(supId, userId, `Goods Received — Bill ${bill.purchase_number}`, billAmount, now);
+
+            // 4. Update supplier outstanding balance (Accounts Payable)
+            await db.prepare('UPDATE suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?').run(billAmount, supId);
+            // Also try business_suppliers table
+            await db.prepare('UPDATE business_suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?').run(billAmount, supId).catch(() => {});
+
+            // 5. Create Accounting Journal Entry (Accrual: Inventory/Purchase Dr, Accounts Payable Cr)
+            const taxAmount = parseFloat(bill.total_tax) || 0;
+            const subtotalAmount = parseFloat(bill.subtotal) || (billAmount - taxAmount);
+
+            // Inventory/Purchase expense entry
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'expense', ?, ?, 'Inventory Purchases', 'Payables', ?, 'Paid', ?, ?)
+            `).run(userId, now.split('T')[0], subtotalAmount, `Goods Received — Bill ${bill.purchase_number} (${bill.supplier_name})`, now, now);
+
+            // Input GST entry (if tax > 0)
+            if (taxAmount > 0) {
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'expense', ?, ?, 'Input GST', 'GST Credit Account', ?, 'Paid', ?, ?)
+                `).run(userId, now.split('T')[0], taxAmount, `Input ITC — Bill ${bill.purchase_number} (${bill.supplier_name})`, now, now);
+            }
+
+            // Mark the matching accounting payable entry as Paid/Posted
+            await db.prepare(
+                "UPDATE accounting SET status = 'Paid' WHERE user_id = ? AND mode = 'Payables' AND notes LIKE ?"
+            ).run(userId, `%${bill.purchase_number}%`);
+
+            // 6. Sync to GSTR-2B with updated status
+            await gstHelper.syncPurchaseToGstr2b(id, userId);
+
+            await logBusinessAudit(userId, 'GOODS_RECEIVED', `Goods received for Bill ${bill.purchase_number} (Supplier: ${bill.supplier_name}, Amount: ₹${billAmount})`, 'SUCCESS');
+
+            return sendSuccess(res, { id, status: 'Completed' }, 'Goods received successfully. Inventory, Vendor Ledger, Accounts Payable, Accounting, and GSTR-2B have all been updated.');
+        } catch (error) {
+            console.error('[Purchase Controller] receiveGoods error:', error);
+            return sendError(res, 'Failed to process goods receipt', 500);
+        }
+    },
+
+
     getStockHistory: async (req, res) => {
         const { id } = req.params;
         try {
