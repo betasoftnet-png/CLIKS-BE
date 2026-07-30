@@ -159,6 +159,142 @@ const gstHelper = {
         } catch (err) {
             console.error('[GST Helper] syncPurchaseToGstr2b error:', err);
         }
+    },
+
+    syncInvoiceToGstr1: async (invoiceId, userId) => {
+        try {
+            // 1. Fetch sales invoice record
+            const inv = await db.prepare("SELECT * FROM business_invoices WHERE id = ?").get(invoiceId);
+            if (!inv) {
+                // If invoice was deleted, delete corresponding GSTR-1 entry (unless it's an e-Invoice which should persist)
+                await db.prepare("DELETE FROM gst_invoices WHERE reference_invoice = ? AND (irn_number IS NULL OR irn_number = '')").run(invoiceId);
+                return;
+            }
+
+            // Only sync GST invoices
+            if (inv.invoice_type !== 'GST' && (!inv.tax_amount || inv.tax_amount == 0)) return;
+
+            const clientGstin = inv.client_gstin && inv.client_gstin.trim() !== '' ? inv.client_gstin : 'URD-CONSUMER';
+            const invoiceType = clientGstin === 'URD-CONSUMER' ? 'B2C' : 'B2B';
+
+            // Determine local state code from user settings
+            let senderStateCode = '33';
+            let senderName = '';
+            let senderGstin = '';
+            let senderState = 'Tamil Nadu';
+
+            const user = await db.prepare('SELECT settings FROM users WHERE id = ?').get(userId || inv.user_id);
+            if (user && user.settings) {
+                try {
+                    const parsed = JSON.parse(user.settings);
+                    senderName = parsed.company_name || parsed.legal_name || '';
+                    senderGstin = parsed.gstin || '';
+                    senderState = parsed.state || parsed.registered_state || 'Tamil Nadu';
+                    if (parsed.state_code) {
+                        senderStateCode = parsed.state_code.substring(0, 2);
+                    }
+                } catch (e) {}
+            }
+
+            const placeOfSupply = inv.billing_address || inv.shipping_address || ''; // Simplified
+            // Try to extract state code from place of supply if it follows "33-State" format
+            let receiverStateCode = senderStateCode;
+            if (placeOfSupply.includes('-')) {
+                receiverStateCode = placeOfSupply.split('-')[0].trim();
+            }
+
+            const isLocal = senderStateCode === receiverStateCode;
+            const tax = parseFloat(inv.tax_amount) || 0;
+            const cgst = isLocal ? tax / 2 : 0;
+            const sgst = isLocal ? tax / 2 : 0;
+            const igst = isLocal ? 0 : tax;
+
+            // Check if record already exists in GSTR-1 (gst_invoices)
+            // We use invoice_number as a key to avoid duplicates with e-Invoices
+            const existing = await db.prepare("SELECT id, irn_number FROM gst_invoices WHERE invoice_number = ? AND user_id = ?").get(inv.invoice_number, inv.user_id);
+
+            const now = new Date().toISOString();
+
+            if (existing) {
+                // Update existing record but DON'T overwrite e-Invoice fields if they exist
+                await db.prepare(`
+                    UPDATE gst_invoices SET
+                        client_name = ?,
+                        customer_name = ?,
+                        customer_gstin = ?,
+                        customer_state = ?,
+                        sender_name = ?,
+                        sender_gstin = ?,
+                        sender_state = ?,
+                        amount = ?,
+                        gst_amount = ?,
+                        invoice_type = ?,
+                        place_of_supply = ?,
+                        taxable_value = ?,
+                        cgst_amount = ?,
+                        sgst_amount = ?,
+                        igst_amount = ?,
+                        total_tax = ?,
+                        total_invoice = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                `).run(
+                    inv.client_name,
+                    inv.client_name,
+                    clientGstin,
+                    placeOfSupply || senderState,
+                    senderName,
+                    senderGstin,
+                    senderState,
+                    inv.total_amount,
+                    inv.tax_amount,
+                    invoiceType,
+                    placeOfSupply || senderState,
+                    inv.amount,
+                    cgst,
+                    sgst,
+                    igst,
+                    tax,
+                    inv.total_amount,
+                    now,
+                    existing.id
+                );
+            } else {
+                await db.prepare(`
+                    INSERT INTO gst_invoices (
+                        user_id, invoice_number, client_name, customer_name, customer_gstin, customer_state,
+                        sender_name, sender_gstin, sender_state, amount, gst_amount,
+                        invoice_type, place_of_supply, taxable_value,
+                        cgst_amount, sgst_amount, igst_amount, total_tax, total_invoice,
+                        tax_type, is_eway_bill, is_reconciliation, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', 'false', 'false', 'READY', ?, ?)
+                `).run(
+                    userId || inv.user_id,
+                    inv.invoice_number,
+                    inv.client_name,
+                    inv.client_name,
+                    clientGstin,
+                    placeOfSupply || senderState,
+                    senderName,
+                    senderGstin,
+                    senderState,
+                    inv.total_amount,
+                    inv.tax_amount,
+                    invoiceType,
+                    placeOfSupply || senderState,
+                    inv.amount,
+                    cgst,
+                    sgst,
+                    igst,
+                    tax,
+                    inv.total_amount,
+                    inv.created_at || now,
+                    now
+                );
+            }
+        } catch (err) {
+            console.error('[GST Helper] syncInvoiceToGstr1 error:', err);
+        }
     }
 };
 

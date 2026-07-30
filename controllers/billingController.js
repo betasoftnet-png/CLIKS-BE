@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { recordAudit } = require('../utils/auditLogger');
+const gstHelper = require('../utils/gstHelper');
 
 const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') => {
     try {
@@ -165,6 +166,12 @@ const billingController = {
             }
 
             await logBusinessAudit(req.user.id, 'INVOICE_CREATE', `Created invoice ${invNum} for client ${client_name} (amount: ₹${numTotal})`, 'SUCCESS');
+
+            // Sync to GSTR-1
+            if (invoice_type === 'GST' || numTax > 0) {
+                await gstHelper.syncInvoiceToGstr1(result.lastInsertRowid, req.user.id);
+            }
+
             return sendSuccess(res, createdInvoice, 'Invoice created successfully', 201);
         } catch (error) {
             console.error('[Billing Controller] Error creating invoice:', error);
@@ -250,6 +257,12 @@ const billingController = {
             }
 
             await logBusinessAudit(req.user.id, 'INVOICE_UPDATE', `Updated invoice ID ${id} for client ${client_name} (amount: ₹${numTotal})`, 'INFO');
+
+            // Sync to GSTR-1
+            if (invoice_type === 'GST' || numTax > 0) {
+                await gstHelper.syncInvoiceToGstr1(id, req.user.id);
+            }
+
             return sendSuccess(res, updatedInvoice, 'Invoice updated successfully');
         } catch (error) {
             console.error('[Billing Controller] Error updating invoice:', error);
@@ -267,6 +280,10 @@ const billingController = {
             }
 
             await db.prepare('DELETE FROM business_invoices WHERE id = ?').run(id);
+
+            // Sync to GSTR-1 (deletion)
+            await gstHelper.syncInvoiceToGstr1(id, req.user.id);
+
             await logBusinessAudit(req.user.id, 'INVOICE_DELETE', `Deleted invoice ID ${id}`, 'WARN');
             return sendSuccess(res, null, 'Invoice deleted successfully');
         } catch (error) {

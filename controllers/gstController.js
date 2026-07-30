@@ -46,11 +46,16 @@ const initGstTableAndColumns = async () => {
         }
     }
 
-    // Automatically sync existing purchases to GSTR-2B
+    // Automatically sync existing purchases to GSTR-2B and sales to GSTR-1
     try {
         const purchases = await db.prepare("SELECT id, user_id FROM business_purchases").all();
         for (const pur of purchases) {
             await gstHelper.syncPurchaseToGstr2b(pur.id, pur.user_id);
+        }
+
+        const sales = await db.prepare("SELECT id, user_id FROM business_invoices WHERE invoice_type = 'GST' OR tax_amount > 0").all();
+        for (const inv of sales) {
+            await gstHelper.syncInvoiceToGstr1(inv.id, inv.user_id);
         }
     } catch (e) {
         console.error('[GST Controller Startup Sync] Error:', e);
@@ -86,10 +91,23 @@ const gstController = {
     getInvoices: async (req, res) => {
         try {
             const isPg = process.env.DB_TYPE === 'postgres';
-            const notEway = isPg ? `(is_eway_bill IS NOT TRUE AND is_eway_bill::text NOT IN ('true','1'))` : `(is_eway_bill = 'false' OR is_eway_bill IS NULL)`;
-            const notRecon = isPg ? `(is_reconciliation IS NOT TRUE AND is_reconciliation::text NOT IN ('true','1'))` : `(is_reconciliation = 'false' OR is_reconciliation IS NULL)`;
-            const invoices = await db.prepare(`SELECT * FROM gst_invoices WHERE user_id = ? AND ${notEway} AND ${notRecon}`).all(req.user.id);
-            return sendSuccess(res, invoices, 'GST Invoices fetched');
+
+            // Comprehensive filters to exclude e-way bills and reconciliation entries
+            let query = `SELECT * FROM gst_invoices WHERE user_id = ?`;
+            if (isPg) {
+                query += ` AND (is_eway_bill IS NOT TRUE AND is_eway_bill::text NOT IN ('true','1'))`;
+                query += ` AND (is_reconciliation IS NOT TRUE AND is_reconciliation::text NOT IN ('true','1'))`;
+            } else {
+                query += ` AND (is_eway_bill = 'false' OR is_eway_bill = '0' OR is_eway_bill IS NULL)`;
+                query += ` AND (is_reconciliation = 'false' OR is_reconciliation = '0' OR is_reconciliation IS NULL)`;
+            }
+
+            // Only include sales invoices (B2B, B2C, Export)
+            query += ` AND invoice_type IN ('B2B', 'B2C', 'Export', 'GST')`;
+            query += ` ORDER BY created_at DESC`;
+
+            const invoices = await db.prepare(query).all(req.user.id);
+            return sendSuccess(res, invoices, 'GST Invoices (GSTR-1) fetched');
         } catch (e) {
             console.error('[GST Controller] getInvoices error:', e);
             return sendError(res, `Get Invoices Error: ${e.message}`, 500);
