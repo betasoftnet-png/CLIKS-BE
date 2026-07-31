@@ -1966,6 +1966,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE expenses ADD COLUMN proof_file_name TEXT',
       'ALTER TABLE expenses ADD COLUMN proof_file_type TEXT',
       'ALTER TABLE expenses ADD COLUMN proof_timestamp TEXT',
+      'ALTER TABLE expenses ADD COLUMN time TEXT',
       'ALTER TABLE gst_invoices ADD COLUMN customer_gstin TEXT',
       'ALTER TABLE gst_invoices ADD COLUMN customer_name TEXT',
       'ALTER TABLE gst_invoices ADD COLUMN customer_state TEXT',

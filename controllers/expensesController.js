@@ -1,5 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const fs = require('fs');
+const path = require('path');
 
 function normalizePaymentMode(mode) {
     if (!mode) return 'Cash in Hand';
@@ -416,13 +418,42 @@ const expensesController = {
             proof_file_path,
             proof_file_name,
             proof_file_type,
-            proof_timestamp
+            proof_timestamp,
+            file_data,
+            file_name
         } = req.body;
         try {
             const now = new Date().toISOString();
             const val = parseFloat(claim_amount) || 0;
             const finalDate = date || now.split('T')[0];
             const finalTime = time || now.split('T')[1].slice(0, 5);
+
+            let final_proof_file_path = proof_file_path || null;
+            let final_proof_file_name = proof_file_name || null;
+            let final_proof_file_type = proof_file_type || null;
+            let final_proof_timestamp = proof_timestamp || null;
+
+            if (file_data && file_name) {
+                try {
+                    const base64Data = file_data.replace(/^data:.*?;base64,/, '');
+                    const ext = path.extname(file_name) || '.bin';
+                    const safeFilename = `${Date.now()}_${path.basename(file_name).replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+                    const uploadDir = path.join(__dirname, '../uploads');
+                    if (!fs.existsSync(uploadDir)) {
+                        fs.mkdirSync(uploadDir, { recursive: true });
+                    }
+                    const filePath = path.join(uploadDir, safeFilename);
+                    fs.writeFileSync(filePath, base64Data, 'base64');
+                    
+                    final_proof_file_path = `/uploads/${safeFilename}`;
+                    final_proof_file_name = file_name;
+                    final_proof_file_type = ext.replace('.', '').toUpperCase();
+                    final_proof_timestamp = now;
+                } catch (err) {
+                    console.error('[Expense Reimburse] File upload error:', err);
+                }
+            }
+
             const result = await db.prepare(`
                 INSERT INTO expenses (
                     user_id, amount, employee_name, travel_expense, claim_amount, reimbursement_status, is_claim, receipt, date, time, 
@@ -437,10 +468,10 @@ const expensesController = {
                 receipt || null, 
                 finalDate, 
                 finalTime, 
-                proof_file_path || null,
-                proof_file_name || null,
-                proof_file_type || null,
-                proof_timestamp || null,
+                final_proof_file_path,
+                final_proof_file_name,
+                final_proof_file_type,
+                final_proof_timestamp,
                 now, 
                 now
             );
