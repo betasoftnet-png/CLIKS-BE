@@ -1857,6 +1857,17 @@ CREATE TABLE IF NOT EXISTS money_trackers (
     ];
     try {
       for (const q of pgAlters) await db.pool.query(q);
+      await db.pool.query(`
+        CREATE TABLE IF NOT EXISTS ca_document_reviews (
+          id SERIAL PRIMARY KEY,
+          ca_user_id INTEGER,
+          client_id INTEGER,
+          document_id TEXT UNIQUE,
+          status TEXT,
+          remark TEXT,
+          updated_at TEXT
+        )
+      `);
       console.log('✅ Updated all table columns (PostgreSQL)');
     } catch (e) {
       console.warn('⚠️ Could not alter tables:', e.message);
@@ -2002,6 +2013,23 @@ CREATE TABLE IF NOT EXISTS money_trackers (
         }
       }
     });
+
+    try {
+      db.raw.exec(`
+        CREATE TABLE IF NOT EXISTS ca_document_reviews (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ca_user_id INTEGER,
+          client_id INTEGER,
+          document_id TEXT UNIQUE,
+          status TEXT,
+          remark TEXT,
+          updated_at TEXT
+        )
+      `);
+    } catch (e) {
+      console.warn('⚠️ Could not create ca_document_reviews table:', e.message);
+    }
+
     console.log('✅ Verified/Updated table columns in SQLite');
   }
 

@@ -946,6 +946,162 @@ const caController = {
             console.error('[CA cancelTeamRequest Error]', error);
             return sendError(res, 'Failed to cancel team request', 500);
         }
+    },
+    getClientDocuments: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const client = await db.prepare("SELECT * FROM ca_clients WHERE id = ? AND ca_user_id = ?").get(id, req.user.id);
+            if (!client) {
+                return sendError(res, 'Client not found', 404);
+            }
+
+            const clientUser = await db.prepare("SELECT * FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
+            
+            let allDocs = [];
+
+            if (clientUser) {
+                // 1. Fetch expenses/claims proof documents
+                const expenses = await db.prepare("SELECT * FROM expenses WHERE user_id = ? AND is_claim = 'true'").all(clientUser.id);
+                expenses.forEach(exp => {
+                    let files = [];
+                    if (exp.proof_files) {
+                        try {
+                            files = JSON.parse(exp.proof_files);
+                        } catch (e) {}
+                    }
+                    if (!Array.isArray(files) || files.length === 0) {
+                        if (exp.proof_file_path) {
+                            files = [{
+                                path: exp.proof_file_path,
+                                name: exp.proof_file_name || 'Receipt',
+                                type: exp.proof_file_type || 'Image',
+                                timestamp: exp.proof_timestamp || exp.created_at
+                            }];
+                        }
+                    }
+                    files.forEach((file, fIdx) => {
+                        const fileExt = (file.name || '').split('.').pop().toLowerCase();
+                        const isPdf = fileExt === 'pdf' || (file.type || '').toLowerCase().includes('pdf');
+                        allDocs.push({
+                            id: `claim_${exp.id}_${fIdx}`,
+                            source_table: 'expenses',
+                            source_id: exp.id,
+                            name: file.name || exp.proof_file_name || 'Receipt',
+                            path: file.path || exp.proof_file_path,
+                            type: isPdf ? 'PDF' : 'Image',
+                            uploaded_by: exp.employee_name || client.name,
+                            uploaded_at: file.timestamp || exp.proof_timestamp || exp.created_at || exp.date || '',
+                            task_name: `Expense Claim: ${exp.travel_expense || 'Reimbursement'}`
+                        });
+                    });
+                });
+
+                // 2. Fetch GST Invoices LUT documents
+                const gstInvoices = await db.prepare("SELECT * FROM gst_invoices WHERE user_id = ? AND lut_document_path IS NOT NULL").all(clientUser.id);
+                gstInvoices.forEach(inv => {
+                    allDocs.push({
+                        id: `gst_${inv.id}`,
+                        source_table: 'gst_invoices',
+                        source_id: inv.id,
+                        name: inv.lut_file_name || 'LUT Document',
+                        path: inv.lut_document_path,
+                        type: 'PDF',
+                        uploaded_by: inv.lut_uploaded_by || client.name,
+                        uploaded_at: inv.lut_uploaded_at || inv.created_at || inv.invoice_date || '',
+                        task_name: `GST Invoice: ${inv.invoice_number} (Export Under LUT)`
+                    });
+                });
+            }
+
+            // 3. Fetch Client Requests with attached files
+            const clientRequests = await db.prepare("SELECT * FROM ca_client_requests WHERE ca_user_id = ? AND LOWER(client_name) = LOWER(?) AND attached_file IS NOT NULL").all(req.user.id, client.name);
+            clientRequests.forEach(reqRec => {
+                const fileExt = (reqRec.attached_file || '').split('.').pop().toLowerCase();
+                const isPdf = fileExt === 'pdf' || (reqRec.doc_type || '').toLowerCase().includes('pdf');
+                allDocs.push({
+                    id: `request_${reqRec.id}`,
+                    source_table: 'ca_client_requests',
+                    source_id: reqRec.id,
+                    name: reqRec.attached_file,
+                    path: `/uploads/${reqRec.attached_file}`,
+                    type: isPdf ? 'PDF' : 'Image',
+                    uploaded_by: client.name,
+                    uploaded_at: reqRec.updated_at || reqRec.created_at || reqRec.due_date || '',
+                    task_name: `Client Request: ${reqRec.title}`
+                });
+            });
+
+            // 4. Fetch Client Tasks with attached files
+            const clientTasks = await db.prepare("SELECT * FROM ca_tasks WHERE ca_user_id = ? AND LOWER(client_name) = LOWER(?) AND attached_file IS NOT NULL").all(req.user.id, client.name);
+            clientTasks.forEach(taskRec => {
+                const fileExt = (taskRec.attached_file || '').split('.').pop().toLowerCase();
+                const isPdf = fileExt === 'pdf';
+                allDocs.push({
+                    id: `task_${taskRec.id}`,
+                    source_table: 'ca_tasks',
+                    source_id: taskRec.id,
+                    name: taskRec.attached_file,
+                    path: `/uploads/${taskRec.attached_file}`,
+                    type: isPdf ? 'PDF' : 'Image',
+                    uploaded_by: client.name,
+                    uploaded_at: taskRec.due_date || taskRec.created_at || '',
+                    task_name: `Assigned Task: ${taskRec.title}`
+                });
+            });
+
+            // 5. Fetch Reviews & Remarks
+            const reviews = await db.prepare("SELECT * FROM ca_document_reviews WHERE ca_user_id = ? AND client_id = ?").all(req.user.id, client.id);
+            const reviewsMap = {};
+            reviews.forEach(r => {
+                reviewsMap[r.document_id] = { status: r.status, remark: r.remark };
+            });
+
+            // Map all documents with review statuses
+            const mappedDocs = allDocs.map(doc => {
+                const rev = reviewsMap[doc.id] || {};
+                return {
+                    ...doc,
+                    status: rev.status || 'Pending Review',
+                    remark: rev.remark || ''
+                };
+            });
+
+            return sendSuccess(res, mappedDocs, 'Client documents retrieved successfully');
+        } catch (error) {
+            console.error('[CA getClientDocuments Error]', error);
+            return sendError(res, 'Failed to retrieve client documents', 500);
+        }
+    },
+    updateClientDocumentReview: async (req, res) => {
+        const { id: clientId } = req.params;
+        const { documentId, status, remark } = req.body;
+        if (!documentId) {
+            return sendError(res, 'Document ID is required', 400);
+        }
+        try {
+            const now = new Date().toISOString();
+            const existing = await db.prepare("SELECT * FROM ca_document_reviews WHERE ca_user_id = ? AND client_id = ? AND document_id = ?").get(req.user.id, clientId, documentId);
+            
+            if (existing) {
+                const finalStatus = status !== undefined ? status : existing.status;
+                const finalRemark = remark !== undefined ? remark : existing.remark;
+                await db.prepare(`
+                    UPDATE ca_document_reviews 
+                    SET status = ?, remark = ?, updated_at = ?
+                    WHERE id = ?
+                `).run(finalStatus, finalRemark, now, existing.id);
+            } else {
+                await db.prepare(`
+                    INSERT INTO ca_document_reviews (ca_user_id, client_id, document_id, status, remark, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).run(req.user.id, clientId, documentId, status || 'Pending Review', remark || '', now);
+            }
+
+            return sendSuccess(res, { documentId, status, remark }, 'Document review updated successfully');
+        } catch (error) {
+            console.error('[CA updateClientDocumentReview Error]', error);
+            return sendError(res, 'Failed to update document review', 500);
+        }
     }
 };
 
