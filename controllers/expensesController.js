@@ -458,7 +458,7 @@ const expensesController = {
                 INSERT INTO expenses (
                     user_id, amount, employee_name, travel_expense, claim_amount, reimbursement_status, is_claim, receipt, date, time, 
                     proof_file_path, proof_file_name, proof_file_type, proof_timestamp, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'Pending', 'true', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, 'Pending Approval', 'true', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, 
                 val, 
