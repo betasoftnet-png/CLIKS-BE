@@ -98,6 +98,27 @@ const staffController = {
         }
     },
 
+    // GET /staff/search
+    searchStaff: async (req, res) => {
+        const { q } = req.query;
+        try {
+            let sql = "SELECT * FROM employees WHERE user_id = ? AND status = 'active'";
+            const params = [req.user.id];
+            
+            if (q && q.trim()) {
+                const searchVal = `%${q.trim()}%`;
+                sql += " AND (name LIKE ? OR department LIKE ? OR designation LIKE ? OR ('CLK-00' || id) LIKE ? OR CAST(id AS TEXT) LIKE ?)";
+                params.push(searchVal, searchVal, searchVal, searchVal, searchVal);
+            }
+            
+            const staff = await db.prepare(sql).all(...params);
+            return sendSuccess(res, staff, 'Staff search completed successfully');
+        } catch (error) {
+            console.error('[Staff Controller] Search error:', error);
+            return sendError(res, 'Failed to search staff', 500);
+        }
+    },
+
     // 3. GET /staff/:id
     getStaffById: async (req, res) => {
         const { id } = req.params;

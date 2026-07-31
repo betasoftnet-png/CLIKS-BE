@@ -410,6 +410,8 @@ const expensesController = {
     reimburseExpense: async (req, res) => {
         const { 
             employee_name, 
+            employee_code,
+            department,
             travel_expense, 
             claim_amount, 
             receipt, 
@@ -423,17 +425,62 @@ const expensesController = {
             file_name
         } = req.body;
         try {
+            if (!employee_name || !employee_name.trim()) {
+                return sendError(res, 'Employee Name is mandatory', 400);
+            }
+            if (!employee_code || !employee_code.trim()) {
+                return sendError(res, 'Employee ID is mandatory', 400);
+            }
+            
+            // Check if employee exists and is active
+            const empId = parseInt(employee_code.replace('CLK-00', ''));
+            const exists = await db.prepare('SELECT id FROM employees WHERE id = ? AND user_id = ? AND status = \'active\'').get(empId, req.user.id);
+            if (!exists) {
+                return sendError(res, 'Selected employee is invalid or inactive', 400);
+            }
+
             const now = new Date().toISOString();
             const val = parseFloat(claim_amount) || 0;
             const finalDate = date || now.split('T')[0];
             const finalTime = time || now.split('T')[1].slice(0, 5);
 
-            let final_proof_file_path = proof_file_path || null;
-            let final_proof_file_name = proof_file_name || null;
-            let final_proof_file_type = proof_file_type || null;
-            let final_proof_timestamp = proof_timestamp || null;
-
-            if (file_data && file_name) {
+            let uploadedFiles = [];
+            
+            // Support multiple files array
+            if (req.body.files && Array.isArray(req.body.files)) {
+                for (const file of req.body.files) {
+                    if (file.file_data && file.file_name) {
+                        try {
+                            const base64Data = file.file_data.replace(/^data:.*?;base64,/, '');
+                            const ext = path.extname(file.file_name) || '.bin';
+                            const safeFilename = `${Date.now()}_${Math.floor(Math.random() * 1000)}_${path.basename(file.file_name).replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+                            const uploadDir = path.join(__dirname, '../uploads');
+                            if (!fs.existsSync(uploadDir)) {
+                                fs.mkdirSync(uploadDir, { recursive: true });
+                            }
+                            const filePath = path.join(uploadDir, safeFilename);
+                            fs.writeFileSync(filePath, base64Data, 'base64');
+                            
+                            uploadedFiles.push({
+                                path: `/uploads/${safeFilename}`,
+                                name: file.file_name,
+                                type: ext.replace('.', '').toUpperCase(),
+                                timestamp: now
+                            });
+                        } catch (err) {
+                            console.error('[Expense Reimburse] Multi-file upload error:', err);
+                        }
+                    } else if (file.proof_file_path || file.path) {
+                        uploadedFiles.push({
+                            path: file.proof_file_path || file.path,
+                            name: file.proof_file_name || file.name || 'receipt',
+                            type: file.proof_file_type || file.type || 'image',
+                            timestamp: file.proof_timestamp || file.timestamp || now
+                        });
+                    }
+                }
+            } else if (file_data && file_name) {
+                // Backward compatibility for single file
                 try {
                     const base64Data = file_data.replace(/^data:.*?;base64,/, '');
                     const ext = path.extname(file_name) || '.bin';
@@ -445,33 +492,41 @@ const expensesController = {
                     const filePath = path.join(uploadDir, safeFilename);
                     fs.writeFileSync(filePath, base64Data, 'base64');
                     
-                    final_proof_file_path = `/uploads/${safeFilename}`;
-                    final_proof_file_name = file_name;
-                    final_proof_file_type = ext.replace('.', '').toUpperCase();
-                    final_proof_timestamp = now;
+                    uploadedFiles.push({
+                        path: `/uploads/${safeFilename}`,
+                        name: file_name,
+                        type: ext.replace('.', '').toUpperCase(),
+                        timestamp: now
+                    });
                 } catch (err) {
                     console.error('[Expense Reimburse] File upload error:', err);
                 }
             }
 
+            const firstFile = uploadedFiles[0] || {};
+            const proof_files_json = uploadedFiles.length > 0 ? JSON.stringify(uploadedFiles) : null;
+
             const result = await db.prepare(`
                 INSERT INTO expenses (
-                    user_id, amount, employee_name, travel_expense, claim_amount, reimbursement_status, is_claim, receipt, date, time, 
-                    proof_file_path, proof_file_name, proof_file_type, proof_timestamp, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'Pending Approval', 'true', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    user_id, amount, employee_name, employee_code, department, travel_expense, claim_amount, reimbursement_status, is_claim, receipt, date, time, 
+                    proof_file_path, proof_file_name, proof_file_type, proof_timestamp, proof_files, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending Approval', 'true', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, 
                 val, 
                 employee_name, 
+                employee_code,
+                department || null,
                 travel_expense, 
                 val, 
                 receipt || null, 
                 finalDate, 
                 finalTime, 
-                final_proof_file_path,
-                final_proof_file_name,
-                final_proof_file_type,
-                final_proof_timestamp,
+                firstFile.path || null,
+                firstFile.name || null,
+                firstFile.type || null,
+                firstFile.timestamp || null,
+                proof_files_json,
                 now, 
                 now
             );

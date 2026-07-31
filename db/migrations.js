@@ -1987,7 +1987,10 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE gst_invoices ADD COLUMN invoice_date TEXT',
       'ALTER TABLE gst_invoices ADD COLUMN sender_product_name TEXT',
       'ALTER TABLE gst_invoices ADD COLUMN receiver_product_name TEXT',
-      'ALTER TABLE expenses ADD COLUMN team_members TEXT'
+      'ALTER TABLE expenses ADD COLUMN team_members TEXT',
+      'ALTER TABLE expenses ADD COLUMN employee_code TEXT',
+      'ALTER TABLE expenses ADD COLUMN department TEXT',
+      'ALTER TABLE expenses ADD COLUMN proof_files TEXT'
     ];
 
     alterQueries.forEach(query => {
