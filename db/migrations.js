@@ -1985,6 +1985,8 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE gst_invoices ADD COLUMN igst REAL DEFAULT 0',
       'ALTER TABLE gst_invoices ADD COLUMN purchase_invoice_id INTEGER',
       'ALTER TABLE gst_invoices ADD COLUMN invoice_date TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN sender_product_name TEXT',
+      'ALTER TABLE gst_invoices ADD COLUMN receiver_product_name TEXT',
       'ALTER TABLE expenses ADD COLUMN team_members TEXT'
     ];
 
