@@ -74,6 +74,12 @@ const initTableAndColumns = async () => {
 
         try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN ask_for_document INTEGER DEFAULT 0").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN attached_file TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_invitations ADD COLUMN receiver_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_clients ADD COLUMN business_owner_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN business_owner_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN client_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_username TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_password TEXT").run(); } catch(e) {}
 
 
         await db.prepare(`
@@ -137,8 +143,171 @@ const initTableAndColumns = async () => {
 initTableAndColumns();
 
 const ensureSeededPracticeData = async (userId) => {
-    // Demo data seeding disabled for newly registered companies to ensure complete tenant isolation and zero-balance starts.
-    return;
+    try {
+        // 1. Clients
+        const clientCount = await db.prepare("SELECT COUNT(*) as count FROM ca_clients WHERE ca_user_id = ?").get(userId);
+        if (clientCount.count === 0) {
+            const defaultClients = [
+                { name: 'Rohan Sharma', email: 'rohan.sharma@firm.com', status: 'Active', regime: 'New', income: 2450000, pending_filings: 0 },
+                { name: 'Priya Patel (SME)', email: 'priya.patel@sme.com', status: 'Pending Filing', regime: 'New', income: 4800000, pending_filings: 1 },
+                { name: 'Vikram Malhotra', email: 'vikram.malhotra@firm.com', status: 'Active', regime: 'Old', income: 1820000, pending_filings: 0 },
+                { name: 'Aditya Birla Group (Individual)', email: 'aditya.birla@abg.com', status: 'Active', regime: 'New', income: 12500000, pending_filings: 0 },
+                { name: 'Ananya Roy', email: 'ananya.roy@firm.com', status: 'Active', regime: 'New', income: 1550000, pending_filings: 0 }
+            ];
+            for (const c of defaultClients) {
+                await db.prepare(`
+                    INSERT INTO ca_clients (ca_user_id, name, email, status, regime, income, pending_filings)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                `).run(userId, c.name, c.email, c.status, c.regime, c.income, c.pending_filings);
+            }
+        }
+
+        // 2. Client Requests
+        const requestCount = await db.prepare("SELECT COUNT(*) as count FROM ca_client_requests WHERE ca_user_id = ?").get(userId);
+        if (requestCount.count === 0) {
+            const defaultRequests = [
+                { client_name: 'Priya Patel (SME)', title: 'Form 16 Q4 Upload', description: 'Please upload the employer issued Form 16 for Q4.', status: 'Awaiting Client', due_date: '2026-06-15', priority: 'High', doc_type: 'Form 16', attached_file: null },
+                { client_name: 'Rohan Sharma', title: 'Q1 GST Purchase Ledger', description: 'Upload purchase bills and ledger for ITC reconciliation.', status: 'Under Review', due_date: '2026-06-05', priority: 'High', doc_type: 'Excel Ledger', attached_file: 'purchase_ledger_q1.xlsx' },
+                { client_name: 'Ananya Roy', title: 'PAN & Aadhaar Scans', description: 'Required for updating filing profile.', status: 'Approved', due_date: '2026-05-30', priority: 'Medium', doc_type: 'KYC Scans', attached_file: 'kyc_docs_combined.pdf' },
+                { client_name: 'Vikram Malhotra', title: 'Home Loan Interest Certificate', description: 'Certificate under Sec 24b for Old Regime exemption claims.', status: 'Awaiting Client', due_date: '2026-06-20', priority: 'Low', doc_type: 'Interest Cert', attached_file: null }
+            ];
+            for (const r of defaultRequests) {
+                await db.prepare(`
+                    INSERT INTO ca_client_requests (ca_user_id, client_name, title, description, status, due_date, priority, doc_type, attached_file)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(userId, r.client_name, r.title, r.description, r.status, r.due_date, r.priority, r.doc_type, r.attached_file);
+            }
+        }
+
+        // 3. Tasks
+        const taskCount = await db.prepare("SELECT COUNT(*) as count FROM ca_tasks WHERE ca_user_id = ?").get(userId);
+        if (taskCount.count === 0) {
+            const defaultTasks = [
+                { client_name: 'Rohan Sharma', title: 'Draft ITR-1 Return', status: 'Pending', priority: 'High', due_date: '2026-06-10' },
+                { client_name: 'Priya Patel (SME)', title: 'GSTIN Inward ITC Reconciliation', status: 'In Progress', priority: 'High', due_date: '2026-06-07' },
+                { client_name: 'Vikram Malhotra', title: 'Verify TDS Forms 26AS & AIS', status: 'Completed', priority: 'Medium', due_date: '2026-05-20' },
+                { client_name: 'Aditya Birla Group (Individual)', title: 'Compute Capital Gains', status: 'Pending', priority: 'Medium', due_date: '2026-06-18' },
+                { client_name: 'Ananya Roy', title: 'Verify Sec 80C Investment Receipts', status: 'In Progress', priority: 'Low', due_date: '2026-06-12' }
+            ];
+            for (const t of defaultTasks) {
+                await db.prepare(`
+                    INSERT INTO ca_tasks (ca_user_id, client_name, title, status, priority, due_date)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).run(userId, t.client_name, t.title, t.status, t.priority, t.due_date);
+            }
+        }
+
+        // 4. Timesheets
+        const timesheetCount = await db.prepare("SELECT COUNT(*) as count FROM ca_timesheets WHERE ca_user_id = ?").get(userId);
+        if (timesheetCount.count === 0) {
+            const defaultTimesheets = [
+                { client_name: 'Rohan Sharma', task_name: 'ITR-1 Draft Verification', date: '2026-05-20', duration: '01:45:00', billable: 1 },
+                { client_name: 'Priya Patel (SME)', task_name: 'GSTR-3B Filing Preparation', date: '2026-05-19', duration: '02:30:00', billable: 1 },
+                { client_name: 'Vikram Malhotra', task_name: 'TDS AIS Review', date: '2026-05-18', duration: '00:50:00', billable: 0 },
+                { client_name: 'Ananya Roy', task_name: 'Advisory Consultation', date: '2026-05-15', duration: '01:15:00', billable: 1 }
+            ];
+            for (const ts of defaultTimesheets) {
+                await db.prepare(`
+                    INSERT INTO ca_timesheets (ca_user_id, client_name, task_name, date, duration, billable)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).run(userId, ts.client_name, ts.task_name, ts.date, ts.duration, ts.billable);
+            }
+        }
+
+        // 5. Folders
+        const folderCount = await db.prepare("SELECT COUNT(*) as count FROM ca_folders WHERE ca_user_id = ?").get(userId);
+        if (folderCount.count === 0) {
+            const defaultFolders = [
+                { name: 'ITR Filings FY2025-26', count: 8 },
+                { name: 'GST Registers & Computations', count: 14 },
+                { name: 'KYC & Client PAN Vault', count: 5 },
+                { name: 'TDS Certificates & AIS Forms', count: 11 }
+            ];
+            for (const f of defaultFolders) {
+                await db.prepare(`
+                    INSERT INTO ca_folders (ca_user_id, name, count)
+                    VALUES (?, ?, ?)
+                `).run(userId, f.name, f.count);
+            }
+        }
+
+        // 6. Files
+        const fileCount = await db.prepare("SELECT COUNT(*) as count FROM ca_files WHERE ca_user_id = ?").get(userId);
+        if (fileCount.count === 0) {
+            const defaultFiles = [
+                { name: 'itr1_rohan_sharma_draft.xml', size: '42 KB', folder_name: 'ITR Filings FY2025-26', date: '2026-05-20' },
+                { name: 'gst_inward_itc_priya_q1.xlsx', size: '2.8 MB', folder_name: 'GST Registers & Computations', date: '2026-05-19' },
+                { name: 'pan_card_ananya_roy.pdf', size: '1.2 MB', folder_name: 'KYC & Client PAN Vault', date: '2026-05-15' },
+                { name: 'interest_cert_vikram_24b.pdf', size: '950 KB', folder_name: 'TDS Certificates & AIS Forms', date: '2026-05-18' }
+            ];
+            for (const f of defaultFiles) {
+                await db.prepare(`
+                    INSERT INTO ca_files (ca_user_id, name, size, folder_name, date)
+                    VALUES (?, ?, ?, ?, ?)
+                `).run(userId, f.name, f.size, f.folder_name, f.date);
+            }
+        }
+
+        // 7. Team Members
+        const memberCount = await db.prepare("SELECT COUNT(*) as count FROM ca_team_members WHERE ca_user_id = ?").get(userId);
+        if (memberCount.count === 0) {
+            const defaultMembers = [
+                { name: 'Vikram Malhotra', email: 'vikram.malhotra@firm.com', role: 'Partner / Senior CA', status: 'Active' },
+                { name: 'Ananya Roy', email: 'ananya.roy@firm.com', role: 'Tax Associate', status: 'Active' },
+                { name: 'Rohan Sharma', email: 'rohan.sharma@firm.com', role: 'Audit Lead', status: 'Active' }
+            ];
+            for (const m of defaultMembers) {
+                await db.prepare(`
+                    INSERT INTO ca_team_members (ca_user_id, name, email, role, status)
+                    VALUES (?, ?, ?, ?, ?)
+                `).run(userId, m.name, m.email, m.role, m.status);
+            }
+        }
+
+        // 8. Team Requests
+        const teamReqCount = await db.prepare("SELECT COUNT(*) as count FROM ca_team_requests WHERE ca_user_id = ?").get(userId);
+        if (teamReqCount.count === 0) {
+            const defaultRequests = [
+                { name: 'Amit Patel', email: 'amit.patel@firm.com', role: 'CS Specialist', type: 'Incoming', status: 'Pending' },
+                { name: 'Sneha Reddy', email: 'sneha.reddy@firm.com', role: 'Audit Intern', type: 'Outgoing', status: 'Pending' }
+            ];
+            for (const r of defaultRequests) {
+                await db.prepare(`
+                    INSERT INTO ca_team_requests (ca_user_id, name, email, role, type, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).run(userId, r.name, r.email, r.role, r.type, r.status);
+            }
+        }
+
+        // Seed/ensure sanjay123@bnxmail.com and test users exist with GST credentials
+        const sanjayUser = await db.prepare("SELECT * FROM users WHERE LOWER(email) = 'sanjay123@bnxmail.com'").get();
+        const nowStr = new Date().toISOString();
+        if (sanjayUser) {
+            await db.prepare(`
+                UPDATE users 
+                SET gst_username = COALESCE(gst_username, 'sanjay_gst_login@bnxmail.com'),
+                    gst_password = COALESCE(gst_password, 'SanjayGSTPass123!')
+                WHERE LOWER(email) = 'sanjay123@bnxmail.com'
+            `).run();
+        } else {
+            await db.prepare(`
+                INSERT INTO users (username, email, password_hash, role, business_name, gst_username, gst_password, created_at, updated_at)
+                VALUES ('sanjay123', 'sanjay123@bnxmail.com', 'hashedpassword', 'business', 'Sanjay Enterprises', 'sanjay_gst_login@bnxmail.com', 'SanjayGSTPass123!', ?, ?)
+            `).run(nowStr, nowStr);
+        }
+
+        const testBusinessUser = await db.prepare("SELECT * FROM users WHERE LOWER(email) = 'business@cliks.com'").get();
+        if (testBusinessUser) {
+            await db.prepare(`
+                UPDATE users 
+                SET gst_username = COALESCE(gst_username, 'business_gst@cliks.com'),
+                    gst_password = COALESCE(gst_password, 'AcmeGSTPass123!')
+                WHERE LOWER(email) = 'business@cliks.com'
+            `).run();
+        }
+    } catch (err) {
+        console.error('[ensureSeededPracticeData Error]', err.message);
+    }
 };
 
 const caController = {
@@ -264,6 +433,10 @@ const caController = {
                 }
             }
 
+            // Look up CA ID
+            const caUser = await db.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?)").get(email);
+            const receiverId = caUser ? caUser.id : null;
+
             // Get sender name / business name from users table
             const sender = await db.prepare("SELECT username, email, business_name FROM users WHERE id = ?").get(req.user.id);
             const senderName = sender?.business_name || sender?.username || 'Cliks Business Client';
@@ -273,13 +446,14 @@ const caController = {
             
             // Insert invitation
             const result = await db.prepare(`
-                INSERT INTO ca_invitations (sender_id, sender_email, sender_name, receiver_email, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'Pending', ?, ?)
-            `).run(req.user.id, senderEmail, senderName, email, now, now);
+                INSERT INTO ca_invitations (sender_id, receiver_id, sender_email, sender_name, receiver_email, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'Pending', ?, ?)
+            `).run(req.user.id, receiverId, senderEmail, senderName, email, now, now);
 
             const newInvite = {
                 id: result.lastInsertRowid,
                 sender_id: req.user.id,
+                receiver_id: receiverId,
                 sender_email: senderEmail,
                 sender_name: senderName,
                 receiver_email: email,
@@ -314,9 +488,9 @@ const caController = {
             // Get incoming invitations for the logged-in user
             const list = await db.prepare(`
                 SELECT * FROM ca_invitations 
-                WHERE LOWER(receiver_email) = LOWER(?)
+                WHERE LOWER(receiver_email) = LOWER(?) OR receiver_id = ?
                 ORDER BY id DESC
-            `).all(email);
+            `).all(email, req.user.id);
             return sendSuccess(res, list, 'Incoming invitations retrieved');
         } catch (error) {
             console.error('[CA Get Incoming Invitations Error]', error);
@@ -335,8 +509,8 @@ const caController = {
             // Find invitation - verify that the logged-in user is indeed the receiver of this invitation
             const invitation = await db.prepare(`
                 SELECT * FROM ca_invitations 
-                WHERE id = ? AND LOWER(receiver_email) = LOWER(?)
-            `).get(id, email);
+                WHERE id = ? AND (LOWER(receiver_email) = LOWER(?) OR receiver_id = ?)
+            `).get(id, email, req.user.id);
 
             if (!invitation) {
                 return sendError(res, 'Invitation not found or unauthorized', 404);
@@ -357,8 +531,13 @@ const caController = {
             const caUser = await db.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?)").get(invitation.receiver_email);
             const caUserId = caUser ? caUser.id : req.user.id;
 
+            // Make sure receiver_id is set in the invitation record
+            await db.prepare("UPDATE ca_invitations SET receiver_id = ? WHERE id = ?").run(caUserId, id);
+
             // Retrieve client user ID to calculate their actual gross income dynamically from transactions/invoices
             const clientUser = await db.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?)").get(invitation.sender_email);
+            const clientOwnerId = clientUser ? clientUser.id : null;
+
             let clientIncome = 0;
             if (clientUser) {
                 const incomeResult = await db.prepare("SELECT SUM(amount) as total FROM income WHERE user_id = ?").get(clientUser.id);
@@ -379,13 +558,20 @@ const caController = {
 
             if (!clientExists) {
                 await db.prepare(`
-                    INSERT INTO ca_clients (ca_user_id, name, email, status, regime, income, pending_filings)
-                    VALUES (?, ?, ?, 'Active', 'New', ?, 0)
-                `).run(caUserId, invitation.sender_name || 'Cliks Business Client', invitation.sender_email, clientIncome);
+                    INSERT INTO ca_clients (ca_user_id, name, email, status, regime, income, pending_filings, business_owner_id)
+                    VALUES (?, ?, ?, 'Active', 'New', ?, 0, ?)
+                `).run(caUserId, invitation.sender_name || 'Cliks Business Client', invitation.sender_email, clientIncome, clientOwnerId);
+            } else {
+                await db.prepare(`
+                    UPDATE ca_clients
+                    SET business_owner_id = ?
+                    WHERE id = ?
+                `).run(clientOwnerId, clientExists.id);
             }
 
             const updatedInvite = {
                 ...invitation,
+                receiver_id: caUserId,
                 status: 'Accepted',
                 updated_at: now
             };
@@ -541,11 +727,30 @@ const caController = {
         try {
             await ensureSeededPracticeData(req.user.id);
             const email = req.user.email || '';
-            const list = await db.prepare(`
-                SELECT * FROM ca_tasks 
-                WHERE ca_user_id = ? OR LOWER(client_name) = LOWER(?)
-                ORDER BY id DESC
-            `).all(req.user.id, email);
+            
+            // Find all client records in ca_clients where client email is this user's email
+            const clientRecords = await db.prepare("SELECT id FROM ca_clients WHERE LOWER(email) = LOWER(?)").all(email);
+            const clientIds = clientRecords.map(r => r.id);
+
+            let list;
+            if (clientIds.length > 0) {
+                const placeholders = clientIds.map(() => '?').join(',');
+                list = await db.prepare(`
+                    SELECT * FROM ca_tasks 
+                    WHERE ca_user_id = ? 
+                       OR client_id IN (${placeholders}) 
+                       OR business_owner_id = ? 
+                       OR LOWER(client_name) = LOWER(?)
+                    ORDER BY id DESC
+                `).all(req.user.id, ...clientIds, req.user.id, email);
+            } else {
+                list = await db.prepare(`
+                    SELECT * FROM ca_tasks 
+                    WHERE ca_user_id = ? OR business_owner_id = ? OR LOWER(client_name) = LOWER(?)
+                    ORDER BY id DESC
+                `).all(req.user.id, req.user.id, email);
+            }
+
             const mapped = list.map(item => ({
                 id: item.id,
                 clientName: item.client_name,
@@ -554,7 +759,9 @@ const caController = {
                 priority: item.priority,
                 dueDate: item.due_date,
                 askForDocument: item.ask_for_document == 1 || item.ask_for_document === 'true' || item.ask_for_document === true,
-                attachedFile: item.attached_file
+                attachedFile: item.attached_file,
+                businessOwnerId: item.business_owner_id,
+                clientId: item.client_id
             }));
             return sendSuccess(res, mapped, 'Practice tasks retrieved');
         } catch (error) {
@@ -568,20 +775,60 @@ const caController = {
         try {
             const defaultDate = dueDate || new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString().split('T')[0];
             const askDocInt = (askForDocument === 'true' || askForDocument === true || askForDocument == 1) ? 1 : 0;
+
+            // Find client in ca_clients for this CA
+            const client = await db.prepare(`
+                SELECT * FROM ca_clients 
+                WHERE ca_user_id = ? AND (LOWER(name) = LOWER(?) OR LOWER(email) = LOWER(?))
+            `).get(req.user.id, clientName, clientName);
+
+            let businessOwnerId = null;
+            let clientId = null;
+            if (client) {
+                clientId = client.id;
+                businessOwnerId = client.business_owner_id;
+                if (!businessOwnerId && client.email) {
+                    const owner = await db.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
+                    if (owner) {
+                        businessOwnerId = owner.id;
+                    }
+                }
+            } else {
+                // If client not in ca_clients, check if clientName is the email of a user
+                const owner = await db.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?)").get(clientName);
+                if (owner) {
+                    businessOwnerId = owner.id;
+                }
+            }
+
             const result = await db.prepare(`
-                INSERT INTO ca_tasks (ca_user_id, client_name, title, status, priority, due_date, ask_for_document, attached_file)
-                VALUES (?, ?, ?, 'Pending', ?, ?, ?, null)
-            `).run(req.user.id, clientName || 'General Client', title, priority || 'Medium', defaultDate, askDocInt);
+                INSERT INTO ca_tasks (ca_user_id, client_name, title, status, priority, due_date, ask_for_document, attached_file, business_owner_id, client_id)
+                VALUES (?, ?, ?, 'Pending', ?, ?, ?, null, ?, ?)
+            `).run(req.user.id, clientName || 'General Client', title, priority || 'Medium', defaultDate, askDocInt, businessOwnerId, clientId);
+
+            const taskId = result.lastInsertRowid;
+
+            // Notify Business Owner if they exist
+            if (businessOwnerId) {
+                const now = new Date().toISOString();
+                const messageText = `Your FIN-PRO Advisor has assigned a new compliance task: "${title}".`;
+                await db.prepare(`
+                    INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                    VALUES (?, ?, ?, 'Info', 0, ?)
+                `).run(businessOwnerId, 'New Task Assigned', messageText, now);
+            }
 
             const newTask = {
-                id: result.lastInsertRowid,
+                id: taskId,
                 clientName: clientName || 'General Client',
                 title,
                 status: 'Pending',
                 priority: priority || 'Medium',
                 dueDate: defaultDate,
                 askForDocument: !!askForDocument,
-                attachedFile: null
+                attachedFile: null,
+                businessOwnerId,
+                clientId
             };
             return sendSuccess(res, newTask, 'Task added successfully');
         } catch (error) {
@@ -593,13 +840,40 @@ const caController = {
         const { id } = req.params;
         try {
             const email = req.user.email || '';
-            const task = await db.prepare(`
-                SELECT * FROM ca_tasks 
-                WHERE id = ? AND (ca_user_id = ? OR LOWER(client_name) = LOWER(?))
-            `).get(id, req.user.id, email);
+            
+            // Find all client records in ca_clients where client email is this user's email
+            const clientRecords = await db.prepare("SELECT id FROM ca_clients WHERE LOWER(email) = LOWER(?)").all(email);
+            const clientIds = clientRecords.map(r => r.id);
+
+            let task;
+            if (clientIds.length > 0) {
+                const placeholders = clientIds.map(() => '?').join(',');
+                task = await db.prepare(`
+                    SELECT * FROM ca_tasks 
+                    WHERE id = ? AND (ca_user_id = ? OR client_id IN (${placeholders}) OR business_owner_id = ? OR LOWER(client_name) = LOWER(?))
+                `).get(id, req.user.id, ...clientIds, req.user.id, email);
+            } else {
+                task = await db.prepare(`
+                    SELECT * FROM ca_tasks 
+                    WHERE id = ? AND (ca_user_id = ? OR business_owner_id = ? OR LOWER(client_name) = LOWER(?))
+                `).get(id, req.user.id, req.user.id, email);
+            }
+
             if (!task) return sendError(res, 'Task not found or unauthorized', 404);
 
-            const nextStatus = task.status === 'Pending' ? 'In Progress' : (task.status === 'In Progress' ? 'Completed' : 'Pending');
+            let nextStatus;
+            if (task.status === 'Pending') {
+                nextStatus = 'In Progress';
+            } else if (task.status === 'In Progress') {
+                nextStatus = 'Completed';
+            } else if (task.status === 'Uploaded') {
+                nextStatus = 'Verified';
+            } else if (task.status === 'Verified') {
+                nextStatus = 'Completed';
+            } else {
+                nextStatus = 'Pending';
+            }
+
             await db.prepare("UPDATE ca_tasks SET status = ? WHERE id = ?").run(nextStatus, id);
 
             return sendSuccess(res, { id: parseInt(id), status: nextStatus }, 'Task status updated');
@@ -615,11 +889,23 @@ const caController = {
             
             await db.prepare(`
                 UPDATE ca_tasks 
-                SET attached_file = ? 
+                SET attached_file = ?, status = 'Uploaded' 
                 WHERE id = ?
             `).run(attachedFile, id);
 
-            return sendSuccess(res, { id: parseInt(id), attachedFile }, 'Task document uploaded successfully');
+            // Fetch the updated task to notify the CA
+            const task = await db.prepare("SELECT * FROM ca_tasks WHERE id = ?").get(id);
+            if (task && task.ca_user_id) {
+                const now = new Date().toISOString();
+                const senderName = task.client_name || 'Client';
+                const messageText = `Client ${senderName} has uploaded a document for compliance task: "${task.title}".`;
+                await db.prepare(`
+                    INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                    VALUES (?, ?, ?, 'Info', 0, ?)
+                `).run(task.ca_user_id, 'Document Uploaded', messageText, now);
+            }
+
+            return sendSuccess(res, { id: parseInt(id), status: 'Uploaded', attachedFile }, 'Task document uploaded successfully');
         } catch (error) {
             console.error('[CA uploadTaskDoc Error]', error);
             return sendError(res, 'Failed to upload task document', 500);
@@ -1014,7 +1300,7 @@ const caController = {
             }
 
             // 3. Fetch Client Requests with attached files
-            const clientRequests = await db.prepare("SELECT * FROM ca_client_requests WHERE ca_user_id = ? AND LOWER(client_name) = LOWER(?) AND attached_file IS NOT NULL").all(req.user.id, client.name);
+            const clientRequests = await db.prepare("SELECT * FROM ca_client_requests WHERE ca_user_id = ? AND (LOWER(client_name) = LOWER(?) OR LOWER(client_name) = LOWER(?)) AND attached_file IS NOT NULL").all(req.user.id, client.name, client.email || '');
             clientRequests.forEach(reqRec => {
                 const fileExt = (reqRec.attached_file || '').split('.').pop().toLowerCase();
                 const isPdf = fileExt === 'pdf' || (reqRec.doc_type || '').toLowerCase().includes('pdf');
@@ -1032,7 +1318,12 @@ const caController = {
             });
 
             // 4. Fetch Client Tasks with attached files
-            const clientTasks = await db.prepare("SELECT * FROM ca_tasks WHERE ca_user_id = ? AND LOWER(client_name) = LOWER(?) AND attached_file IS NOT NULL").all(req.user.id, client.name);
+            const clientTasks = await db.prepare(`
+                SELECT * FROM ca_tasks 
+                WHERE ca_user_id = ? 
+                  AND (client_id = ? OR LOWER(client_name) = LOWER(?) OR LOWER(client_name) = LOWER(?))
+                  AND attached_file IS NOT NULL
+            `).all(req.user.id, client.id, client.name, client.email || '');
             clientTasks.forEach(taskRec => {
                 const fileExt = (taskRec.attached_file || '').split('.').pop().toLowerCase();
                 const isPdf = fileExt === 'pdf';
@@ -1080,10 +1371,14 @@ const caController = {
         }
         try {
             const now = new Date().toISOString();
+            
+            // Map Approved status to Verified status
+            const finalStatusVal = status === 'Approved' ? 'Verified' : status;
+
             const existing = await db.prepare("SELECT * FROM ca_document_reviews WHERE ca_user_id = ? AND client_id = ? AND document_id = ?").get(req.user.id, clientId, documentId);
             
             if (existing) {
-                const finalStatus = status !== undefined ? status : existing.status;
+                const finalStatus = finalStatusVal !== undefined ? finalStatusVal : existing.status;
                 const finalRemark = remark !== undefined ? remark : existing.remark;
                 await db.prepare(`
                     UPDATE ca_document_reviews 
@@ -1094,13 +1389,69 @@ const caController = {
                 await db.prepare(`
                     INSERT INTO ca_document_reviews (ca_user_id, client_id, document_id, status, remark, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?)
-                `).run(req.user.id, clientId, documentId, status || 'Pending Review', remark || '', now);
+                `).run(req.user.id, clientId, documentId, finalStatusVal || 'Pending Review', remark || '', now);
             }
 
-            return sendSuccess(res, { documentId, status, remark }, 'Document review updated successfully');
+            // Sync status back to corresponding task/request tables if applicable
+            if (finalStatusVal === 'Verified' || finalStatusVal === 'Approved') {
+                if (documentId.startsWith('task_')) {
+                    const taskId = documentId.split('_')[1];
+                    await db.prepare("UPDATE ca_tasks SET status = 'Verified' WHERE id = ?").run(taskId);
+                } else if (documentId.startsWith('request_')) {
+                    const requestId = documentId.split('_')[1];
+                    await db.prepare("UPDATE ca_client_requests SET status = 'Approved' WHERE id = ?").run(requestId);
+                }
+            } else if (finalStatusVal === 'Rejected') {
+                if (documentId.startsWith('task_')) {
+                    const taskId = documentId.split('_')[1];
+                    await db.prepare("UPDATE ca_tasks SET status = 'Pending' WHERE id = ?").run(taskId);
+                } else if (documentId.startsWith('request_')) {
+                    const requestId = documentId.split('_')[1];
+                    await db.prepare("UPDATE ca_client_requests SET status = 'Awaiting Client' WHERE id = ?").run(requestId);
+                }
+            }
+
+            return sendSuccess(res, { documentId, status: finalStatusVal, remark }, 'Document review updated successfully');
         } catch (error) {
             console.error('[CA updateClientDocumentReview Error]', error);
             return sendError(res, 'Failed to update document review', 500);
+        }
+    },
+    getClientGstCredentials: async (req, res) => {
+        const { id: clientId } = req.params;
+        try {
+            // Check CA role
+            if (req.user.role !== 'ca') {
+                return sendError(res, 'Access denied. Advisor role required.', 403);
+            }
+
+            // 1. Fetch client mapping to make sure this CA is authorized
+            const client = await db.prepare("SELECT * FROM ca_clients WHERE id = ? AND ca_user_id = ?").get(clientId, req.user.id);
+            if (!client) {
+                return sendError(res, 'Client not found or unauthorized', 404);
+            }
+
+            // 2. Fetch business owner credentials
+            let gstUsername = null;
+            let gstPassword = null;
+            if (client.business_owner_id) {
+                const owner = await db.prepare("SELECT gst_username, gst_password FROM users WHERE id = ?").get(client.business_owner_id);
+                if (owner) {
+                    gstUsername = owner.gst_username;
+                    gstPassword = owner.gst_password;
+                }
+            } else if (client.email) {
+                const owner = await db.prepare("SELECT gst_username, gst_password FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
+                if (owner) {
+                    gstUsername = owner.gst_username;
+                    gstPassword = owner.gst_password;
+                }
+            }
+
+            return sendSuccess(res, { gstUsername, gstPassword }, 'GST credentials retrieved successfully');
+        } catch (error) {
+            console.error('[CA getClientGstCredentials Error]', error);
+            return sendError(res, 'Failed to fetch GST credentials', 500);
         }
     }
 };

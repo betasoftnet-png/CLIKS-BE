@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS users (
   subscription_days_remaining INTEGER DEFAULT 0,
   primary_income_source TEXT, -- Rental | Pension | Salaried | Business | Freelancer
   global_budget REAL DEFAULT 20000,
+  gst_username TEXT,
+  gst_password TEXT,
   created_at TEXT,
   updated_at TEXT
 );

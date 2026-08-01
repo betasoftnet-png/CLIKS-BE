@@ -18,6 +18,7 @@ router.get('/clients', caController.getClients);
 router.post('/clients', caController.addClient);
 router.get('/clients/:id/documents', caController.getClientDocuments);
 router.post('/clients/:id/documents/review', caController.updateClientDocumentReview);
+router.get('/clients/:id/gst-credentials', caController.getClientGstCredentials);
 
 router.get('/requests', caController.getRequests);
 router.post('/requests', caController.addRequest);

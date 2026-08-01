@@ -377,6 +377,50 @@ describe('Chartered Accountant CA Command Centre Tests', () => {
 
             expect(finalFolders.body.data[0].count).toBe(initialFolderCount);
         });
+
+        it('should securely fetch GST credentials for a client', async () => {
+            // 1. Create a client linked to business@cliks.com for CA ca@cliks.com (tokenUser2)
+            const registerRes = await request(app)
+                .post('/api/v1/ca/clients')
+                .set('Authorization', `Bearer ${tokenUser2}`)
+                .send({
+                    name: 'Acme Corp',
+                    email: 'business@cliks.com',
+                    status: 'Active',
+                    regime: 'New',
+                    income: 5000000
+                });
+
+            expect(registerRes.status).toBe(200);
+            const clientId = registerRes.body.data.id;
+
+            // Seed GST credentials on business@cliks.com
+            await db.prepare("UPDATE users SET gst_username = 'business_gst@cliks.com', gst_password = 'AcmeGSTPass123!' WHERE email = 'business@cliks.com'").run();
+
+            // 2. Fetch GST credentials as tokenUser2 (Authorized CA)
+            const credsRes = await request(app)
+                .get(`/api/v1/ca/clients/${clientId}/gst-credentials`)
+                .set('Authorization', `Bearer ${tokenUser2}`);
+
+            expect(credsRes.status).toBe(200);
+            expect(credsRes.body.success).toBe(true);
+            expect(credsRes.body.data.gstUsername).toBe('business_gst@cliks.com');
+            expect(credsRes.body.data.gstPassword).toBe('AcmeGSTPass123!');
+
+            // 3. Try to fetch GST credentials as tokenUser1 (Unauthorized Role/User)
+            const unauthRes = await request(app)
+                .get(`/api/v1/ca/clients/${clientId}/gst-credentials`)
+                .set('Authorization', `Bearer ${tokenUser1}`);
+
+            expect(unauthRes.status).toBe(403);
+
+            // 4. Try to fetch GST credentials for non-existent client
+            const notFoundRes = await request(app)
+                .get(`/api/v1/ca/clients/99999/gst-credentials`)
+                .set('Authorization', `Bearer ${tokenUser2}`);
+
+            expect(notFoundRes.status).toBe(404);
+        });
     });
 });
 
