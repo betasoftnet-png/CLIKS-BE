@@ -1,5 +1,34 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const crypto = require('crypto');
+
+const ENCRYPTION_KEY = crypto.createHash('sha256').update(process.env.GST_ENCRYPTION_KEY || 'cliks_gst_secret_key').digest();
+const IV_LENGTH = 16;
+
+function encrypt(text) {
+    if (!text) return null;
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
+    let encrypted = cipher.update(text, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return iv.toString('hex') + ':' + encrypted;
+}
+
+function decrypt(text) {
+    if (!text) return null;
+    try {
+        const textParts = text.split(':');
+        const iv = Buffer.from(textParts.shift(), 'hex');
+        const encryptedText = Buffer.from(textParts.join(':'), 'hex');
+        const decipher = crypto.createDecipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
+        let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return decrypted;
+    } catch (e) {
+        console.error('Decryption failed:', e.message);
+        return null;
+    }
+}
 
 const initTableAndColumns = async () => {
     try {
@@ -80,6 +109,18 @@ const initTableAndColumns = async () => {
         try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN client_id INTEGER").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE users ADD COLUMN gst_username TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE users ADD COLUMN gst_password TEXT").run(); } catch(e) {}
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS ca_gst_access_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ca_user_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL,
+                ca_name TEXT,
+                client_name TEXT,
+                accessed_at TEXT,
+                ip_address TEXT
+            )
+        `).run();
 
 
         await db.prepare(`
@@ -1433,25 +1474,79 @@ const caController = {
 
             // 2. Fetch business owner credentials
             let gstUsername = null;
-            let gstPassword = null;
+            let encryptedPassword = null;
             if (client.business_owner_id) {
                 const owner = await db.prepare("SELECT gst_username, gst_password FROM users WHERE id = ?").get(client.business_owner_id);
                 if (owner) {
                     gstUsername = owner.gst_username;
-                    gstPassword = owner.gst_password;
+                    encryptedPassword = owner.gst_password;
                 }
             } else if (client.email) {
                 const owner = await db.prepare("SELECT gst_username, gst_password FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
                 if (owner) {
                     gstUsername = owner.gst_username;
-                    gstPassword = owner.gst_password;
+                    encryptedPassword = owner.gst_password;
                 }
             }
 
-            return sendSuccess(res, { gstUsername, gstPassword }, 'GST credentials retrieved successfully');
+            // Decrypt the password
+            const gstPassword = decrypt(encryptedPassword);
+
+            // Log access event inside ca_gst_access_logs
+            const now = new Date().toISOString();
+            const caUser = await db.prepare("SELECT username, email FROM users WHERE id = ?").get(req.user.id);
+            const caName = caUser ? (caUser.username || caUser.email) : `CA #${req.user.id}`;
+            const clientName = client.name || `Client #${clientId}`;
+            const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+
+            await db.prepare(`
+                INSERT INTO ca_gst_access_logs (ca_user_id, client_id, ca_name, client_name, accessed_at, ip_address)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `).run(req.user.id, clientId, caName, clientName, now, ipAddress);
+
+            return sendSuccess(res, { gstUsername, gstPassword }, 'GST credentials retrieved and action logged successfully');
         } catch (error) {
             console.error('[CA getClientGstCredentials Error]', error);
             return sendError(res, 'Failed to fetch GST credentials', 500);
+        }
+    },
+    getOwnerGstCredentials: async (req, res) => {
+        try {
+            const user = await db.prepare("SELECT gst_username, gst_password FROM users WHERE id = ?").get(req.user.id);
+            if (!user) {
+                return sendError(res, 'User not found', 404);
+            }
+
+            const gstUsername = user.gst_username || '';
+            const decryptedPassword = decrypt(user.gst_password) || '';
+
+            return sendSuccess(res, { gstUsername, gstPassword: decryptedPassword }, 'GST credentials retrieved successfully');
+        } catch (error) {
+            console.error('[Owner getOwnerGstCredentials Error]', error);
+            return sendError(res, 'Failed to fetch owner GST credentials', 500);
+        }
+    },
+    saveOwnerGstCredentials: async (req, res) => {
+        const { gstUsername, gstPassword } = req.body;
+        if (!gstUsername || !gstPassword) {
+            return sendError(res, 'Username and password are required', 400);
+        }
+        try {
+            const encryptedPassword = encrypt(gstPassword);
+            await db.prepare("UPDATE users SET gst_username = ?, gst_password = ? WHERE id = ?").run(gstUsername, encryptedPassword, req.user.id);
+            return sendSuccess(res, null, 'GST credentials saved and shared successfully');
+        } catch (error) {
+            console.error('[Owner saveOwnerGstCredentials Error]', error);
+            return sendError(res, 'Failed to save owner GST credentials', 500);
+        }
+    },
+    revokeOwnerGstCredentials: async (req, res) => {
+        try {
+            await db.prepare("UPDATE users SET gst_username = NULL, gst_password = NULL WHERE id = ?").run(req.user.id);
+            return sendSuccess(res, null, 'GST credentials sharing revoked successfully');
+        } catch (error) {
+            console.error('[Owner revokeOwnerGstCredentials Error]', error);
+            return sendError(res, 'Failed to revoke owner GST credentials', 500);
         }
     }
 };

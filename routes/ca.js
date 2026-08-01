@@ -19,6 +19,9 @@ router.post('/clients', caController.addClient);
 router.get('/clients/:id/documents', caController.getClientDocuments);
 router.post('/clients/:id/documents/review', caController.updateClientDocumentReview);
 router.get('/clients/:id/gst-credentials', caController.getClientGstCredentials);
+router.get('/owner/gst-credentials', caController.getOwnerGstCredentials);
+router.post('/owner/gst-credentials', caController.saveOwnerGstCredentials);
+router.delete('/owner/gst-credentials', caController.revokeOwnerGstCredentials);
 
 router.get('/requests', caController.getRequests);
 router.post('/requests', caController.addRequest);

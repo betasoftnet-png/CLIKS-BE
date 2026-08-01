@@ -41,6 +41,17 @@ CREATE TABLE IF NOT EXISTS financial_goals (
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
+-- CA GST Portal Access logs (audit trail)
+CREATE TABLE IF NOT EXISTS ca_gst_access_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ca_user_id INTEGER NOT NULL,
+  client_id INTEGER NOT NULL,
+  ca_name TEXT,
+  client_name TEXT,
+  accessed_at TEXT,
+  ip_address TEXT
+);
+
 -- Salary Records
 CREATE TABLE IF NOT EXISTS salary_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
