@@ -2014,7 +2014,10 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE expenses ADD COLUMN team_members TEXT',
       'ALTER TABLE expenses ADD COLUMN employee_code TEXT',
       'ALTER TABLE expenses ADD COLUMN department TEXT',
-      'ALTER TABLE expenses ADD COLUMN proof_files TEXT'
+      'ALTER TABLE expenses ADD COLUMN proof_files TEXT',
+      'ALTER TABLE users ADD COLUMN gst_share_status TEXT DEFAULT \'Not Shared\'',
+      'ALTER TABLE ca_clients ADD COLUMN gst_share_status TEXT DEFAULT \'Not Shared\'',
+      'ALTER TABLE ca_gst_access_logs ADD COLUMN action TEXT DEFAULT \'view\''
     ];
 
     alterQueries.forEach(query => {

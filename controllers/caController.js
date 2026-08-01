@@ -107,8 +107,11 @@ const initTableAndColumns = async () => {
         try { await db.prepare("ALTER TABLE ca_clients ADD COLUMN business_owner_id INTEGER").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN business_owner_id INTEGER").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN client_id INTEGER").run(); } catch(e) {}
-        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_username TEXT").run(); } catch(e) {}
-        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_password TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_username TEXT").run(); } catch(e) { console.error('users gst_username error:', e.message); }
+        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_password TEXT").run(); } catch(e) { console.error('users gst_password error:', e.message); }
+        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_share_status TEXT DEFAULT 'Not Shared'").run(); } catch(e) { console.error('users gst_share_status error:', e.message); }
+        try { await db.prepare("ALTER TABLE ca_clients ADD COLUMN gst_share_status TEXT DEFAULT 'Not Shared'").run(); } catch(e) { console.error('ca_clients gst_share_status error:', e.message); }
+        try { await db.prepare("ALTER TABLE ca_gst_access_logs ADD COLUMN action TEXT DEFAULT 'view'").run(); } catch(e) { console.error('ca_gst_access_logs action error:', e.message); }
 
         await db.prepare(`
             CREATE TABLE IF NOT EXISTS ca_gst_access_logs (
@@ -1461,38 +1464,45 @@ const caController = {
     getClientGstCredentials: async (req, res) => {
         const { id: clientId } = req.params;
         try {
-            // Check CA role
             if (req.user.role !== 'ca') {
                 return sendError(res, 'Access denied. Advisor role required.', 403);
             }
 
-            // 1. Fetch client mapping to make sure this CA is authorized
             const client = await db.prepare("SELECT * FROM ca_clients WHERE id = ? AND ca_user_id = ?").get(clientId, req.user.id);
             if (!client) {
                 return sendError(res, 'Client not found or unauthorized', 404);
             }
 
-            // 2. Fetch business owner credentials
+            let gstShareStatus = client.gst_share_status || 'Not Shared';
             let gstUsername = null;
             let encryptedPassword = null;
+
             if (client.business_owner_id) {
-                const owner = await db.prepare("SELECT gst_username, gst_password FROM users WHERE id = ?").get(client.business_owner_id);
+                const owner = await db.prepare("SELECT gst_username, gst_password, gst_share_status FROM users WHERE id = ?").get(client.business_owner_id);
                 if (owner) {
-                    gstUsername = owner.gst_username;
-                    encryptedPassword = owner.gst_password;
+                    gstShareStatus = owner.gst_share_status || 'Not Shared';
+                    if (gstShareStatus === 'Shared') {
+                        gstUsername = owner.gst_username;
+                        encryptedPassword = owner.gst_password;
+                    }
                 }
             } else if (client.email) {
-                const owner = await db.prepare("SELECT gst_username, gst_password FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
+                const owner = await db.prepare("SELECT gst_username, gst_password, gst_share_status FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
                 if (owner) {
-                    gstUsername = owner.gst_username;
-                    encryptedPassword = owner.gst_password;
+                    gstShareStatus = owner.gst_share_status || 'Not Shared';
+                    if (gstShareStatus === 'Shared') {
+                        gstUsername = owner.gst_username;
+                        encryptedPassword = owner.gst_password;
+                    }
                 }
             }
 
-            // Decrypt the password
+            if (gstShareStatus !== 'Shared') {
+                return sendSuccess(res, { gstUsername: null, gstPassword: null, gstShareStatus }, 'GST credentials not shared');
+            }
+
             const gstPassword = decrypt(encryptedPassword);
 
-            // Log access event inside ca_gst_access_logs
             const now = new Date().toISOString();
             const caUser = await db.prepare("SELECT username, email FROM users WHERE id = ?").get(req.user.id);
             const caName = caUser ? (caUser.username || caUser.email) : `CA #${req.user.id}`;
@@ -1500,11 +1510,11 @@ const caController = {
             const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
 
             await db.prepare(`
-                INSERT INTO ca_gst_access_logs (ca_user_id, client_id, ca_name, client_name, accessed_at, ip_address)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO ca_gst_access_logs (ca_user_id, client_id, ca_name, client_name, accessed_at, ip_address, action)
+                VALUES (?, ?, ?, ?, ?, ?, 'view')
             `).run(req.user.id, clientId, caName, clientName, now, ipAddress);
 
-            return sendSuccess(res, { gstUsername, gstPassword }, 'GST credentials retrieved and action logged successfully');
+            return sendSuccess(res, { gstUsername, gstPassword, gstShareStatus }, 'GST credentials retrieved and action logged successfully');
         } catch (error) {
             console.error('[CA getClientGstCredentials Error]', error);
             return sendError(res, 'Failed to fetch GST credentials', 500);
@@ -1512,29 +1522,34 @@ const caController = {
     },
     getOwnerGstCredentials: async (req, res) => {
         try {
-            const user = await db.prepare("SELECT gst_username, gst_password FROM users WHERE id = ?").get(req.user.id);
+            const user = await db.prepare("SELECT gst_username, gst_password, gst_share_status FROM users WHERE id = ?").get(req.user.id);
             if (!user) {
                 return sendError(res, 'User not found', 404);
             }
 
             const gstUsername = user.gst_username || '';
             const decryptedPassword = decrypt(user.gst_password) || '';
+            const gstShareStatus = user.gst_share_status || 'Not Shared';
 
-            return sendSuccess(res, { gstUsername, gstPassword: decryptedPassword }, 'GST credentials retrieved successfully');
+            return sendSuccess(res, { gstUsername, gstPassword: decryptedPassword, gstShareStatus }, 'GST credentials retrieved successfully');
         } catch (error) {
             console.error('[Owner getOwnerGstCredentials Error]', error);
             return sendError(res, 'Failed to fetch owner GST credentials', 500);
         }
     },
     saveOwnerGstCredentials: async (req, res) => {
-        const { gstUsername, gstPassword } = req.body;
+        const { gstUsername, gstPassword, share } = req.body;
         if (!gstUsername || !gstPassword) {
             return sendError(res, 'Username and password are required', 400);
         }
         try {
             const encryptedPassword = encrypt(gstPassword);
-            await db.prepare("UPDATE users SET gst_username = ?, gst_password = ? WHERE id = ?").run(gstUsername, encryptedPassword, req.user.id);
-            return sendSuccess(res, null, 'GST credentials saved and shared successfully');
+            const status = share ? 'Shared' : 'Not Shared';
+
+            await db.prepare("UPDATE users SET gst_username = ?, gst_password = ?, gst_share_status = ? WHERE id = ?").run(gstUsername, encryptedPassword, status, req.user.id);
+            await db.prepare("UPDATE ca_clients SET gst_share_status = ? WHERE business_owner_id = ?").run(status, req.user.id);
+
+            return sendSuccess(res, null, 'GST credentials saved and shared status updated successfully');
         } catch (error) {
             console.error('[Owner saveOwnerGstCredentials Error]', error);
             return sendError(res, 'Failed to save owner GST credentials', 500);
@@ -1542,11 +1557,100 @@ const caController = {
     },
     revokeOwnerGstCredentials: async (req, res) => {
         try {
-            await db.prepare("UPDATE users SET gst_username = NULL, gst_password = NULL WHERE id = ?").run(req.user.id);
+            await db.prepare("UPDATE users SET gst_username = NULL, gst_password = NULL, gst_share_status = 'Revoked' WHERE id = ?").run(req.user.id);
+            await db.prepare("UPDATE ca_clients SET gst_share_status = 'Revoked' WHERE business_owner_id = ?").run(req.user.id);
+
             return sendSuccess(res, null, 'GST credentials sharing revoked successfully');
         } catch (error) {
             console.error('[Owner revokeOwnerGstCredentials Error]', error);
             return sendError(res, 'Failed to revoke owner GST credentials', 500);
+        }
+    },
+    getClientGstStatus: async (req, res) => {
+        const { id: clientId } = req.params;
+        try {
+            if (req.user.role !== 'ca') {
+                return sendError(res, 'Access denied. Advisor role required.', 403);
+            }
+            const client = await db.prepare("SELECT * FROM ca_clients WHERE id = ? AND ca_user_id = ?").get(clientId, req.user.id);
+            if (!client) {
+                return sendError(res, 'Client not found or unauthorized', 404);
+            }
+
+            let gstShareStatus = client.gst_share_status || 'Not Shared';
+            if (client.business_owner_id) {
+                const owner = await db.prepare("SELECT gst_share_status FROM users WHERE id = ?").get(client.business_owner_id);
+                if (owner) {
+                    gstShareStatus = owner.gst_share_status || 'Not Shared';
+                }
+            } else if (client.email) {
+                const owner = await db.prepare("SELECT gst_share_status FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
+                if (owner) {
+                    gstShareStatus = owner.gst_share_status || 'Not Shared';
+                }
+            }
+
+            return sendSuccess(res, { gstShareStatus }, 'Client GST status retrieved successfully');
+        } catch (error) {
+            console.error('[CA getClientGstStatus Error]', error.message);
+            return sendError(res, 'Failed to fetch GST status', 500);
+        }
+    },
+    requestClientGstCredentials: async (req, res) => {
+        const { id: clientId } = req.params;
+        try {
+            if (req.user.role !== 'ca') {
+                return sendError(res, 'Access denied. Advisor role required.', 403);
+            }
+            const client = await db.prepare("SELECT * FROM ca_clients WHERE id = ? AND ca_user_id = ?").get(clientId, req.user.id);
+            if (!client) {
+                return sendError(res, 'Client not found or unauthorized', 404);
+            }
+
+            await db.prepare("UPDATE ca_clients SET gst_share_status = 'Requested' WHERE id = ?").run(clientId);
+
+            if (client.business_owner_id) {
+                await db.prepare("UPDATE users SET gst_share_status = 'Requested' WHERE id = ?").run(client.business_owner_id);
+            } else if (client.email) {
+                await db.prepare("UPDATE users SET gst_share_status = 'Requested' WHERE LOWER(email) = LOWER(?)").run(client.email);
+            }
+
+            return sendSuccess(res, null, 'GST Portal credentials requested successfully');
+        } catch (error) {
+            console.error('[CA requestClientGstCredentials Error]', error);
+            return sendError(res, 'Failed to request GST credentials', 500);
+        }
+    },
+    logGstClientAction: async (req, res) => {
+        const { id: clientId } = req.params;
+        const { action } = req.body;
+        if (!action) {
+            return sendError(res, 'Action is required', 400);
+        }
+        try {
+            if (req.user.role !== 'ca') {
+                return sendError(res, 'Access denied. Advisor role required.', 403);
+            }
+            const client = await db.prepare("SELECT * FROM ca_clients WHERE id = ? AND ca_user_id = ?").get(clientId, req.user.id);
+            if (!client) {
+                return sendError(res, 'Client not found or unauthorized', 404);
+            }
+
+            const now = new Date().toISOString();
+            const caUser = await db.prepare("SELECT username, email FROM users WHERE id = ?").get(req.user.id);
+            const caName = caUser ? (caUser.username || caUser.email) : `CA #${req.user.id}`;
+            const clientName = client.name || `Client #${clientId}`;
+            const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+
+            await db.prepare(`
+                INSERT INTO ca_gst_access_logs (ca_user_id, client_id, ca_name, client_name, accessed_at, ip_address, action)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).run(req.user.id, clientId, caName, clientName, now, ipAddress, action);
+
+            return sendSuccess(res, null, 'Action logged successfully');
+        } catch (error) {
+            console.error('[CA logGstClientAction Error]', error);
+            return sendError(res, 'Failed to log action', 500);
         }
     }
 };

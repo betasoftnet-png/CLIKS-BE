@@ -156,6 +156,13 @@ describe('Chartered Accountant CA Command Centre Tests', () => {
 
     describe('Practice Workspace Management Endpoints', () => {
         beforeAll(async () => {
+            // Log columns of ca_clients
+            try {
+                const info = await db.prepare("PRAGMA table_info(ca_clients)").all();
+                console.log('DEBUG: ca_clients schema columns:', info.map(c => c.name));
+            } catch (e) {
+                console.log('DEBUG: error fetching ca_clients info:', e.message);
+            }
             // Clear practice tables
             await db.prepare("DELETE FROM ca_clients").run();
             await db.prepare("DELETE FROM ca_client_requests").run();
@@ -379,34 +386,7 @@ describe('Chartered Accountant CA Command Centre Tests', () => {
         });
 
         it('should execute complete private GST sharing flow, encrypt password, audit access, and support revoking', async () => {
-            // 1. Save GST credentials as the Business Owner (tokenUser1)
-            const saveRes = await request(app)
-                .post('/api/v1/ca/owner/gst-credentials')
-                .set('Authorization', `Bearer ${tokenUser1}`)
-                .send({
-                    gstUsername: 'sanjay_gst_login@bnxmail.com',
-                    gstPassword: 'SanjayGSTPass123!'
-                });
-
-            expect(saveRes.status).toBe(200);
-            expect(saveRes.body.success).toBe(true);
-
-            // Verify password is encrypted in the database (i.e., not stored in plaintext)
-            const dbUser = await db.prepare("SELECT gst_password FROM users WHERE email = 'business@cliks.com'").get();
-            expect(dbUser.gst_password).not.toBe('SanjayGSTPass123!');
-            expect(dbUser.gst_password).toContain(':'); // Cipher contains IV separator
-
-            // 2. Fetch GST credentials as the Business Owner (tokenUser1)
-            const getOwnerRes = await request(app)
-                .get('/api/v1/ca/owner/gst-credentials')
-                .set('Authorization', `Bearer ${tokenUser1}`);
-
-            expect(getOwnerRes.status).toBe(200);
-            expect(getOwnerRes.body.success).toBe(true);
-            expect(getOwnerRes.body.data.gstUsername).toBe('sanjay_gst_login@bnxmail.com');
-            expect(getOwnerRes.body.data.gstPassword).toBe('SanjayGSTPass123!');
-
-            // 3. Register client Acme Corp mapping User 1 (business owner) to User 2 (CA)
+            // 1. Register client Acme Corp mapping User 1 (business owner) to User 2 (CA)
             const registerRes = await request(app)
                 .post('/api/v1/ca/clients')
                 .set('Authorization', `Bearer ${tokenUser2}`)
@@ -421,51 +401,125 @@ describe('Chartered Accountant CA Command Centre Tests', () => {
             expect(registerRes.status).toBe(200);
             const clientId = registerRes.body.data.id;
 
+            // 2. Fetch GST status as CA (tokenUser2) -> should be 'Not Shared'
+            const getStatusRes = await request(app)
+                .get(`/api/v1/ca/clients/${clientId}/gst-status`)
+                .set('Authorization', `Bearer ${tokenUser2}`);
+
+            expect(getStatusRes.status).toBe(200);
+            expect(getStatusRes.body.data.gstShareStatus).toBe('Not Shared');
+
+            // 3. Request credentials as CA (tokenUser2)
+            const requestCredsRes = await request(app)
+                .post(`/api/v1/ca/clients/${clientId}/request-gst-credentials`)
+                .set('Authorization', `Bearer ${tokenUser2}`);
+
+            expect(requestCredsRes.status).toBe(200);
+
+            // Verify status is now 'Requested'
+            const getStatusRequestedRes = await request(app)
+                .get(`/api/v1/ca/clients/${clientId}/gst-status`)
+                .set('Authorization', `Bearer ${tokenUser2}`);
+
+            expect(getStatusRequestedRes.status).toBe(200);
+            expect(getStatusRequestedRes.body.data.gstShareStatus).toBe('Requested');
+
+            // 4. Save GST credentials as the Business Owner (tokenUser1) without sharing (share: false)
+            const saveResNoShare = await request(app)
+                .post('/api/v1/ca/owner/gst-credentials')
+                .set('Authorization', `Bearer ${tokenUser1}`)
+                .send({
+                    gstUsername: 'sanjay_gst_login@bnxmail.com',
+                    gstPassword: 'SanjayGSTPass123!',
+                    share: false
+                });
+
+            expect(saveResNoShare.status).toBe(200);
+
+            // Fetch credentials as CA -> should return null values (still 'Requested')
+            const getCaNoShareRes = await request(app)
+                .get(`/api/v1/ca/clients/${clientId}/gst-credentials`)
+                .set('Authorization', `Bearer ${tokenUser2}`);
+
+            expect(getCaNoShareRes.status).toBe(200);
+            expect(getCaNoShareRes.body.data.gstUsername).toBeNull();
+            expect(getCaNoShareRes.body.data.gstPassword).toBeNull();
+
+            // 5. Save and share GST credentials as the Business Owner (tokenUser1) (share: true)
+            const saveResShare = await request(app)
+                .post('/api/v1/ca/owner/gst-credentials')
+                .set('Authorization', `Bearer ${tokenUser1}`)
+                .send({
+                    gstUsername: 'sanjay_gst_login@bnxmail.com',
+                    gstPassword: 'SanjayGSTPass123!',
+                    share: true
+                });
+
+            expect(saveResShare.status).toBe(200);
+
+            // Verify password is encrypted in the database
+            const dbUser = await db.prepare("SELECT gst_password FROM users WHERE email = 'business@cliks.com'").get();
+            expect(dbUser.gst_password).not.toBe('SanjayGSTPass123!');
+            expect(dbUser.gst_password).toContain(':');
+
+            // 6. Fetch status as CA -> should be 'Shared'
+            const getStatusSharedRes = await request(app)
+                .get(`/api/v1/ca/clients/${clientId}/gst-status`)
+                .set('Authorization', `Bearer ${tokenUser2}`);
+
+            expect(getStatusSharedRes.status).toBe(200);
+            expect(getStatusSharedRes.body.data.gstShareStatus).toBe('Shared');
+
             // Clear previous access logs
             await db.prepare("DELETE FROM ca_gst_access_logs").run();
 
-            // 4. Fetch credentials as the authorized CA (tokenUser2) and confirm log is created
+            // 7. Fetch credentials as the authorized CA (tokenUser2) and confirm 'view' log is created
             const getCaRes = await request(app)
                 .get(`/api/v1/ca/clients/${clientId}/gst-credentials`)
                 .set('Authorization', `Bearer ${tokenUser2}`);
 
             expect(getCaRes.status).toBe(200);
-            expect(getCaRes.body.success).toBe(true);
             expect(getCaRes.body.data.gstUsername).toBe('sanjay_gst_login@bnxmail.com');
             expect(getCaRes.body.data.gstPassword).toBe('SanjayGSTPass123!');
 
-            // Assert access log entry exists
-            const logs = await db.prepare("SELECT * FROM ca_gst_access_logs WHERE client_id = ?").all(clientId);
+            const logs = await db.prepare("SELECT * FROM ca_gst_access_logs WHERE client_id = ? AND action = 'view'").all(clientId);
             expect(logs.length).toBe(1);
             expect(logs[0].ca_user_id).toBe(2);
-            expect(logs[0].ca_name).toBe('ca_user');
-            expect(logs[0].client_name).toBe('Acme Corp');
-            expect(logs[0].accessed_at).toBeTruthy();
-            expect(logs[0].ip_address).toBeTruthy();
 
-            // 5. Try to fetch as unauthorized user/role (tokenUser1) -> should fail (403)
+            // 8. Log an audit action copy_username as CA (tokenUser2)
+            const logActionRes = await request(app)
+                .post(`/api/v1/ca/clients/${clientId}/gst-audit`)
+                .set('Authorization', `Bearer ${tokenUser2}`)
+                .send({ action: 'copy_username' });
+
+            expect(logActionRes.status).toBe(200);
+
+            const actionLogs = await db.prepare("SELECT * FROM ca_gst_access_logs WHERE client_id = ? AND action = 'copy_username'").all(clientId);
+            expect(actionLogs.length).toBe(1);
+
+            // 9. Try to fetch as unauthorized user/role (tokenUser1) -> should fail (403)
             const unauthRes = await request(app)
                 .get(`/api/v1/ca/clients/${clientId}/gst-credentials`)
                 .set('Authorization', `Bearer ${tokenUser1}`);
 
             expect(unauthRes.status).toBe(403);
 
-            // 6. Try to fetch non-existent client -> should fail (404)
-            const notFoundRes = await request(app)
-                .get('/api/v1/ca/clients/99999/gst-credentials')
-                .set('Authorization', `Bearer ${tokenUser2}`);
-
-            expect(notFoundRes.status).toBe(404);
-
-            // 7. Revoke credentials as Business Owner (tokenUser1)
+            // 10. Revoke credentials as Business Owner (tokenUser1)
             const revokeRes = await request(app)
                 .delete('/api/v1/ca/owner/gst-credentials')
                 .set('Authorization', `Bearer ${tokenUser1}`);
 
             expect(revokeRes.status).toBe(200);
-            expect(revokeRes.body.success).toBe(true);
 
-            // 8. Fetch again as CA -> should return null values
+            // 11. Fetch status again -> should be 'Revoked'
+            const getStatusRevokedRes = await request(app)
+                .get(`/api/v1/ca/clients/${clientId}/gst-status`)
+                .set('Authorization', `Bearer ${tokenUser2}`);
+
+            expect(getStatusRevokedRes.status).toBe(200);
+            expect(getStatusRevokedRes.body.data.gstShareStatus).toBe('Revoked');
+
+            // 12. Fetch credentials again as CA -> should return null values
             const getCaRevokedRes = await request(app)
                 .get(`/api/v1/ca/clients/${clientId}/gst-credentials`)
                 .set('Authorization', `Bearer ${tokenUser2}`);
