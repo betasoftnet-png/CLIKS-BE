@@ -1549,7 +1549,7 @@ const caController = {
             await db.prepare("UPDATE users SET gst_username = ?, gst_password = ?, gst_share_status = ? WHERE id = ?").run(gstUsername, encryptedPassword, status, req.user.id);
             await db.prepare("UPDATE ca_clients SET gst_share_status = ? WHERE business_owner_id = ?").run(status, req.user.id);
 
-            return sendSuccess(res, null, 'GST credentials saved and shared status updated successfully');
+            return sendSuccess(res, { shared: share === true, gstShareStatus: status }, 'GST credentials saved and shared status updated successfully');
         } catch (error) {
             console.error('[Owner saveOwnerGstCredentials Error]', error);
             return sendError(res, 'Failed to save owner GST credentials', 500);
@@ -1560,7 +1560,7 @@ const caController = {
             await db.prepare("UPDATE users SET gst_username = NULL, gst_password = NULL, gst_share_status = 'Revoked' WHERE id = ?").run(req.user.id);
             await db.prepare("UPDATE ca_clients SET gst_share_status = 'Revoked' WHERE business_owner_id = ?").run(req.user.id);
 
-            return sendSuccess(res, null, 'GST credentials sharing revoked successfully');
+            return sendSuccess(res, { revoked: true, gstShareStatus: 'Revoked' }, 'GST credentials sharing revoked successfully');
         } catch (error) {
             console.error('[Owner revokeOwnerGstCredentials Error]', error);
             return sendError(res, 'Failed to revoke owner GST credentials', 500);
@@ -1615,7 +1615,7 @@ const caController = {
                 await db.prepare("UPDATE users SET gst_share_status = 'Requested' WHERE LOWER(email) = LOWER(?)").run(client.email);
             }
 
-            return sendSuccess(res, null, 'GST Portal credentials requested successfully');
+            return sendSuccess(res, { requested: true, gstShareStatus: 'Requested' }, 'GST Portal credentials requested successfully');
         } catch (error) {
             console.error('[CA requestClientGstCredentials Error]', error);
             return sendError(res, 'Failed to request GST credentials', 500);
@@ -1647,7 +1647,7 @@ const caController = {
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             `).run(req.user.id, clientId, caName, clientName, now, ipAddress, action);
 
-            return sendSuccess(res, null, 'Action logged successfully');
+            return sendSuccess(res, { logged: true, action }, 'Action logged successfully');
         } catch (error) {
             console.error('[CA logGstClientAction Error]', error);
             return sendError(res, 'Failed to log action', 500);
