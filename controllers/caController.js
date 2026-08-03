@@ -114,6 +114,11 @@ const initTableAndColumns = async () => {
         try { await db.prepare("ALTER TABLE ca_gst_access_logs ADD COLUMN action TEXT DEFAULT 'view'").run(); } catch(e) { console.error('ca_gst_access_logs action error:', e.message); }
         try { await db.prepare("ALTER TABLE users ADD COLUMN gst_shared_at TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE users ADD COLUMN gst_connected_advisor_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN advisor_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN advisor_email TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN client_email TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN task_description TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN created_at TEXT").run(); } catch(e) {}
 
         await db.prepare(`
             CREATE TABLE IF NOT EXISTS ca_gst_access_logs (
@@ -773,41 +778,40 @@ const caController = {
         try {
             await ensureSeededPracticeData(req.user.id);
             const email = req.user.email || '';
-            
-            // Find all client records in ca_clients where client email is this user's email
-            const clientRecords = await db.prepare("SELECT id FROM ca_clients WHERE LOWER(email) = LOWER(?)").all(email);
-            const clientIds = clientRecords.map(r => r.id);
 
-            let list;
-            if (clientIds.length > 0) {
-                const placeholders = clientIds.map(() => '?').join(',');
-                list = await db.prepare(`
-                    SELECT * FROM ca_tasks 
-                    WHERE ca_user_id = ? 
-                       OR client_id IN (${placeholders}) 
-                       OR business_owner_id = ? 
-                       OR LOWER(client_name) = LOWER(?)
-                    ORDER BY id DESC
-                `).all(req.user.id, ...clientIds, req.user.id, email);
-            } else {
-                list = await db.prepare(`
-                    SELECT * FROM ca_tasks 
-                    WHERE ca_user_id = ? OR business_owner_id = ? OR LOWER(client_name) = LOWER(?)
-                    ORDER BY id DESC
-                `).all(req.user.id, req.user.id, email);
-            }
+            // Query tasks where:
+            // 1. Logged-in user is the creator (CA)
+            // 2. Logged-in user is the assigned Business Owner (by business_owner_id or client_id)
+            // 3. Logged-in user is the client by email or name match
+            const list = await db.prepare(`
+                SELECT * FROM ca_tasks 
+                WHERE ca_user_id = ? 
+                   OR business_owner_id = ? 
+                   OR client_id = ?
+                   OR LOWER(client_email) = LOWER(?)
+                   OR LOWER(client_name) = LOWER(?)
+                ORDER BY id DESC
+            `).all(req.user.id, req.user.id, req.user.id, email, email);
 
             const mapped = list.map(item => ({
                 id: item.id,
+                taskId: item.id,
+                ca_user_id: item.ca_user_id,
+                advisorId: item.ca_user_id || item.advisor_id,
+                advisorEmail: item.advisor_email,
+                businessOwnerId: item.business_owner_id,
+                clientId: item.business_owner_id || item.client_id,
+                client_id: item.client_id,
+                clientEmail: item.client_email,
                 clientName: item.client_name,
                 title: item.title,
+                taskDescription: item.task_description || item.title,
                 status: item.status,
                 priority: item.priority,
                 dueDate: item.due_date,
                 askForDocument: item.ask_for_document == 1 || item.ask_for_document === 'true' || item.ask_for_document === true,
                 attachedFile: item.attached_file,
-                businessOwnerId: item.business_owner_id,
-                clientId: item.client_id
+                createdAt: item.created_at
             }));
             return sendSuccess(res, mapped, 'Practice tasks retrieved');
         } catch (error) {
@@ -830,33 +834,78 @@ const caController = {
 
             let businessOwnerId = null;
             let clientId = null;
+            let clientEmail = null;
+            
             if (client) {
                 clientId = client.id;
                 businessOwnerId = client.business_owner_id;
+                clientEmail = client.email;
                 if (!businessOwnerId && client.email) {
-                    const owner = await db.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
+                    const owner = await db.prepare("SELECT id, email FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
                     if (owner) {
                         businessOwnerId = owner.id;
+                        clientEmail = owner.email;
                     }
                 }
             } else {
-                // If client not in ca_clients, check if clientName is the email of a user
-                const owner = await db.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?)").get(clientName);
+                // If client not in ca_clients, check if clientName matches users (by email or username)
+                const owner = await db.prepare("SELECT id, email FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)").get(clientName, clientName);
                 if (owner) {
                     businessOwnerId = owner.id;
+                    clientEmail = owner.email;
                 }
             }
 
+            // Fallback for advisor details
+            const advisor = await db.prepare("SELECT email FROM users WHERE id = ?").get(req.user.id);
+            const advisorEmail = req.user.email || (advisor ? advisor.email : '');
+            const now = new Date().toISOString();
+
+            // Requirement 8: Do not create duplicate tasks
+            const duplicate = await db.prepare(`
+                SELECT id FROM ca_tasks 
+                WHERE ca_user_id = ? AND LOWER(client_name) = LOWER(?) AND title = ? AND due_date = ?
+            `).get(req.user.id, clientName || 'General Client', title.trim(), defaultDate);
+
+            if (duplicate) {
+                const existingTask = await db.prepare("SELECT * FROM ca_tasks WHERE id = ?").get(duplicate.id);
+                return sendSuccess(res, {
+                    id: existingTask.id,
+                    taskId: existingTask.id,
+                    clientName: existingTask.client_name,
+                    title: existingTask.title,
+                    taskDescription: existingTask.task_description || existingTask.title,
+                    status: existingTask.status,
+                    priority: existingTask.priority,
+                    dueDate: existingTask.due_date,
+                    askForDocument: existingTask.ask_for_document == 1 || existingTask.ask_for_document === 'true',
+                    attachedFile: existingTask.attached_file,
+                    businessOwnerId: existingTask.business_owner_id,
+                    clientId: existingTask.business_owner_id || existingTask.client_id,
+                    advisorId: existingTask.ca_user_id,
+                    advisorEmail: existingTask.advisor_email,
+                    clientEmail: existingTask.client_email,
+                    createdAt: existingTask.created_at
+                }, 'Task already exists');
+            }
+
             const result = await db.prepare(`
-                INSERT INTO ca_tasks (ca_user_id, client_name, title, status, priority, due_date, ask_for_document, attached_file, business_owner_id, client_id)
-                VALUES (?, ?, ?, 'Pending', ?, ?, ?, null, ?, ?)
-            `).run(req.user.id, clientName || 'General Client', title, priority || 'Medium', defaultDate, askDocInt, businessOwnerId, clientId);
+                INSERT INTO ca_tasks (
+                    ca_user_id, advisor_id, advisor_email, client_name, client_email, 
+                    title, task_description, status, priority, due_date, 
+                    ask_for_document, attached_file, business_owner_id, client_id, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, null, ?, ?, ?)
+            `).run(
+                req.user.id, req.user.id, advisorEmail, clientName || 'General Client', clientEmail, 
+                title.trim(), title.trim(), priority || 'Medium', defaultDate, 
+                askDocInt, businessOwnerId, clientId, now
+            );
 
             const taskId = result.lastInsertRowid;
 
             // Notify Business Owner if they exist
             if (businessOwnerId) {
-                const now = new Date().toISOString();
                 const messageText = `Your FIN-PRO Advisor has assigned a new compliance task: "${title}".`;
                 await db.prepare(`
                     INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
@@ -866,15 +915,21 @@ const caController = {
 
             const newTask = {
                 id: taskId,
+                taskId,
                 clientName: clientName || 'General Client',
+                clientEmail,
                 title,
+                taskDescription: title,
                 status: 'Pending',
                 priority: priority || 'Medium',
                 dueDate: defaultDate,
                 askForDocument: !!askForDocument,
                 attachedFile: null,
                 businessOwnerId,
-                clientId
+                clientId: businessOwnerId || clientId,
+                advisorId: req.user.id,
+                advisorEmail,
+                createdAt: now
             };
             return sendSuccess(res, newTask, 'Task added successfully');
         } catch (error) {
@@ -886,24 +941,17 @@ const caController = {
         const { id } = req.params;
         try {
             const email = req.user.email || '';
-            
-            // Find all client records in ca_clients where client email is this user's email
-            const clientRecords = await db.prepare("SELECT id FROM ca_clients WHERE LOWER(email) = LOWER(?)").all(email);
-            const clientIds = clientRecords.map(r => r.id);
 
-            let task;
-            if (clientIds.length > 0) {
-                const placeholders = clientIds.map(() => '?').join(',');
-                task = await db.prepare(`
-                    SELECT * FROM ca_tasks 
-                    WHERE id = ? AND (ca_user_id = ? OR client_id IN (${placeholders}) OR business_owner_id = ? OR LOWER(client_name) = LOWER(?))
-                `).get(id, req.user.id, ...clientIds, req.user.id, email);
-            } else {
-                task = await db.prepare(`
-                    SELECT * FROM ca_tasks 
-                    WHERE id = ? AND (ca_user_id = ? OR business_owner_id = ? OR LOWER(client_name) = LOWER(?))
-                `).get(id, req.user.id, req.user.id, email);
-            }
+            const task = await db.prepare(`
+                SELECT * FROM ca_tasks 
+                WHERE id = ? AND (
+                    ca_user_id = ? 
+                    OR business_owner_id = ? 
+                    OR client_id = ?
+                    OR LOWER(client_email) = LOWER(?)
+                    OR LOWER(client_name) = LOWER(?)
+                )
+            `).get(id, req.user.id, req.user.id, req.user.id, email, email);
 
             if (!task) return sendError(res, 'Task not found or unauthorized', 404);
 
@@ -915,6 +963,8 @@ const caController = {
             } else if (task.status === 'Uploaded') {
                 nextStatus = 'Verified';
             } else if (task.status === 'Verified') {
+                nextStatus = 'Completed';
+            } else if (task.status === 'Approved') {
                 nextStatus = 'Completed';
             } else {
                 nextStatus = 'Pending';
@@ -1396,9 +1446,21 @@ const caController = {
             // Map all documents with review statuses
             const mappedDocs = allDocs.map(doc => {
                 const rev = reviewsMap[doc.id] || {};
+                let defaultStatus = 'Uploaded';
+                if (doc.source_table === 'ca_tasks') {
+                    const taskRec = clientTasks.find(t => t.id === doc.source_id);
+                    if (taskRec && taskRec.status) {
+                        defaultStatus = taskRec.status;
+                    }
+                } else if (doc.source_table === 'ca_client_requests') {
+                    const reqRec = clientRequests.find(r => r.id === doc.source_id);
+                    if (reqRec && reqRec.status) {
+                        defaultStatus = reqRec.status;
+                    }
+                }
                 return {
                     ...doc,
-                    status: rev.status || 'Pending Review',
+                    status: rev.status || defaultStatus,
                     remark: rev.remark || ''
                 };
             });
@@ -1418,8 +1480,8 @@ const caController = {
         try {
             const now = new Date().toISOString();
             
-            // Map Approved status to Verified status
-            const finalStatusVal = status === 'Approved' ? 'Verified' : status;
+            // Explicitly support transitions (no more hard mapping to Verified)
+            const finalStatusVal = status;
 
             const existing = await db.prepare("SELECT * FROM ca_document_reviews WHERE ca_user_id = ? AND client_id = ? AND document_id = ?").get(req.user.id, clientId, documentId);
             
@@ -1439,13 +1501,13 @@ const caController = {
             }
 
             // Sync status back to corresponding task/request tables if applicable
-            if (finalStatusVal === 'Verified' || finalStatusVal === 'Approved') {
+            if (finalStatusVal === 'Under Review' || finalStatusVal === 'Verified' || finalStatusVal === 'Approved') {
                 if (documentId.startsWith('task_')) {
                     const taskId = documentId.split('_')[1];
-                    await db.prepare("UPDATE ca_tasks SET status = 'Verified' WHERE id = ?").run(taskId);
+                    await db.prepare("UPDATE ca_tasks SET status = ? WHERE id = ?").run(finalStatusVal, taskId);
                 } else if (documentId.startsWith('request_')) {
                     const requestId = documentId.split('_')[1];
-                    await db.prepare("UPDATE ca_client_requests SET status = 'Approved' WHERE id = ?").run(requestId);
+                    await db.prepare("UPDATE ca_client_requests SET status = ? WHERE id = ?").run(finalStatusVal, requestId);
                 }
             } else if (finalStatusVal === 'Rejected') {
                 if (documentId.startsWith('task_')) {

@@ -290,8 +290,32 @@ describe('Chartered Accountant CA Command Centre Tests', () => {
             expect(res.status).toBe(200);
             expect(res.body.success).toBe(true);
             expect(res.body.data.status).toBe('Pending');
+            
+            // Assert all required properties exist
+            expect(res.body.data).toHaveProperty('taskId');
+            expect(res.body.data).toHaveProperty('advisorId');
+            expect(res.body.data).toHaveProperty('advisorEmail');
+            expect(res.body.data).toHaveProperty('clientId');
+            expect(res.body.data).toHaveProperty('clientName');
+            expect(res.body.data).toHaveProperty('taskDescription');
+            expect(res.body.data).toHaveProperty('priority');
+            expect(res.body.data).toHaveProperty('dueDate');
+            expect(res.body.data).toHaveProperty('status');
+            expect(res.body.data).toHaveProperty('createdAt');
 
             const taskId = res.body.data.id;
+
+            // Attempt to create a duplicate task - should return the existing task (or indicate success/exists status)
+            const dupRes = await request(app)
+                .post('/api/v1/ca/tasks')
+                .set('Authorization', `Bearer ${tokenUser1}`)
+                .send({
+                    clientName: 'Test Business Inc',
+                    title: 'Upload TDS Return',
+                    priority: 'High'
+                });
+            expect(dupRes.status).toBe(200);
+            expect(dupRes.body.data.id).toBe(taskId); // should match original task ID
 
             // Toggle once (Pending -> In Progress)
             const toggle1 = await request(app)
