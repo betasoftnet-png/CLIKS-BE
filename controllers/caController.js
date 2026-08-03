@@ -187,6 +187,30 @@ const initTableAndColumns = async () => {
                 status TEXT DEFAULT 'Pending'
             )
         `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS ca_document_reviews (
+                id ${idType},
+                document_id TEXT NOT NULL,
+                ca_user_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL,
+                status TEXT,
+                remark TEXT,
+                updated_at TEXT
+            )
+        `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS ca_document_versions (
+                id ${idType},
+                document_id TEXT NOT NULL,
+                version_number INTEGER NOT NULL,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                uploaded_by INTEGER NOT NULL,
+                uploaded_at TEXT NOT NULL
+            )
+        `).run();
     } catch (e) {
         console.error('[CA Dynamic Init Error]', e.message);
     }
@@ -746,14 +770,37 @@ const caController = {
 
             const docTypeNormalized = (requestRecord.doc_type || 'doc').toLowerCase().replace(/\s+/g, '_');
             const attachedFile = `simulated_upload_${docTypeNormalized}_${Date.now().toString().slice(-4)}.pdf`;
-            
+            const docId = `request_${id}`;
+            const now = new Date().toISOString();
+
             await db.prepare(`
                 UPDATE ca_client_requests 
                 SET status = 'Under Review', attached_file = ? 
                 WHERE id = ?
             `).run(attachedFile, id);
 
-            return sendSuccess(res, { id: parseInt(id), status: 'Under Review', attachedFile }, 'Document uploaded successfully');
+            // Record version
+            const latestVersion = await db.prepare("SELECT MAX(version_number) as v FROM ca_document_versions WHERE document_id = ?").get(docId);
+            const nextVersion = (latestVersion?.v || 0) + 1;
+
+            await db.prepare(`
+                INSERT INTO ca_document_versions (document_id, version_number, file_name, file_path, uploaded_by, uploaded_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `).run(docId, nextVersion, attachedFile, `/uploads/${attachedFile}`, req.user.id, now);
+
+            // Reset review status if it was previously corrected
+            await db.prepare("DELETE FROM ca_document_reviews WHERE document_id = ?").run(docId);
+
+            if (requestRecord.ca_user_id) {
+                const senderName = requestRecord.client_name || 'Client';
+                const messageText = `Client ${senderName} has uploaded ${nextVersion > 1 ? 'a revised' : 'a'} document for request: "${requestRecord.title}".`;
+                await db.prepare(`
+                    INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                    VALUES (?, ?, ?, 'Info', 0, ?)
+                `).run(requestRecord.ca_user_id, 'Document Uploaded', messageText, now);
+            }
+
+            return sendSuccess(res, { id: parseInt(id), status: 'Under Review', attachedFile, version: nextVersion }, 'Document uploaded successfully');
         } catch (error) {
             console.error('[CA uploadRequestDoc Error]', error);
             return sendError(res, 'Failed to upload document', 500);
@@ -984,7 +1031,9 @@ const caController = {
         const { id } = req.params;
         try {
             const attachedFile = `uploaded_task_doc_${Date.now().toString().slice(-4)}.pdf`;
-            
+            const docId = `task_${id}`;
+            const now = new Date().toISOString();
+
             await db.prepare(`
                 UPDATE ca_tasks 
                 SET attached_file = ?, status = 'Uploaded' 
@@ -993,17 +1042,29 @@ const caController = {
 
             // Fetch the updated task to notify the CA
             const task = await db.prepare("SELECT * FROM ca_tasks WHERE id = ?").get(id);
+
+            // Record version
+            const latestVersion = await db.prepare("SELECT MAX(version_number) as v FROM ca_document_versions WHERE document_id = ?").get(docId);
+            const nextVersion = (latestVersion?.v || 0) + 1;
+
+            await db.prepare(`
+                INSERT INTO ca_document_versions (document_id, version_number, file_name, file_path, uploaded_by, uploaded_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `).run(docId, nextVersion, attachedFile, `/uploads/${attachedFile}`, req.user.id, now);
+
+            // Reset review status if it was previously corrected
+            await db.prepare("DELETE FROM ca_document_reviews WHERE document_id = ?").run(docId);
+
             if (task && task.ca_user_id) {
-                const now = new Date().toISOString();
                 const senderName = task.client_name || 'Client';
-                const messageText = `Client ${senderName} has uploaded a document for compliance task: "${task.title}".`;
+                const messageText = `Client ${senderName} has uploaded ${nextVersion > 1 ? 'a revised' : 'a'} document for compliance task: "${task.title}".`;
                 await db.prepare(`
                     INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
                     VALUES (?, ?, ?, 'Info', 0, ?)
                 `).run(task.ca_user_id, 'Document Uploaded', messageText, now);
             }
 
-            return sendSuccess(res, { id: parseInt(id), status: 'Uploaded', attachedFile }, 'Task document uploaded successfully');
+            return sendSuccess(res, { id: parseInt(id), status: 'Uploaded', attachedFile, version: nextVersion }, 'Task document uploaded successfully');
         } catch (error) {
             console.error('[CA uploadTaskDoc Error]', error);
             return sendError(res, 'Failed to upload task document', 500);
@@ -1445,9 +1506,21 @@ const caController = {
                 reviewsMap[r.document_id] = { status: r.status, remark: r.remark };
             });
 
+            // 6. Fetch latest version info
+            const versions = await db.prepare(`
+                SELECT document_id, MAX(version_number) as latest_version, uploaded_at
+                FROM ca_document_versions
+                GROUP BY document_id
+            `).all();
+            const versionsMap = {};
+            versions.forEach(v => {
+                versionsMap[v.document_id] = v.latest_version;
+            });
+
             // Map all documents with review statuses
             const mappedDocs = allDocs.map(doc => {
                 const rev = reviewsMap[doc.id] || {};
+                const latestVer = versionsMap[doc.id] || 1;
                 let defaultStatus = 'Uploaded';
                 if (doc.source_table === 'ca_tasks') {
                     const taskRec = clientTasks.find(t => t.id === doc.source_id);
@@ -1463,7 +1536,8 @@ const caController = {
                 return {
                     ...doc,
                     status: rev.status || defaultStatus,
-                    remark: rev.remark || ''
+                    remark: rev.remark || '',
+                    version: latestVer
                 };
             });
 
@@ -1471,6 +1545,16 @@ const caController = {
         } catch (error) {
             console.error('[CA getClientDocuments Error]', error);
             return sendError(res, 'Failed to retrieve client documents', 500);
+        }
+    },
+    getDocumentVersions: async (req, res) => {
+        const { docId } = req.params;
+        try {
+            const versions = await db.prepare("SELECT * FROM ca_document_versions WHERE document_id = ? ORDER BY version_number DESC").all(docId);
+            return sendSuccess(res, versions, 'Document versions retrieved');
+        } catch (error) {
+            console.error('[CA getDocumentVersions Error]', error);
+            return sendError(res, 'Failed to retrieve document versions', 500);
         }
     },
     updateClientDocumentReview: async (req, res) => {
@@ -1503,7 +1587,7 @@ const caController = {
             }
 
             // Sync status back to corresponding task/request tables if applicable
-            if (finalStatusVal === 'Under Review' || finalStatusVal === 'Verified' || finalStatusVal === 'Approved') {
+            if (finalStatusVal === 'Under Review' || finalStatusVal === 'Verified' || finalStatusVal === 'Approved' || finalStatusVal === 'Needs Correction') {
                 if (documentId.startsWith('task_')) {
                     const taskId = documentId.split('_')[1];
                     await db.prepare("UPDATE ca_tasks SET status = ? WHERE id = ?").run(finalStatusVal, taskId);
@@ -1519,6 +1603,28 @@ const caController = {
                     const requestId = documentId.split('_')[1];
                     await db.prepare("UPDATE ca_client_requests SET status = 'Awaiting Client' WHERE id = ?").run(requestId);
                 }
+            }
+
+            // Notify Business Owner
+            let businessOwnerId = null;
+            let docName = 'Document';
+            if (documentId.startsWith('task_')) {
+                const t = await db.prepare("SELECT business_owner_id, title FROM ca_tasks WHERE id = ?").get(documentId.split('_')[1]);
+                businessOwnerId = t?.business_owner_id;
+                docName = t?.title || 'Document';
+            } else if (documentId.startsWith('request_')) {
+                const c = await db.prepare("SELECT business_owner_id FROM ca_clients WHERE id = ?").get(clientId);
+                const r = await db.prepare("SELECT title FROM ca_client_requests WHERE id = ?").get(documentId.split('_')[1]);
+                businessOwnerId = c?.business_owner_id;
+                docName = r?.title || 'Document';
+            }
+
+            if (businessOwnerId && status) {
+                const message = `Your auditor has updated the review for "${docName}". Status: ${status}. ${remark ? 'Note: ' + remark : ''}`;
+                await db.prepare(`
+                    INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                    VALUES (?, ?, ?, 'Info', 0, ?)
+                `).run(businessOwnerId, 'Document Review Updated', message, now);
             }
 
             return sendSuccess(res, { documentId, status: finalStatusVal, remark }, 'Document review updated successfully');
