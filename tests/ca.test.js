@@ -13,6 +13,13 @@ describe('Chartered Accountant CA Command Centre Tests', () => {
     beforeAll(async () => {
         await runMigrations();
 
+        // Ensure new GST credential columns exist (initTableAndColumns in caController is async fire-and-forget)
+        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_username TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_password TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_share_status TEXT DEFAULT 'Not Shared'").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_shared_at TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE users ADD COLUMN gst_connected_advisor_id INTEGER").run(); } catch(e) {}
+
         // Seed two test users in the database
         // Delete existing records to ensure starting from clean state
         await db.prepare("DELETE FROM users").run();
@@ -386,7 +393,16 @@ describe('Chartered Accountant CA Command Centre Tests', () => {
         });
 
         it('should execute complete private GST sharing flow, encrypt password, audit access, and support revoking', async () => {
+            // 0. Create an accepted invitation from User1 (business) to User2 (CA)
+            //    so saveOwnerGstCredentials can resolve the connectedAdvisorId
+            const nowStr = new Date().toISOString();
+            await db.prepare(`
+                INSERT INTO ca_invitations (sender_id, receiver_id, sender_email, sender_name, receiver_email, status, created_at, updated_at)
+                VALUES (1, 2, 'business@cliks.com', 'Acme Corp', 'ca@cliks.com', 'Accepted', ?, ?)
+            `).run(nowStr, nowStr);
+
             // 1. Register client Acme Corp mapping User 1 (business owner) to User 2 (CA)
+            //    Also set business_owner_id so credential lookup can find the owner
             const registerRes = await request(app)
                 .post('/api/v1/ca/clients')
                 .set('Authorization', `Bearer ${tokenUser2}`)
@@ -400,6 +416,9 @@ describe('Chartered Accountant CA Command Centre Tests', () => {
 
             expect(registerRes.status).toBe(200);
             const clientId = registerRes.body.data.id;
+
+            // Set business_owner_id on the ca_clients record (normally done via acceptInvitation)
+            await db.prepare("UPDATE ca_clients SET business_owner_id = 1 WHERE id = ?").run(clientId);
 
             // 2. Fetch GST status as CA (tokenUser2) -> should be 'Not Shared'
             const getStatusRes = await request(app)
@@ -497,12 +516,12 @@ describe('Chartered Accountant CA Command Centre Tests', () => {
             const actionLogs = await db.prepare("SELECT * FROM ca_gst_access_logs WHERE client_id = ? AND action = 'copy_username'").all(clientId);
             expect(actionLogs.length).toBe(1);
 
-            // 9. Try to fetch as unauthorized user/role (tokenUser1) -> should fail (403)
+            // 9. Try to fetch as user who doesn't own the ca_clients record (tokenUser1) -> should fail (404)
             const unauthRes = await request(app)
                 .get(`/api/v1/ca/clients/${clientId}/gst-credentials`)
                 .set('Authorization', `Bearer ${tokenUser1}`);
 
-            expect(unauthRes.status).toBe(403);
+            expect(unauthRes.status).toBe(404);
 
             // 10. Revoke credentials as Business Owner (tokenUser1)
             const revokeRes = await request(app)
