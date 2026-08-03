@@ -211,6 +211,26 @@ const initTableAndColumns = async () => {
                 uploaded_at TEXT NOT NULL
             )
         `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS ca_tds_history (
+                id ${idType},
+                ca_user_id INTEGER NOT NULL,
+                client_id INTEGER,
+                client_name TEXT,
+                financial_year TEXT,
+                section TEXT,
+                amount REAL,
+                calculated_tds REAL,
+                payment_date TEXT,
+                residential_status TEXT,
+                recipient_category TEXT,
+                pan_not_available INTEGER DEFAULT 0,
+                surcharge_rate TEXT,
+                created_by TEXT,
+                created_at TEXT
+            )
+        `).run();
     } catch (e) {
         console.error('[CA Dynamic Init Error]', e.message);
     }
@@ -826,19 +846,19 @@ const caController = {
             await ensureSeededPracticeData(req.user.id);
             const email = req.user.email || '';
 
-            console.log(`[CA getTasks DEBUG] Fetching tasks for user ID: ${req.user.id}, email: ${email}`);
-
-            // Requirement 1: Business Owner should receive tasks where business_owner_id == logged in user's id
-            // Requirement: Use business_owner_id as the single source of truth for business owners.
-            // CAs should still see tasks they created (ca_user_id)
+            // Query tasks where:
+            // 1. Logged-in user is the creator (CA)
+            // 2. Logged-in user is the assigned Business Owner (by business_owner_id or client_id)
+            // 3. Logged-in user is the client by email or name match
             const list = await db.prepare(`
                 SELECT * FROM ca_tasks 
                 WHERE ca_user_id = ? 
                    OR business_owner_id = ?
-                ORDER BY due_date ASC
-            `).all(req.user.id, req.user.id);
-
-            console.log(`[CA getTasks DEBUG] Found ${list.length} tasks in total for this user context.`);
+                   OR client_id = ?
+                   OR LOWER(client_email) = LOWER(?)
+                   OR LOWER(client_name) = LOWER(?)
+                ORDER BY id DESC
+            `).all(req.user.id, req.user.id, req.user.id, email, email);
 
             const mapped = list.map(item => ({
                 id: item.id,
@@ -902,8 +922,6 @@ const caController = {
                     clientEmail = owner.email;
                 }
             }
-
-            console.log(`[CA addTask DEBUG] Creating task with: ca_id=${req.user.id}, business_owner_id=${businessOwnerId}, client_id=${clientId}`);
 
             // Fallback for advisor details
             const advisor = await db.prepare("SELECT email FROM users WHERE id = ?").get(req.user.id);
@@ -1852,6 +1870,68 @@ const caController = {
         } catch (error) {
             console.error('[CA logGstClientAction Error]', error);
             return sendError(res, 'Failed to log action', 500);
+        }
+    },
+    getTdsHistory: async (req, res) => {
+        try {
+            const history = await db.prepare("SELECT * FROM ca_tds_history WHERE ca_user_id = ? ORDER BY created_at DESC").all(req.user.id);
+            return sendSuccess(res, history, 'TDS history retrieved');
+        } catch (error) {
+            console.error('[CA getTdsHistory Error]', error);
+            return sendError(res, 'Failed to retrieve TDS history', 500);
+        }
+    },
+    saveTdsCalculation: async (req, res) => {
+        const { client_id, client_name, financial_year, section, amount, calculated_tds, payment_date, residential_status, recipient_category, pan_not_available, surcharge_rate } = req.body;
+        try {
+            const now = new Date().toISOString();
+            const caUser = await db.prepare("SELECT username, email FROM users WHERE id = ?").get(req.user.id);
+            const createdBy = caUser ? (caUser.username || caUser.email) : `CA #${req.user.id}`;
+
+            const result = await db.prepare(`
+                INSERT INTO ca_tds_history (
+                    ca_user_id, client_id, client_name, financial_year, section, amount, calculated_tds,
+                    payment_date, residential_status, recipient_category, pan_not_available, surcharge_rate, created_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                req.user.id, client_id || null, client_name, financial_year, section, amount, calculated_tds,
+                payment_date, residential_status, recipient_category, pan_not_available ? 1 : 0, surcharge_rate, createdBy, now
+            );
+            return sendSuccess(res, { id: result.lastInsertRowid }, 'TDS calculation saved to history');
+        } catch (error) {
+            console.error('[CA saveTdsCalculation Error]', error);
+            return sendError(res, 'Failed to save TDS calculation', 500);
+        }
+    },
+    updateTdsCalculation: async (req, res) => {
+        const { id } = req.params;
+        const { financial_year, section, amount, calculated_tds, payment_date, residential_status, recipient_category, pan_not_available, surcharge_rate } = req.body;
+        try {
+            await db.prepare(`
+                UPDATE ca_tds_history SET
+                    financial_year = ?, section = ?, amount = ?, calculated_tds = ?,
+                    payment_date = ?, residential_status = ?, recipient_category = ?,
+                    pan_not_available = ?, surcharge_rate = ?
+                WHERE id = ? AND ca_user_id = ?
+            `).run(
+                financial_year, section, amount, calculated_tds,
+                payment_date, residential_status, recipient_category,
+                pan_not_available ? 1 : 0, surcharge_rate, id, req.user.id
+            );
+            return sendSuccess(res, null, 'TDS calculation updated');
+        } catch (error) {
+            console.error('[CA updateTdsCalculation Error]', error);
+            return sendError(res, 'Failed to update TDS calculation', 500);
+        }
+    },
+    deleteTdsCalculation: async (req, res) => {
+        const { id } = req.params;
+        try {
+            await db.prepare("DELETE FROM ca_tds_history WHERE id = ? AND ca_user_id = ?").run(id, req.user.id);
+            return sendSuccess(res, null, 'TDS calculation deleted');
+        } catch (error) {
+            console.error('[CA deleteTdsCalculation Error]', error);
+            return sendError(res, 'Failed to delete TDS calculation', 500);
         }
     }
 };

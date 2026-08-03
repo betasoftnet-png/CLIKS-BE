@@ -18,7 +18,6 @@ router.get('/clients', caController.getClients);
 router.post('/clients', caController.addClient);
 router.get('/clients/:id/documents', caController.getClientDocuments);
 router.post('/clients/:id/documents/review', caController.updateClientDocumentReview);
-router.get('/documents/:docId/versions', caController.getDocumentVersions);
 router.get('/clients/:id/gst-credentials', caController.getClientGstCredentials);
 router.get('/clients/:id/gst-status', caController.getClientGstStatus);
 router.post('/clients/:id/request-gst-credentials', caController.requestClientGstCredentials);
@@ -36,6 +35,12 @@ router.get('/tasks', caController.getTasks);
 router.post('/tasks', caController.addTask);
 router.post('/tasks/:id/toggle', caController.toggleTaskStatus);
 router.post('/tasks/:id/upload', caController.uploadTaskDoc);
+
+router.get('/documents/versions/:docId', caController.getDocumentVersions);
+router.get('/tds/history', caController.getTdsHistory);
+router.post('/tds/calculate', caController.saveTdsCalculation);
+router.put('/tds/history/:id', caController.updateTdsCalculation);
+router.delete('/tds/history/:id', caController.deleteTdsCalculation);
 
 router.get('/timesheets', caController.getTimesheets);
 router.post('/timesheets', caController.addTimesheet);
