@@ -779,19 +779,19 @@ const caController = {
             await ensureSeededPracticeData(req.user.id);
             const email = req.user.email || '';
 
-            // Query tasks where:
-            // 1. Logged-in user is the creator (CA)
-            // 2. Logged-in user is the assigned Business Owner (by business_owner_id or client_id)
-            // 3. Logged-in user is the client by email or name match
+            console.log(`[CA getTasks DEBUG] Fetching tasks for user ID: ${req.user.id}, email: ${email}`);
+
+            // Requirement 1: Business Owner should receive tasks where business_owner_id == logged in user's id
+            // Requirement: Use business_owner_id as the single source of truth for business owners.
+            // CAs should still see tasks they created (ca_user_id)
             const list = await db.prepare(`
                 SELECT * FROM ca_tasks 
                 WHERE ca_user_id = ? 
-                   OR business_owner_id = ? 
-                   OR client_id = ?
-                   OR LOWER(client_email) = LOWER(?)
-                   OR LOWER(client_name) = LOWER(?)
-                ORDER BY id DESC
-            `).all(req.user.id, req.user.id, req.user.id, email, email);
+                   OR business_owner_id = ?
+                ORDER BY due_date ASC
+            `).all(req.user.id, req.user.id);
+
+            console.log(`[CA getTasks DEBUG] Found ${list.length} tasks in total for this user context.`);
 
             const mapped = list.map(item => ({
                 id: item.id,
@@ -855,6 +855,8 @@ const caController = {
                     clientEmail = owner.email;
                 }
             }
+
+            console.log(`[CA addTask DEBUG] Creating task with: ca_id=${req.user.id}, business_owner_id=${businessOwnerId}, client_id=${clientId}`);
 
             // Fallback for advisor details
             const advisor = await db.prepare("SELECT email FROM users WHERE id = ?").get(req.user.id);
