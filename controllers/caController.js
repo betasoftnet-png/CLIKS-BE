@@ -1532,21 +1532,30 @@ const caController = {
                 reviewsMap[r.document_id] = { status: r.status, remark: r.remark };
             });
 
-            // 6. Fetch latest version info
+            // 6. Fetch latest version info including uploader and actual timestamp
             const versions = await db.prepare(`
-                SELECT document_id, MAX(version_number) as latest_version, uploaded_at
-                FROM ca_document_versions
-                GROUP BY document_id
+                SELECT v1.document_id, v1.version_number, v1.uploaded_at, u.username as uploader_name
+                FROM ca_document_versions v1
+                JOIN (
+                    SELECT document_id, MAX(version_number) as max_v
+                    FROM ca_document_versions
+                    GROUP BY document_id
+                ) v2 ON v1.document_id = v2.document_id AND v1.version_number = v2.max_v
+                LEFT JOIN users u ON v1.uploaded_by = u.id
             `).all();
             const versionsMap = {};
             versions.forEach(v => {
-                versionsMap[v.document_id] = v.latest_version;
+                versionsMap[v.document_id] = {
+                    version: v.version_number,
+                    uploaded_at: v.uploaded_at,
+                    uploader_name: v.uploader_name
+                };
             });
 
             // Map all documents with review statuses
             const mappedDocs = allDocs.map(doc => {
                 const rev = reviewsMap[doc.id] || {};
-                const latestVer = versionsMap[doc.id] || 1;
+                const verInfo = versionsMap[doc.id] || { version: 1 };
                 let defaultStatus = 'Uploaded';
                 if (doc.source_table === 'ca_tasks') {
                     const taskRec = clientTasks.find(t => t.id === doc.source_id);
@@ -1563,7 +1572,9 @@ const caController = {
                     ...doc,
                     status: rev.status || defaultStatus,
                     remark: rev.remark || '',
-                    version: latestVer
+                    version: verInfo.version,
+                    uploaded_at: verInfo.uploaded_at || doc.uploaded_at,
+                    uploaded_by: verInfo.uploader_name || doc.uploaded_by
                 };
             });
 
