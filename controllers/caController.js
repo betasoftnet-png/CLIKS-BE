@@ -1130,14 +1130,15 @@ const caController = {
             if (!task) {
                 const now = new Date().toISOString();
                 const result = await db.prepare(`
-                    INSERT INTO ca_tasks (ca_user_id, client_id, client_name, title, status, priority, due_date, phase, created_at)
-                    VALUES (?, ?, ?, ?, 'Uploaded', 'Medium', ?, ?, ?)
-                `).run(req.user.id, clientId, client.name, title, now.split('T')[0], phase, now);
+                    INSERT INTO ca_tasks (ca_user_id, client_id, business_owner_id, client_name, title, status, priority, due_date, phase, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'Uploaded', 'Medium', ?, ?, ?)
+                `).run(req.user.id, clientId, client.business_owner_id, client.name, title, now.split('T')[0], phase, now);
                 task = { id: result.lastInsertRowid, title };
             }
 
-            // Reuse uploadTaskDoc logic by calling it internally or just duplicating for speed (user said fastly)
-            const attachedFile = `uploaded_phase_doc_${Date.now().toString().slice(-4)}.pdf`;
+            // Use provided filename if available, otherwise generate one
+            const { fileName } = req.body;
+            const attachedFile = fileName || `uploaded_phase_doc_${Date.now().toString().slice(-4)}.pdf`;
             const docId = `task_${task.id}`;
             const now = new Date().toISOString();
 
@@ -1701,7 +1702,9 @@ const caController = {
             if (finalStatusVal === 'Under Review' || finalStatusVal === 'Verified' || finalStatusVal === 'Approved' || finalStatusVal === 'Needs Correction') {
                 if (documentId.startsWith('task_')) {
                     const taskId = documentId.split('_')[1];
-                    await db.prepare("UPDATE ca_tasks SET status = ? WHERE id = ?").run(finalStatusVal, taskId);
+                    // Requirement: Mark task as Completed when Approved
+                    const syncStatus = finalStatusVal === 'Approved' ? 'Completed' : finalStatusVal;
+                    await db.prepare("UPDATE ca_tasks SET status = ? WHERE id = ?").run(syncStatus, taskId);
                 } else if (documentId.startsWith('request_')) {
                     const requestId = documentId.split('_')[1];
                     await db.prepare("UPDATE ca_client_requests SET status = ? WHERE id = ?").run(finalStatusVal, requestId);
