@@ -119,6 +119,9 @@ const initTableAndColumns = async () => {
         try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN client_email TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN task_description TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN created_at TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN phase TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_document_versions ADD COLUMN phase TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_client_requests ADD COLUMN phase TEXT").run(); } catch(e) {}
 
         await db.prepare(`
             CREATE TABLE IF NOT EXISTS ca_gst_access_logs (
@@ -566,7 +569,13 @@ const caController = {
 
     getOutgoingInvitations: async (req, res) => {
         try {
-            const list = await db.prepare("SELECT * FROM ca_invitations WHERE sender_id = ? ORDER BY id DESC").all(req.user.id);
+            const list = await db.prepare(`
+                SELECT i.*, u.is_online, u.last_seen_at, u.login_at, u.username as receiver_name
+                FROM ca_invitations i
+                LEFT JOIN users u ON LOWER(i.receiver_email) = LOWER(u.email)
+                WHERE i.sender_id = ?
+                ORDER BY i.id DESC
+            `).all(req.user.id);
             return sendSuccess(res, list, 'Outgoing invitations retrieved');
         } catch (error) {
             console.error('[CA Get Outgoing Invitations Error]', error);
@@ -582,9 +591,11 @@ const caController = {
             }
             // Get incoming invitations for the logged-in user
             const list = await db.prepare(`
-                SELECT * FROM ca_invitations 
-                WHERE LOWER(receiver_email) = LOWER(?) OR receiver_id = ?
-                ORDER BY id DESC
+                SELECT i.*, u.is_online, u.last_seen_at, u.login_at, u.username as sender_name_full
+                FROM ca_invitations i
+                LEFT JOIN users u ON LOWER(i.sender_email) = LOWER(u.email)
+                WHERE LOWER(i.receiver_email) = LOWER(?) OR i.receiver_id = ?
+                ORDER BY i.id DESC
             `).all(email, req.user.id);
             return sendSuccess(res, list, 'Incoming invitations retrieved');
         } catch (error) {
@@ -1055,6 +1066,7 @@ const caController = {
     },
     uploadTaskDoc: async (req, res) => {
         const { id } = req.params;
+        const { phase } = req.body;
         try {
             const attachedFile = `uploaded_task_doc_${Date.now().toString().slice(-4)}.pdf`;
             const docId = `task_${id}`;
@@ -1062,9 +1074,9 @@ const caController = {
 
             await db.prepare(`
                 UPDATE ca_tasks 
-                SET attached_file = ?, status = 'Uploaded' 
+                SET attached_file = ?, status = 'Uploaded', phase = ?
                 WHERE id = ?
-            `).run(attachedFile, id);
+            `).run(attachedFile, phase || null, id);
 
             // Fetch the updated task to notify the CA
             const task = await db.prepare("SELECT * FROM ca_tasks WHERE id = ?").get(id);
@@ -1074,9 +1086,9 @@ const caController = {
             const nextVersion = (latestVersion?.v || 0) + 1;
 
             await db.prepare(`
-                INSERT INTO ca_document_versions (document_id, version_number, file_name, file_path, uploaded_by, uploaded_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `).run(docId, nextVersion, attachedFile, `/uploads/${attachedFile}`, req.user.id, now);
+                INSERT INTO ca_document_versions (document_id, version_number, file_name, file_path, uploaded_by, uploaded_at, phase)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).run(docId, nextVersion, attachedFile, `/uploads/${attachedFile}`, req.user.id, now, phase || null);
 
             // Reset review status if it was previously corrected
             await db.prepare("DELETE FROM ca_document_reviews WHERE document_id = ?").run(docId);
@@ -1090,10 +1102,59 @@ const caController = {
                 `).run(task.ca_user_id, 'Document Uploaded', messageText, now);
             }
 
-            return sendSuccess(res, { id: parseInt(id), status: 'Uploaded', attachedFile, version: nextVersion }, 'Task document uploaded successfully');
+            return sendSuccess(res, { id: parseInt(id), status: 'Uploaded', attachedFile, version: nextVersion, phase: phase || null }, 'Task document uploaded successfully');
         } catch (error) {
             console.error('[CA uploadTaskDoc Error]', error);
             return sendError(res, 'Failed to upload task document', 500);
+        }
+    },
+
+    uploadClientPhaseDoc: async (req, res) => {
+        const { id: clientId } = req.params;
+        const { phase } = req.body;
+        if (!phase) return sendError(res, 'Phase is required', 400);
+
+        try {
+            const client = await db.prepare("SELECT * FROM ca_clients WHERE id = ?").get(clientId);
+            if (!client) return sendError(res, 'Client not found', 404);
+
+            const title = `${phase} Document Repository`;
+
+            // Find or create the phase task
+            let task = await db.prepare("SELECT * FROM ca_tasks WHERE ca_user_id = ? AND client_id = ? AND title = ? AND phase = ?").get(req.user.id, clientId, title, phase);
+
+            if (!task) {
+                const now = new Date().toISOString();
+                const result = await db.prepare(`
+                    INSERT INTO ca_tasks (ca_user_id, client_id, client_name, title, status, priority, due_date, phase, created_at)
+                    VALUES (?, ?, ?, ?, 'Uploaded', 'Medium', ?, ?, ?)
+                `).run(req.user.id, clientId, client.name, title, now.split('T')[0], phase, now);
+                task = { id: result.lastInsertRowid, title };
+            }
+
+            // Reuse uploadTaskDoc logic by calling it internally or just duplicating for speed (user said fastly)
+            const attachedFile = `uploaded_phase_doc_${Date.now().toString().slice(-4)}.pdf`;
+            const docId = `task_${task.id}`;
+            const now = new Date().toISOString();
+
+            await db.prepare(`
+                UPDATE ca_tasks
+                SET attached_file = ?, status = 'Uploaded'
+                WHERE id = ?
+            `).run(attachedFile, task.id);
+
+            const latestVersion = await db.prepare("SELECT MAX(version_number) as v FROM ca_document_versions WHERE document_id = ?").get(docId);
+            const nextVersion = (latestVersion?.v || 0) + 1;
+
+            await db.prepare(`
+                INSERT INTO ca_document_versions (document_id, version_number, file_name, file_path, uploaded_by, uploaded_at, phase)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).run(docId, nextVersion, attachedFile, `/uploads/${attachedFile}`, req.user.id, now, phase);
+
+            return sendSuccess(res, { taskId: task.id, attachedFile, version: nextVersion, phase }, 'Phase document uploaded successfully');
+        } catch (error) {
+            console.error('[CA uploadClientPhaseDoc Error]', error);
+            return sendError(res, 'Failed to upload phase document', 500);
         }
     },
 
@@ -1498,7 +1559,8 @@ const caController = {
                     type: isPdf ? 'PDF' : 'Image',
                     uploaded_by: client.name,
                     uploaded_at: reqRec.updated_at || reqRec.created_at || reqRec.due_date || '',
-                    task_name: `Client Request: ${reqRec.title}`
+                    task_name: `Client Request: ${reqRec.title}`,
+                    phase: reqRec.phase || null
                 });
             });
 
@@ -1521,7 +1583,8 @@ const caController = {
                     type: isPdf ? 'PDF' : 'Image',
                     uploaded_by: client.name,
                     uploaded_at: taskRec.due_date || taskRec.created_at || '',
-                    task_name: `Assigned Task: ${taskRec.title}`
+                    task_name: `Assigned Task: ${taskRec.title}`,
+                    phase: taskRec.phase
                 });
             });
 
@@ -1534,7 +1597,7 @@ const caController = {
 
             // 6. Fetch latest version info including uploader and actual timestamp
             const versions = await db.prepare(`
-                SELECT v1.document_id, v1.version_number, v1.uploaded_at, u.username as uploader_name
+                SELECT v1.document_id, v1.version_number, v1.uploaded_at, v1.phase, u.username as uploader_name
                 FROM ca_document_versions v1
                 JOIN (
                     SELECT document_id, MAX(version_number) as max_v
@@ -1548,7 +1611,8 @@ const caController = {
                 versionsMap[v.document_id] = {
                     version: v.version_number,
                     uploaded_at: v.uploaded_at,
-                    uploader_name: v.uploader_name
+                    uploader_name: v.uploader_name,
+                    phase: v.phase
                 };
             });
 
@@ -1574,7 +1638,8 @@ const caController = {
                     remark: rev.remark || '',
                     version: verInfo.version,
                     uploaded_at: verInfo.uploaded_at || doc.uploaded_at,
-                    uploaded_by: verInfo.uploader_name || doc.uploaded_by
+                    uploaded_by: verInfo.uploader_name || doc.uploaded_by,
+                    phase: verInfo.phase || doc.phase || null
                 };
             });
 

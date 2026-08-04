@@ -75,6 +75,10 @@ const ssoLogin = async (req, res) => {
 
   const { accessToken, refreshToken } = await TokenService.issueEnhancedTokens(user);
 
+  // Update online status
+  const now = new Date().toISOString();
+  await db.prepare('UPDATE users SET is_online = 1, login_at = ?, last_seen_at = ? WHERE id = ?').run(now, now, user.id);
+
   const safeUser = { id: user.id, username: user.username, email: user.email, role: user.role, tier: user.tier, subscription_days_remaining: user.subscription_days_remaining, created_at: user.created_at };
   return sendSuccess(res, { accessToken, refreshToken, user: safeUser }, 'SSO login successful', 200);
 };
@@ -96,6 +100,13 @@ const refresh = async (req, res) => {
 const logout = async (req, res) => {
   const { refreshToken } = req.body;
   if (refreshToken) {
+    // Attempt to extract user id from refresh token if possible, or just use req.user if auth middleware is present
+    // Since logout usually doesn't have auth middleware here (it revokes by token),
+    // we need to find the user associated with this token.
+    const stored = await db.prepare('SELECT user_id FROM refresh_tokens WHERE token = ?').get(refreshToken);
+    if (stored) {
+      await db.prepare('UPDATE users SET is_online = 0, last_seen_at = ? WHERE id = ?').run(new Date().toISOString(), stored.user_id);
+    }
     await TokenService.revokeToken(refreshToken);
   }
   return sendSuccess(res, null, 'Logged out successfully');
@@ -116,4 +127,15 @@ const logoutAll = async (req, res) => {
   return sendSuccess(res, null, 'Logged out of all sessions successfully');
 };
 
-module.exports = { ssoLogin, refresh, logout, logoutAll };
+const heartbeat = async (req, res) => {
+  const now = new Date().toISOString();
+  await db.prepare('UPDATE users SET is_online = 1, last_seen_at = ? WHERE id = ?').run(now, req.user.id);
+
+  // Also periodically clean up users who haven't sent a heartbeat (older than 5 mins)
+  const timeout = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  await db.prepare('UPDATE users SET is_online = 0 WHERE is_online = 1 AND last_seen_at < ?').run(timeout);
+
+  return sendSuccess(res, { last_seen_at: now }, 'Presence updated');
+};
+
+module.exports = { ssoLogin, refresh, logout, logoutAll, heartbeat };
