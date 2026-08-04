@@ -60,5 +60,13 @@ router.post('/team-requests/:id/accept', caController.acceptTeamRequest);
 router.post('/team-requests/:id/reject', caController.rejectTeamRequest);
 router.delete('/team-requests/:id', caController.cancelTeamRequest);
 
+// Billing & Audit Session Routes
+router.post('/audit-sessions', caController.addAuditSession);
+router.get('/audit-sessions', caController.getAuditSessions);
+router.post('/invoices/generate', caController.generateProfessionalInvoice);
+router.get('/invoices', caController.getProfessionalInvoices);
+router.get('/earnings/dashboard', caController.getEarningsDashboard);
+router.post('/invoices/:id/pay', caController.payInvoice);
+
 module.exports = router;
 

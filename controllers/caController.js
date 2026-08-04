@@ -569,6 +569,10 @@ const caController = {
 
     getOutgoingInvitations: async (req, res) => {
         try {
+            // Requirement: Cleanup offline users before returning status
+            const timeout = new Date(Date.now() - 90 * 1000).toISOString();
+            await db.prepare('UPDATE users SET is_online = 0 WHERE is_online = 1 AND last_seen_at < ?').run(timeout);
+
             const list = await db.prepare(`
                 SELECT i.*, u.is_online, u.last_seen_at, u.login_at, u.username as receiver_name
                 FROM ca_invitations i
@@ -1568,9 +1572,9 @@ const caController = {
             const clientTasks = await db.prepare(`
                 SELECT * FROM ca_tasks 
                 WHERE ca_user_id = ? 
-                  AND (client_id = ? OR LOWER(client_name) = LOWER(?) OR LOWER(client_name) = LOWER(?))
+                  AND (client_id = ? OR business_owner_id = ? OR LOWER(client_name) = LOWER(?) OR LOWER(client_name) = LOWER(?))
                   AND attached_file IS NOT NULL
-            `).all(req.user.id, client.id, client.name, client.email || '');
+            `).all(req.user.id, client.id, client.business_owner_id, client.name, client.email || '');
             clientTasks.forEach(taskRec => {
                 const fileExt = (taskRec.attached_file || '').split('.').pop().toLowerCase();
                 const isPdf = fileExt === 'pdf';
@@ -1632,9 +1636,14 @@ const caController = {
                         defaultStatus = reqRec.status;
                     }
                 }
+
+                // Professional touch: if status is 'Uploaded', display as 'Pending Review' in Workpaper
+                let displayStatus = rev.status || defaultStatus;
+                if (displayStatus === 'Uploaded') displayStatus = 'Pending Review';
+
                 return {
                     ...doc,
-                    status: rev.status || defaultStatus,
+                    status: displayStatus,
                     remark: rev.remark || '',
                     version: verInfo.version,
                     uploaded_at: verInfo.uploaded_at || doc.uploaded_at,
@@ -2016,6 +2025,170 @@ const caController = {
         } catch (error) {
             console.error('[CA deleteTdsCalculation Error]', error);
             return sendError(res, 'Failed to delete TDS calculation', 500);
+        }
+    },
+
+    // --- Billing & Audit Session Methods ---
+    addAuditSession: async (req, res) => {
+        const { clientId, startTime, stopTime, durationSeconds, auditDate } = req.body;
+        try {
+            const now = new Date().toISOString();
+            // Find business owner id from client
+            const client = await db.prepare("SELECT business_owner_id FROM ca_clients WHERE id = ?").get(clientId);
+
+            const result = await db.prepare(`
+                INSERT INTO ca_audit_sessions (
+                    ca_user_id, client_id, business_owner_id, start_time, stop_time, duration_seconds, audit_date, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Completed', ?)
+            `).run(req.user.id, clientId, client?.business_owner_id || null, startTime, stopTime, durationSeconds, auditDate, now);
+
+            return sendSuccess(res, { id: result.lastInsertRowid }, 'Audit session saved successfully');
+        } catch (error) {
+            console.error('[CA addAuditSession Error]', error);
+            return sendError(res, 'Failed to save audit session', 500);
+        }
+    },
+
+    getAuditSessions: async (req, res) => {
+        try {
+            const list = await db.prepare(`
+                SELECT s.*, c.name as client_name
+                FROM ca_audit_sessions s
+                LEFT JOIN ca_clients c ON s.client_id = c.id
+                WHERE s.ca_user_id = ?
+                ORDER BY s.id DESC
+            `).all(req.user.id);
+            return sendSuccess(res, list, 'Audit sessions retrieved');
+        } catch (error) {
+            console.error('[CA getAuditSessions Error]', error);
+            return sendError(res, 'Failed to fetch audit sessions', 500);
+        }
+    },
+
+    generateProfessionalInvoice: async (req, res) => {
+        const { sessionId, clientId, amount, gstAmount, totalAmount, invoiceDate } = req.body;
+        try {
+            const now = new Date().toISOString();
+            const invoiceNumber = `INV-PRO-${Date.now().toString().slice(-6)}`;
+
+            // Find business owner id from client
+            const client = await db.prepare("SELECT business_owner_id FROM ca_clients WHERE id = ?").get(clientId);
+            if (!client?.business_owner_id) {
+                return sendError(res, 'Client is not connected to a business owner account', 400);
+            }
+
+            const result = await db.prepare(`
+                INSERT INTO ca_professional_invoices (
+                    invoice_number, ca_user_id, business_owner_id, client_id, audit_session_id,
+                    amount, gst_amount, total_amount, status, invoice_date, pdf_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Unpaid', ?, ?, ?)
+            `).run(
+                invoiceNumber, req.user.id, client.business_owner_id, clientId, sessionId,
+                amount, gstAmount, totalAmount, invoiceDate, `/invoices/${invoiceNumber}.pdf`, now
+            );
+
+            // Notify Business Owner
+            const caUser = await db.prepare("SELECT username, email FROM users WHERE id = ?").get(req.user.id);
+            const caName = caUser?.username || caUser?.email || 'Your Accountant';
+            const message = `New professional service invoice "${invoiceNumber}" generated by ${caName} for ₹${totalAmount}.`;
+            await db.prepare(`
+                INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                VALUES (?, ?, ?, 'Info', 0, ?)
+            `).run(client.business_owner_id, 'New Invoice Received', message, now);
+
+            return sendSuccess(res, { id: result.lastInsertRowid, invoiceNumber }, 'Professional invoice generated successfully');
+        } catch (error) {
+            console.error('[CA generateProfessionalInvoice Error]', error);
+            return sendError(res, 'Failed to generate invoice', 500);
+        }
+    },
+
+    getProfessionalInvoices: async (req, res) => {
+        try {
+            // If user is business owner, show invoices sent to them
+            // If user is CA, show invoices they generated
+            let list;
+            if (req.user.role === 'business') {
+                list = await db.prepare(`
+                    SELECT i.*, u.username as ca_name, s.duration_seconds, s.start_time, s.stop_time, s.audit_date
+                    FROM ca_professional_invoices i
+                    LEFT JOIN users u ON i.ca_user_id = u.id
+                    LEFT JOIN ca_audit_sessions s ON i.audit_session_id = s.id
+                    WHERE i.business_owner_id = ?
+                    ORDER BY i.id DESC
+                `).all(req.user.id);
+            } else {
+                list = await db.prepare(`
+                    SELECT i.*, c.name as client_name, s.duration_seconds, s.start_time, s.stop_time, s.audit_date
+                    FROM ca_professional_invoices i
+                    LEFT JOIN ca_clients c ON i.client_id = c.id
+                    LEFT JOIN ca_audit_sessions s ON i.audit_session_id = s.id
+                    WHERE i.ca_user_id = ?
+                    ORDER BY i.id DESC
+                `).all(req.user.id);
+            }
+            return sendSuccess(res, list, 'Professional invoices retrieved');
+        } catch (error) {
+            console.error('[CA getProfessionalInvoices Error]', error);
+            return sendError(res, 'Failed to fetch invoices', 500);
+        }
+    },
+
+    getEarningsDashboard: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const now = new Date();
+            const today = now.toISOString().split('T')[0];
+
+            // This Week
+            const weekAgo = new Date();
+            weekAgo.setDate(now.getDate() - 7);
+            const weekAgoStr = weekAgo.toISOString().split('T')[0];
+
+            // This Month
+            const monthAgo = new Date();
+            monthAgo.setDate(now.getDate() - 30);
+            const monthAgoStr = monthAgo.toISOString().split('T')[0];
+
+            const pending = await db.prepare("SELECT SUM(total_amount) as total FROM ca_professional_invoices WHERE ca_user_id = ? AND status = 'Unpaid'").get(userId);
+            const paid = await db.prepare("SELECT SUM(total_amount) as total FROM ca_professional_invoices WHERE ca_user_id = ? AND status = 'Paid'").get(userId);
+            const total = await db.prepare("SELECT SUM(total_amount) as total FROM ca_professional_invoices WHERE ca_user_id = ?").get(userId);
+            const todayEarnings = await db.prepare("SELECT SUM(total_amount) as total FROM ca_professional_invoices WHERE ca_user_id = ? AND invoice_date = ?").get(userId, today);
+            const weekEarnings = await db.prepare("SELECT SUM(total_amount) as total FROM ca_professional_invoices WHERE ca_user_id = ? AND invoice_date >= ?").get(userId, weekAgoStr);
+            const monthEarnings = await db.prepare("SELECT SUM(total_amount) as total FROM ca_professional_invoices WHERE ca_user_id = ? AND invoice_date >= ?").get(userId, monthAgoStr);
+
+            return sendSuccess(res, {
+                today: todayEarnings?.total || 0,
+                thisWeek: weekEarnings?.total || 0,
+                thisMonth: monthEarnings?.total || 0,
+                pending: pending?.total || 0,
+                paid: paid?.total || 0,
+                totalRevenue: total?.total || 0
+            }, 'Earnings summary retrieved');
+        } catch (error) {
+            console.error('[CA getEarningsDashboard Error]', error);
+            return sendError(res, 'Failed to fetch earnings summary', 500);
+        }
+    },
+
+    payInvoice: async (req, res) => {
+        const { id: invoiceId } = req.params;
+        try {
+            const now = new Date().toISOString();
+            const invoice = await db.prepare("SELECT * FROM ca_professional_invoices WHERE id = ? AND business_owner_id = ?").get(invoiceId, req.user.id);
+            if (!invoice) return sendError(res, 'Invoice not found', 404);
+
+            await db.prepare("UPDATE ca_professional_invoices SET status = 'Paid' WHERE id = ?").run(invoiceId);
+
+            await db.prepare(`
+                INSERT INTO ca_payments (invoice_id, user_id, amount, payment_method, transaction_id, status, paid_at)
+                VALUES (?, ?, ?, 'Wallet/Online', ?, 'Success', ?)
+            `).run(invoiceId, req.user.id, invoice.total_amount, `TXN-${Date.now()}`, now);
+
+            return sendSuccess(res, null, 'Invoice paid successfully');
+        } catch (error) {
+            console.error('[CA payInvoice Error]', error);
+            return sendError(res, 'Failed to process payment', 500);
         }
     }
 };

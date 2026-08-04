@@ -131,8 +131,8 @@ const heartbeat = async (req, res) => {
   const now = new Date().toISOString();
   await db.prepare('UPDATE users SET is_online = 1, last_seen_at = ? WHERE id = ?').run(now, req.user.id);
 
-  // Also periodically clean up users who haven't sent a heartbeat (older than 5 mins)
-  const timeout = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  // Clean up users who haven't sent a heartbeat for more than 90 seconds
+  const timeout = new Date(Date.now() - 90 * 1000).toISOString();
   await db.prepare('UPDATE users SET is_online = 0 WHERE is_online = 1 AND last_seen_at < ?').run(timeout);
 
   return sendSuccess(res, { last_seen_at: now }, 'Presence updated');

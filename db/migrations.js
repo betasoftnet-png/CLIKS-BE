@@ -2051,11 +2051,104 @@ CREATE TABLE IF NOT EXISTS money_trackers (
           updated_at TEXT
         )
       `);
+      db.raw.exec(`
+        CREATE TABLE IF NOT EXISTS ca_audit_sessions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ca_user_id INTEGER NOT NULL,
+          client_id INTEGER,
+          business_owner_id INTEGER,
+          start_time TEXT,
+          stop_time TEXT,
+          duration_seconds INTEGER,
+          audit_date TEXT,
+          status TEXT DEFAULT 'Completed',
+          created_at TEXT
+        )
+      `);
+      db.raw.exec(`
+        CREATE TABLE IF NOT EXISTS ca_professional_invoices (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          invoice_number TEXT UNIQUE NOT NULL,
+          ca_user_id INTEGER NOT NULL,
+          business_owner_id INTEGER NOT NULL,
+          client_id INTEGER,
+          audit_session_id INTEGER,
+          amount REAL,
+          gst_amount REAL,
+          total_amount REAL,
+          status TEXT DEFAULT 'Unpaid',
+          invoice_date TEXT,
+          pdf_path TEXT,
+          created_at TEXT,
+          FOREIGN KEY(audit_session_id) REFERENCES ca_audit_sessions(id)
+        )
+      `);
+      db.raw.exec(`
+        CREATE TABLE IF NOT EXISTS ca_payments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          invoice_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          amount REAL,
+          payment_method TEXT,
+          transaction_id TEXT,
+          status TEXT DEFAULT 'Success',
+          paid_at TEXT,
+          FOREIGN KEY(invoice_id) REFERENCES ca_professional_invoices(id)
+        )
+      `);
     } catch (e) {
-      console.warn('⚠️ Could not create ca_document_reviews table:', e.message);
+      console.warn('⚠️ Could not create CA Billing tables:', e.message);
     }
 
     console.log('✅ Verified/Updated table columns in SQLite');
+  }
+
+  // PostgreSQL specific table creations if needed (handled by the big sql string at top normally,
+  // but for reliability let's ensure they exist here too if we're on postgres)
+  if (dbType === 'postgres') {
+    try {
+      await db.pool.query(`
+        CREATE TABLE IF NOT EXISTS ca_audit_sessions (
+          id SERIAL PRIMARY KEY,
+          ca_user_id INTEGER NOT NULL,
+          client_id INTEGER,
+          business_owner_id INTEGER,
+          start_time TEXT,
+          stop_time TEXT,
+          duration_seconds INTEGER,
+          audit_date TEXT,
+          status TEXT DEFAULT 'Completed',
+          created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS ca_professional_invoices (
+          id SERIAL PRIMARY KEY,
+          invoice_number TEXT UNIQUE NOT NULL,
+          ca_user_id INTEGER NOT NULL,
+          business_owner_id INTEGER NOT NULL,
+          client_id INTEGER,
+          audit_session_id INTEGER,
+          amount NUMERIC,
+          gst_amount NUMERIC,
+          total_amount NUMERIC,
+          status TEXT DEFAULT 'Unpaid',
+          invoice_date TEXT,
+          pdf_path TEXT,
+          created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS ca_payments (
+          id SERIAL PRIMARY KEY,
+          invoice_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          amount NUMERIC,
+          payment_method TEXT,
+          transaction_id TEXT,
+          status TEXT DEFAULT 'Success',
+          paid_at TEXT
+        );
+      `);
+    } catch(e) {
+      console.warn('⚠️ Could not create CA Billing tables (Postgres):', e.message);
+    }
   }
 
   // Seed Initial Infrastructure Configurations (Dialect Agnostic Block)
