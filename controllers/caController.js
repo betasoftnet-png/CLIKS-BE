@@ -887,39 +887,47 @@ const caController = {
         }
     },
     addTask: async (req, res) => {
-        const { clientName, title, priority, dueDate, askForDocument } = req.body;
+        const { clientName, businessOwnerEmail, title, priority, dueDate, askForDocument } = req.body;
         if (!title) return sendError(res, 'Task title is required', 400);
         try {
             const defaultDate = dueDate || new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString().split('T')[0];
             const askDocInt = (askForDocument === 'true' || askForDocument === true || askForDocument == 1) ? 1 : 0;
 
-            // Find client in ca_clients for this CA
-            const client = await db.prepare(`
-                SELECT * FROM ca_clients 
-                WHERE ca_user_id = ? AND (LOWER(name) = LOWER(?) OR LOWER(email) = LOWER(?))
-            `).get(req.user.id, clientName, clientName);
-
             let businessOwnerId = null;
             let clientId = null;
-            let clientEmail = null;
-            
-            if (client) {
-                clientId = client.id;
-                businessOwnerId = client.business_owner_id;
-                clientEmail = client.email;
-                if (!businessOwnerId && client.email) {
-                    const owner = await db.prepare("SELECT id, email FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
-                    if (owner) {
-                        businessOwnerId = owner.id;
-                        clientEmail = owner.email;
-                    }
-                }
-            } else {
-                // If client not in ca_clients, check if clientName matches users (by email or username)
-                const owner = await db.prepare("SELECT id, email FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)").get(clientName, clientName);
+            let clientEmail = businessOwnerEmail ? businessOwnerEmail.toLowerCase() : null;
+
+            // 1. Try to find user by provided businessOwnerEmail
+            if (clientEmail) {
+                const owner = await db.prepare("SELECT id FROM users WHERE LOWER(email) = ?").get(clientEmail);
                 if (owner) {
                     businessOwnerId = owner.id;
-                    clientEmail = owner.email;
+                }
+            }
+
+            // 2. Fallback to clientName logic if email not found or not provided
+            if (!businessOwnerId) {
+                const client = await db.prepare(`
+                    SELECT * FROM ca_clients
+                    WHERE ca_user_id = ? AND (LOWER(name) = LOWER(?) OR LOWER(email) = LOWER(?))
+                `).get(req.user.id, clientName, clientName);
+
+                if (client) {
+                    clientId = client.id;
+                    businessOwnerId = client.business_owner_id;
+                    if (!clientEmail) clientEmail = client.email ? client.email.toLowerCase() : null;
+                    if (!businessOwnerId && client.email) {
+                        const owner = await db.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
+                        if (owner) {
+                            businessOwnerId = owner.id;
+                        }
+                    }
+                } else {
+                    const owner = await db.prepare("SELECT id, email FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)").get(clientName, clientName);
+                    if (owner) {
+                        businessOwnerId = owner.id;
+                        if (!clientEmail) clientEmail = owner.email ? owner.email.toLowerCase() : null;
+                    }
                 }
             }
 
@@ -973,7 +981,7 @@ const caController = {
 
             // Notify Business Owner if they exist
             if (businessOwnerId) {
-                const messageText = `Your FIN-PRO Advisor has assigned a new compliance task: "${title}".`;
+                const messageText = `Your FIN-PRO Advisor has assigned a new compliance task: "${title}". Deadline: ${defaultDate}. Priority: ${priority || 'Medium'}.`;
                 await db.prepare(`
                     INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
                     VALUES (?, ?, ?, 'Info', 0, ?)
