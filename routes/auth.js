@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authLimiter } = require('../middleware/rateLimiter');
 const asyncHandler = require('../utils/asyncHandler');
-const { ssoLogin, refresh, logout, logoutAll } = require('../controllers/authController');
+const { ssoLogin, refresh, logout, logoutAll, heartbeat } = require('../controllers/authController');
 
 // POST /auth/sso           — SSO Login using BNX Token
 router.post('/sso', authLimiter, asyncHandler(ssoLogin));
