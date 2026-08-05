@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS user_presence (
   last_activity TEXT,
   logout_time TEXT,
   status TEXT DEFAULT 'Offline',
+  socket_id TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
