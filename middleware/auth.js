@@ -44,4 +44,4 @@ function allowRoles(...roles) {
   };
 }
 
-module.exports = { auth, allowRoles };
+module.exports = { auth, authenticateToken: auth, allowRoles };
