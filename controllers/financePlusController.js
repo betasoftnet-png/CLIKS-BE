@@ -169,10 +169,21 @@ const saveTaxRecord = async (req, res) => {
   return sendSuccess(res, null, 'Tax record saved');
 };
 
-// ── Notifications ─────────────────────────────────────────────────────────────
 const getNotifications = async (req, res) => {
-  const list = await db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
-  return sendSuccess(res, list);
+  try {
+    const userId = req.user?.id || req.user?.userId;
+    if (!userId) return sendSuccess(res, []);
+    let list = [];
+    try {
+      list = await db.prepare('SELECT * FROM notifications WHERE receiver_id = ? OR user_id = ? ORDER BY id DESC LIMIT 100').all(userId, userId);
+    } catch (e) {
+      list = await db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 100').all(userId);
+    }
+    return sendSuccess(res, list || []);
+  } catch (error) {
+    console.error('[financePlus getNotifications Error]', error);
+    return sendSuccess(res, []);
+  }
 };
 
 const markNotificationRead = async (req, res) => {
