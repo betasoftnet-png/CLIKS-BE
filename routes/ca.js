@@ -17,6 +17,7 @@ router.delete('/invitations/:id', caController.revokeInvitation);
 router.get('/clients', caController.getClients);
 router.post('/clients', caController.addClient);
 router.get('/clients/:id/documents', caController.getClientDocuments);
+router.get('/clients/:id/phase-document', caController.getPhaseDocument);
 router.post('/clients/:id/upload-phase', caController.uploadClientPhaseDoc);
 router.post('/clients/:id/documents/review', caController.updateClientDocumentReview);
 router.get('/clients/:id/gst-credentials', caController.getClientGstCredentials);

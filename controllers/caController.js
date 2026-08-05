@@ -1302,6 +1302,112 @@ const caController = {
         }
     },
 
+    getPhaseDocument: async (req, res) => {
+        const { id } = req.params;
+        const phase = req.query.phase || 'Phase 1';
+        try {
+            const client = await db.prepare("SELECT * FROM ca_clients WHERE id = ? AND ca_user_id = ?").get(id, req.user.id);
+            if (!client) {
+                return sendError(res, 'Client not found', 404);
+            }
+
+            const ownerUser = await db.prepare("SELECT * FROM users WHERE id = ? OR LOWER(email) = LOWER(?)").get(client.business_owner_id || -1, client.email || '');
+            const businessOwnerName = ownerUser?.username || client.name || 'Business Owner';
+
+            // 1. Search in ca_tasks for phase document attached
+            const taskDoc = await db.prepare(`
+                SELECT * FROM ca_tasks 
+                WHERE ca_user_id = ? 
+                  AND (client_id = ? OR business_owner_id = ? OR LOWER(client_name) = LOWER(?) OR LOWER(client_name) = LOWER(?))
+                  AND phase = ?
+                  AND attached_file IS NOT NULL
+                ORDER BY id DESC
+            `).get(req.user.id, client.id, client.business_owner_id || -1, client.name, client.email || '', phase);
+
+            // 2. Search in ca_document_versions for latest phase upload by business owner
+            const versionDoc = await db.prepare(`
+                SELECT v.*, u.username as uploader_name
+                FROM ca_document_versions v
+                LEFT JOIN users u ON v.uploaded_by = u.id
+                WHERE v.phase = ?
+                ORDER BY v.id DESC
+            `).get(phase);
+
+            // 3. Search in ca_client_requests
+            const reqDoc = await db.prepare(`
+                SELECT * FROM ca_client_requests
+                WHERE ca_user_id = ?
+                  AND (LOWER(client_name) = LOWER(?) OR LOWER(client_name) = LOWER(?))
+                  AND phase = ?
+                  AND attached_file IS NOT NULL
+                ORDER BY id DESC
+            `).get(req.user.id, client.name, client.email || '', phase);
+
+            let selectedDoc = null;
+            if (taskDoc) {
+                const docId = `task_${taskDoc.id}`;
+                const verInfo = await db.prepare("SELECT v.*, u.username as uploader_name FROM ca_document_versions v LEFT JOIN users u ON v.uploaded_by = u.id WHERE v.document_id = ? ORDER BY v.version_number DESC").get(docId);
+                selectedDoc = {
+                    fileName: taskDoc.attached_file,
+                    filePath: `/uploads/${taskDoc.attached_file}`,
+                    uploadedBy: verInfo?.uploader_name || businessOwnerName,
+                    uploadedAt: verInfo?.uploaded_at || taskDoc.updated_at || taskDoc.created_at || taskDoc.due_date || new Date().toISOString(),
+                    phase: phase
+                };
+            } else if (reqDoc) {
+                selectedDoc = {
+                    fileName: reqDoc.attached_file,
+                    filePath: `/uploads/${reqDoc.attached_file}`,
+                    uploadedBy: businessOwnerName,
+                    uploadedAt: reqDoc.updated_at || reqDoc.created_at || new Date().toISOString(),
+                    phase: phase
+                };
+            } else if (versionDoc) {
+                selectedDoc = {
+                    fileName: versionDoc.file_name,
+                    filePath: versionDoc.file_path.startsWith('/') ? versionDoc.file_path : `/uploads/${versionDoc.file_name}`,
+                    uploadedBy: versionDoc.uploader_name || businessOwnerName,
+                    uploadedAt: versionDoc.uploaded_at,
+                    phase: phase
+                };
+            }
+
+            if (!selectedDoc) {
+                return sendSuccess(res, null, 'No document uploaded by the Business Owner for this phase.');
+            }
+
+            // Determine file size and file type
+            const pathModule = require('path');
+            const fsModule = require('fs');
+            const diskPath = pathModule.join(__dirname, '../uploads', selectedDoc.fileName);
+            let fileSizeStr = '1.2 MB';
+            try {
+                if (fsModule.existsSync(diskPath)) {
+                    const stats = fsModule.statSync(diskPath);
+                    const bytes = stats.size;
+                    if (bytes < 1024) fileSizeStr = `${bytes} B`;
+                    else if (bytes < 1024 * 1024) fileSizeStr = `${(bytes / 1024).toFixed(1)} KB`;
+                    else fileSizeStr = `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+                }
+            } catch (e) {}
+
+            const fileExt = (selectedDoc.fileName || '').split('.').pop().toUpperCase() || 'PDF';
+
+            return sendSuccess(res, {
+                fileName: selectedDoc.fileName,
+                filePath: selectedDoc.filePath,
+                uploadedBy: selectedDoc.uploadedBy,
+                uploadedAt: selectedDoc.uploadedAt,
+                fileSize: fileSizeStr,
+                phase: selectedDoc.phase,
+                fileType: fileExt
+            }, 'Phase document retrieved successfully');
+        } catch (error) {
+            console.error('[CA getPhaseDocument Error]', error);
+            return sendError(res, 'Failed to retrieve phase document', 500);
+        }
+    },
+
     getTimesheets: async (req, res) => {
         try {
             await ensureSeededPracticeData(req.user.id);
