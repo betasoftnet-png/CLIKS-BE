@@ -823,6 +823,8 @@ const caController = {
             const list = await db.prepare("SELECT * FROM ca_clients WHERE ca_user_id = ? ORDER BY id DESC").all(req.user.id);
             return sendSuccess(res, list.map(item => ({
                 id: item.id,
+                business_owner_id: item.business_owner_id,
+                ca_user_id: item.ca_user_id,
                 name: item.name,
                 email: item.email,
                 status: item.status,
@@ -3164,20 +3166,46 @@ const caController = {
             const { partnerId } = req.params;
             const currentUserId = req.user.id;
 
-            // Mark unread messages as read
+            // Resolve target user ID and associated client ID
+            let resolvedUserId = partnerId;
+            let clientId = partnerId;
+
+            // Check if partnerId is a ca_clients row ID
+            const caClient = await db.prepare("SELECT * FROM ca_clients WHERE id = ?").get(partnerId);
+            if (caClient) {
+                if (caClient.business_owner_id) {
+                    resolvedUserId = caClient.business_owner_id;
+                } else if (caClient.email) {
+                    const userByEmail = await db.prepare("SELECT id FROM users WHERE email = ?").get(caClient.email);
+                    if (userByEmail) resolvedUserId = userByEmail.id;
+                }
+            } else {
+                // Check if partnerId is a business owner user ID, find ca_clients record
+                const clientRecord = await db.prepare("SELECT id FROM ca_clients WHERE (business_owner_id = ? OR email = (SELECT email FROM users WHERE id = ?)) AND ca_user_id = ?").get(partnerId, partnerId, currentUserId);
+                if (clientRecord) clientId = clientRecord.id;
+            }
+
+            // Mark unread messages from this partner/client as read
             await db.prepare(`
                 UPDATE ca_messages 
                 SET is_read = 1 
-                WHERE receiver_id = ? AND sender_id = ?
-            `).run(currentUserId, partnerId);
+                WHERE receiver_id = ? AND (sender_id = ? OR sender_id = ? OR sender_id = ?)
+            `).run(currentUserId, partnerId, resolvedUserId, clientId);
 
             const messages = await db.prepare(`
                 SELECT m.*, u.username as sender_name 
                 FROM ca_messages m 
                 LEFT JOIN users u ON m.sender_id = u.id 
-                WHERE (m.sender_id = ? AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = ?) 
+                WHERE (
+                    (m.sender_id = ? AND (m.receiver_id = ? OR m.receiver_id = ? OR m.receiver_id = ?))
+                    OR
+                    ((m.sender_id = ? OR m.sender_id = ? OR m.sender_id = ?) AND m.receiver_id = ?)
+                )
                 ORDER BY m.id ASC
-            `).all(currentUserId, partnerId, partnerId, currentUserId);
+            `).all(
+                currentUserId, partnerId, resolvedUserId, clientId,
+                partnerId, resolvedUserId, clientId, currentUserId
+            );
 
             return sendSuccess(res, messages, 'Chat messages retrieved successfully');
         } catch (error) {
@@ -3195,11 +3223,23 @@ const caController = {
                 return sendError(res, 'Receiver ID and non-empty message are required', 400);
             }
 
+            // Resolve target user ID if receiverId is a ca_clients row ID
+            let targetUserId = receiverId;
+            const caClient = await db.prepare("SELECT * FROM ca_clients WHERE id = ?").get(receiverId);
+            if (caClient) {
+                if (caClient.business_owner_id) {
+                    targetUserId = caClient.business_owner_id;
+                } else if (caClient.email) {
+                    const userByEmail = await db.prepare("SELECT id FROM users WHERE email = ?").get(caClient.email);
+                    if (userByEmail) targetUserId = userByEmail.id;
+                }
+            }
+
             const now = new Date().toISOString();
             const result = await db.prepare(`
                 INSERT INTO ca_messages (sender_id, receiver_id, message, is_read, created_at)
                 VALUES (?, ?, ?, 0, ?)
-            `).run(senderId, receiverId, message.trim(), now);
+            `).run(senderId, targetUserId, message.trim(), now);
 
             const newMsg = await db.prepare('SELECT * FROM ca_messages WHERE id = ?').get(result.lastInsertRowid);
 
