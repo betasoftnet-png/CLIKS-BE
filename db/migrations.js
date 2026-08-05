@@ -271,6 +271,10 @@ SELECT
   i.invoice_date,
   p.paid_at as paid_date,
   s.duration_seconds,
+  s.audit_description,
+  s.start_time,
+  s.end_time,
+  s.hourly_rate,
   p.amount,
   p.payment_method,
   p.status,
@@ -278,6 +282,16 @@ SELECT
 FROM ca_payments p
 LEFT JOIN ca_professional_invoices i ON p.invoice_id = i.id
 LEFT JOIN ca_audit_sessions s ON i.audit_session_id = s.id;
+
+-- Direct Chat Messages Table
+CREATE TABLE IF NOT EXISTS ca_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sender_id INTEGER NOT NULL,
+  receiver_id INTEGER NOT NULL,
+  message TEXT NOT NULL,
+  is_read INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
 
 -- Phase 3: Vendors Table
 CREATE TABLE IF NOT EXISTS vendors (
@@ -2240,7 +2254,20 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE audit_logs ADD COLUMN old_value TEXT',
       'ALTER TABLE audit_logs ADD COLUMN new_value TEXT',
       'ALTER TABLE audit_logs ADD COLUMN ip_address TEXT',
-      'ALTER TABLE audit_logs ADD COLUMN browser TEXT'
+      'ALTER TABLE audit_logs ADD COLUMN browser TEXT',
+      'ALTER TABLE ca_audit_sessions ADD COLUMN audit_description TEXT',
+      'ALTER TABLE ca_audit_sessions ADD COLUMN end_time TEXT',
+      'ALTER TABLE ca_audit_sessions ADD COLUMN hourly_rate REAL DEFAULT 500',
+      'ALTER TABLE ca_audit_sessions ADD COLUMN professional_fee REAL DEFAULT 0',
+      'ALTER TABLE ca_audit_sessions ADD COLUMN gst_amount REAL DEFAULT 0',
+      'ALTER TABLE ca_audit_sessions ADD COLUMN grand_total REAL DEFAULT 0',
+      'ALTER TABLE ca_audit_sessions ADD COLUMN invoice_number TEXT',
+      'ALTER TABLE ca_audit_sessions ADD COLUMN payment_status TEXT DEFAULT \'Unpaid\'',
+      'ALTER TABLE ca_professional_invoices ADD COLUMN audit_description TEXT',
+      'ALTER TABLE ca_professional_invoices ADD COLUMN start_time TEXT',
+      'ALTER TABLE ca_professional_invoices ADD COLUMN end_time TEXT',
+      'ALTER TABLE ca_professional_invoices ADD COLUMN hourly_rate REAL DEFAULT 500',
+      'ALTER TABLE ca_professional_invoices ADD COLUMN duration_text TEXT'
     ];
 
     alterQueries.forEach(query => {

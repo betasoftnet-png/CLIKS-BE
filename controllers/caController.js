@@ -2147,48 +2147,106 @@ const caController = {
         }
     },
 
-    // --- Billing & Audit Session Methods (Phase 2 ERP System) ---
+    // --- Billing & Audit Session Methods (Phase 2 & Audit Description Workflow) ---
     addAuditSession: async (req, res) => {
-        const { clientId, startTime, stopTime, durationSeconds, auditDate, sessionName } = req.body;
+        const { clientId, startTime, stopTime, endTime, durationSeconds, auditDate, auditDescription, description, hourlyRate = 500 } = req.body;
         try {
             const now = new Date().toISOString();
             const client = await db.prepare("SELECT business_owner_id, name FROM ca_clients WHERE id = ?").get(clientId);
             const businessOwnerId = client?.business_owner_id || null;
 
             let durationSec = parseInt(durationSeconds) || 0;
-            if (!durationSec && startTime && stopTime) {
-                durationSec = Math.max(0, Math.floor((new Date(stopTime).getTime() - new Date(startTime).getTime()) / 1000));
+            const endTs = stopTime || endTime || now;
+            if (!durationSec && startTime && endTs) {
+                durationSec = Math.max(0, Math.floor((new Date(endTs).getTime() - new Date(startTime).getTime()) / 1000));
             }
 
             const sessionId = `AUD-SESS-${Date.now()}`;
+            const invoiceNumber = `INV-PRO-${Date.now().toString().slice(-6)}`;
             const dateStr = auditDate || new Date().toISOString().split('T')[0];
+            const descText = auditDescription || description || 'Professional CA Audit & Compliance Review';
 
+            const startObj = startTime ? new Date(startTime) : new Date();
+            const endObj = endTs ? new Date(endTs) : new Date();
+            const startTimeStr = !isNaN(startObj.getTime()) ? startObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '10:00 AM';
+            const endTimeStr = !isNaN(endObj.getTime()) ? endObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '11:45 AM';
+
+            const hrs = durationSec / 3600;
+            const hRate = parseFloat(hourlyRate) || 500;
+            const proFee = Math.round(hrs * hRate);
+            const gst = Math.round(proFee * 0.18);
+            const total = proFee + gst;
+
+            const durationMinsTotal = Math.ceil(durationSec / 60);
+            const durationHrsComponent = Math.floor(durationMinsTotal / 60);
+            const durationMinsComponent = durationMinsTotal % 60;
+            const durationText = durationHrsComponent > 0 
+                ? `${durationHrsComponent}h ${durationMinsComponent}m` 
+                : `${durationMinsComponent}m`;
+
+            // Insert into ca_audit_sessions
             const result = await db.prepare(`
                 INSERT INTO ca_audit_sessions (
-                    session_id, ca_user_id, client_id, business_owner_id, start_time, stop_time, duration_seconds, audit_date, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Completed', ?)
-            `).run(sessionId, req.user.id, clientId, businessOwnerId, startTime || now, stopTime || now, durationSec, dateStr, now);
+                    session_id, ca_user_id, client_id, business_owner_id, start_time, stop_time, end_time,
+                    duration_seconds, audit_date, audit_description, hourly_rate, professional_fee,
+                    gst_amount, grand_total, invoice_number, payment_status, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Unpaid', 'Completed', ?)
+            `).run(
+                sessionId, req.user.id, clientId, businessOwnerId, startTimeStr, endTs, endTimeStr,
+                durationSec, dateStr, descText, hRate, proFee, gst, total, invoiceNumber, now
+            );
 
-            // Notify Business Owner if connected
+            const sessionDbId = result.lastInsertRowid;
+
+            // Automatically Generate Invoice if connected to Business Owner
+            let invoiceDbId = null;
             if (businessOwnerId) {
-                const caUser = await db.prepare("SELECT username FROM users WHERE id = ?").get(req.user.id);
-                const caName = caUser?.username || 'Your CA Advisor';
-                const durationMin = Math.ceil(durationSec / 60);
-                const notifMsg = `${caName} completed an audit session for ${client?.name || 'your business'}. Duration: ${durationMin} mins. Date: ${dateStr}.`;
+                const invRes = await db.prepare(`
+                    INSERT INTO ca_professional_invoices (
+                        invoice_number, ca_user_id, business_owner_id, client_id, audit_session_id,
+                        audit_description, start_time, end_time, hourly_rate, duration_text,
+                        amount, gst_amount, total_amount, status, invoice_date, pdf_path, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Unpaid', ?, ?, ?)
+                `).run(
+                    invoiceNumber, req.user.id, businessOwnerId, clientId || null, sessionDbId,
+                    descText, startTimeStr, endTimeStr, hRate, durationText,
+                    proFee, gst, total, dateStr, `/invoices/${invoiceNumber}.pdf`, now
+                );
+
+                invoiceDbId = invRes.lastInsertRowid;
+
+                await db.prepare(`
+                    INSERT INTO invoice_items (invoice_id, description, quantity, rate, amount)
+                    VALUES (?, ?, 1, ?, ?)
+                `).run(invoiceDbId, descText, proFee, proFee);
+
+                // Notify Business Owner
+                const caUser = await db.prepare("SELECT username, email FROM users WHERE id = ?").get(req.user.id);
+                const caName = caUser?.username || caUser?.email || 'Your CA Advisor';
+                const notifMsg = `New professional audit invoice "${invoiceNumber}" generated by ${caName} for ₹${total} (${descText}).`;
                 await db.prepare(`
                     INSERT INTO notifications (sender_id, receiver_id, user_id, type, title, message, is_read, created_at)
-                    VALUES (?, ?, ?, 'Timer Stopped', 'Audit Session Completed', ?, 0, ?)
+                    VALUES (?, ?, ?, 'Professional Invoice Generated', 'New Audit Invoice Received', ?, 0, ?)
                 `).run(req.user.id, businessOwnerId, businessOwnerId, notifMsg, now);
             }
 
             return sendSuccess(res, {
-                id: result.lastInsertRowid,
+                id: sessionDbId,
                 sessionId,
                 clientId,
                 businessOwnerId,
+                invoiceNumber,
+                auditDescription: descText,
+                startTime: startTimeStr,
+                endTime: endTimeStr,
                 durationSeconds: durationSec,
+                durationText,
+                hourlyRate: hRate,
+                professionalFee: proFee,
+                gstAmount: gst,
+                grandTotal: total,
                 auditDate: dateStr
-            }, 'Audit session saved successfully');
+            }, 'Audit session saved & professional bill generated successfully');
         } catch (error) {
             console.error('[CA addAuditSession Error]', error);
             return sendError(res, 'Failed to save audit session', 500);
@@ -2212,7 +2270,7 @@ const caController = {
     },
 
     generateProfessionalInvoice: async (req, res) => {
-        const { sessionId, clientId, amount, gstAmount, totalAmount, invoiceDate } = req.body;
+        const { sessionId, clientId, amount, gstAmount, totalAmount, invoiceDate, auditDescription, hourlyRate = 500 } = req.body;
         try {
             const now = new Date().toISOString();
             const invoiceNumber = `INV-PRO-${Date.now().toString().slice(-6)}`;
@@ -2223,7 +2281,6 @@ const caController = {
                 return sendError(res, 'Client is not connected to a business owner account', 400);
             }
 
-            // Calculate billing based on 10 min rate (₹100 per 10 mins) if amount is not explicitly provided
             let baseAmount = parseFloat(amount);
             let session = null;
             if (sessionId) {
@@ -2231,35 +2288,34 @@ const caController = {
             }
 
             if ((isNaN(baseAmount) || baseAmount <= 0) && session) {
-                const durationMins = Math.max(1, Math.ceil((session.duration_seconds || 0) / 60));
-                const tenMinUnits = Math.ceil(durationMins / 10);
-                baseAmount = tenMinUnits * 100;
+                baseAmount = session.professional_fee || Math.round(((session.duration_seconds || 0) / 3600) * (session.hourly_rate || 500));
             } else if (isNaN(baseAmount) || baseAmount <= 0) {
-                baseAmount = 100;
+                baseAmount = 500;
             }
 
             const calculatedGst = parseFloat(gstAmount) || Math.round(baseAmount * 0.18);
             const calculatedTotal = parseFloat(totalAmount) || (baseAmount + calculatedGst);
+            const descText = auditDescription || session?.audit_description || 'Professional CA Audit & Compliance Review';
 
             const result = await db.prepare(`
                 INSERT INTO ca_professional_invoices (
                     invoice_number, ca_user_id, business_owner_id, client_id, audit_session_id,
+                    audit_description, start_time, end_time, hourly_rate,
                     amount, gst_amount, total_amount, status, invoice_date, pdf_path, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Unpaid', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Unpaid', ?, ?, ?)
             `).run(
                 invoiceNumber, req.user.id, businessOwnerId, clientId || null, session?.id || null,
+                descText, session?.start_time || '10:00 AM', session?.end_time || '11:45 AM', hourlyRate,
                 baseAmount, calculatedGst, calculatedTotal, invoiceDate || now.split('T')[0], `/invoices/${invoiceNumber}.pdf`, now
             );
 
             const invoiceId = result.lastInsertRowid;
 
-            // Insert invoice item
             await db.prepare(`
                 INSERT INTO invoice_items (invoice_id, description, quantity, rate, amount)
                 VALUES (?, ?, 1, ?, ?)
-            `).run(invoiceId, `Professional CA Audit Service Fee (${session ? `${Math.ceil((session.duration_seconds || 0) / 60)} Mins` : 'Standard Audit'})`, baseAmount, baseAmount);
+            `).run(invoiceId, descText, baseAmount, baseAmount);
 
-            // Notify Business Owner
             const caUser = await db.prepare("SELECT username, email FROM users WHERE id = ?").get(req.user.id);
             const caName = caUser?.username || caUser?.email || 'Your CA Advisor';
             const message = `New professional service invoice "${invoiceNumber}" generated by ${caName} for ₹${calculatedTotal}.`;
@@ -2287,7 +2343,7 @@ const caController = {
             let list;
             if (req.user.role === 'business') {
                 list = await db.prepare(`
-                    SELECT i.*, u.username as ca_name, s.duration_seconds, s.start_time, s.stop_time, s.audit_date
+                    SELECT i.*, u.username as ca_name, s.duration_seconds, s.start_time, s.end_time, s.stop_time, s.audit_date, s.audit_description
                     FROM ca_professional_invoices i
                     LEFT JOIN users u ON i.ca_user_id = u.id
                     LEFT JOIN ca_audit_sessions s ON i.audit_session_id = s.id
@@ -2296,7 +2352,7 @@ const caController = {
                 `).all(req.user.id);
             } else {
                 list = await db.prepare(`
-                    SELECT i.*, c.name as client_name, s.duration_seconds, s.start_time, s.stop_time, s.audit_date
+                    SELECT i.*, c.name as client_name, s.duration_seconds, s.start_time, s.end_time, s.stop_time, s.audit_date, s.audit_description
                     FROM ca_professional_invoices i
                     LEFT JOIN ca_clients c ON i.client_id = c.id
                     LEFT JOIN ca_audit_sessions s ON i.audit_session_id = s.id
@@ -2315,7 +2371,8 @@ const caController = {
         const { id } = req.params;
         try {
             const invoice = await db.prepare(`
-                SELECT i.*, u.username as ca_name, u.email as ca_email, o.username as owner_name, o.email as owner_email, s.duration_seconds, s.start_time, s.stop_time, s.audit_date
+                SELECT i.*, u.username as ca_name, u.email as ca_email, o.username as owner_name, o.email as owner_email,
+                       s.duration_seconds, s.start_time, s.end_time, s.stop_time, s.audit_date, s.audit_description, s.hourly_rate
                 FROM ca_professional_invoices i
                 LEFT JOIN users u ON i.ca_user_id = u.id
                 LEFT JOIN users o ON i.business_owner_id = o.id
@@ -2325,7 +2382,6 @@ const caController = {
 
             if (!invoice) return sendError(res, 'Invoice not found', 404);
 
-            // Log access & notify CA if downloaded by client
             if (req.user.id === invoice.business_owner_id) {
                 const now = new Date().toISOString();
                 const notifMsg = `Invoice ${invoice.invoice_number} was viewed/downloaded by client ${invoice.owner_name || 'Business Owner'}.`;
@@ -2335,6 +2391,19 @@ const caController = {
                 `).run(req.user.id, invoice.ca_user_id, invoice.ca_user_id, notifMsg, now);
             }
 
+            const durationSec = invoice.duration_seconds || 0;
+            const durationMinsTotal = Math.ceil(durationSec / 60);
+            const durationHrsComponent = Math.floor(durationMinsTotal / 60);
+            const durationMinsComponent = durationMinsTotal % 60;
+            const durationFormatted = durationHrsComponent > 0 
+                ? `${durationHrsComponent}h ${durationMinsComponent}m` 
+                : `${durationMinsComponent}m`;
+
+            const descText = invoice.audit_description || invoice.auditDescription || 'GST Return Filing & Tax Compliance Review';
+            const startTimeDisplay = invoice.start_time || '10:00 AM';
+            const endTimeDisplay = invoice.end_time || '11:45 AM';
+            const rateDisplay = invoice.hourly_rate || invoice.hourlyRate || 500;
+
             const htmlContent = `
             <!DOCTYPE html>
             <html>
@@ -2343,16 +2412,16 @@ const caController = {
                 <title>Invoice ${invoice.invoice_number}</title>
                 <style>
                     body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 40px; color: #1E293B; background: #FFF; }
-                    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1B6B3A; padding-bottom: 20px; }
-                    .title { font-size: 24px; font-weight: 800; color: #1B6B3A; }
-                    .badge { background: ${invoice.status === 'Paid' ? '#DCF2E4' : '#FEF3C7'}; color: ${invoice.status === 'Paid' ? '#1B6B3A' : '#D97706'}; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 700; }
+                    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #15803d; padding-bottom: 20px; }
+                    .title { font-size: 24px; font-weight: 800; color: #15803d; }
+                    .badge { background: ${invoice.status === 'Paid' ? '#DCFCE7' : '#FEF3C7'}; color: ${invoice.status === 'Paid' ? '#15803d' : '#D97706'}; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 700; }
                     .details { margin-top: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
                     .table { width: 100%; border-collapse: collapse; margin-top: 30px; }
                     .table th, .table td { border: 1px solid #E2E8F0; padding: 12px; text-align: left; }
                     .table th { background: #F8FAFC; font-weight: 700; color: #475569; }
                     .totals { margin-top: 20px; text-align: right; }
                     .totals div { font-size: 14px; margin-bottom: 6px; }
-                    .grand { font-size: 18px; font-weight: 800; color: #1B6B3A; }
+                    .grand { font-size: 18px; font-weight: 800; color: #15803d; }
                 </style>
             </head>
             <body>
@@ -2378,17 +2447,21 @@ const caController = {
                 <table class="table">
                     <thead>
                         <tr>
-                            <th>Description</th>
-                            <th>Audit Duration</th>
+                            <th>Audit Description</th>
+                            <th>Start</th>
+                            <th>End</th>
+                            <th>Duration</th>
                             <th>Rate</th>
-                            <th>Amount</th>
+                            <th>Professional Fee</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr>
-                            <td>Professional Audit & Compliance Verification</td>
-                            <td>${Math.ceil((invoice.duration_seconds || 0) / 60)} Mins (${invoice.audit_date || invoice.invoice_date})</td>
-                            <td>₹100 / 10 mins</td>
+                            <td><strong>${descText}</strong></td>
+                            <td>${startTimeDisplay}</td>
+                            <td>${endTimeDisplay}</td>
+                            <td>${durationFormatted}</td>
+                            <td>₹${rateDisplay} / Hour</td>
                             <td>₹${invoice.amount}</td>
                         </tr>
                     </tbody>
@@ -3082,6 +3155,72 @@ const caController = {
         } catch (error) {
             console.error('[CA revokeGstCredentials Error]', error);
             return sendError(res, 'Failed to revoke GST credentials', 500);
+        }
+    },
+
+    // --- Direct Messenger Chat Endpoints ---
+    getChatMessages: async (req, res) => {
+        try {
+            const { partnerId } = req.params;
+            const currentUserId = req.user.id;
+
+            // Mark unread messages as read
+            await db.prepare(`
+                UPDATE ca_messages 
+                SET is_read = 1 
+                WHERE receiver_id = ? AND sender_id = ?
+            `).run(currentUserId, partnerId);
+
+            const messages = await db.prepare(`
+                SELECT m.*, u.username as sender_name 
+                FROM ca_messages m 
+                LEFT JOIN users u ON m.sender_id = u.id 
+                WHERE (m.sender_id = ? AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = ?) 
+                ORDER BY m.id ASC
+            `).all(currentUserId, partnerId, partnerId, currentUserId);
+
+            return sendSuccess(res, messages, 'Chat messages retrieved successfully');
+        } catch (error) {
+            console.error('[CA getChatMessages Error]', error);
+            return sendError(res, 'Failed to fetch chat messages', 500);
+        }
+    },
+
+    sendChatMessage: async (req, res) => {
+        try {
+            const { receiverId, message } = req.body;
+            const senderId = req.user.id;
+
+            if (!receiverId || !message || !message.trim()) {
+                return sendError(res, 'Receiver ID and non-empty message are required', 400);
+            }
+
+            const now = new Date().toISOString();
+            const result = await db.prepare(`
+                INSERT INTO ca_messages (sender_id, receiver_id, message, is_read, created_at)
+                VALUES (?, ?, ?, 0, ?)
+            `).run(senderId, receiverId, message.trim(), now);
+
+            const newMsg = await db.prepare('SELECT * FROM ca_messages WHERE id = ?').get(result.lastInsertRowid);
+
+            return sendSuccess(res, newMsg, 'Message sent successfully');
+        } catch (error) {
+            console.error('[CA sendChatMessage Error]', error);
+            return sendError(res, 'Failed to send chat message', 500);
+        }
+    },
+
+    getUnreadChatCount: async (req, res) => {
+        try {
+            const currentUserId = req.user.id;
+            const row = await db.prepare(`
+                SELECT count(*) as count FROM ca_messages WHERE receiver_id = ? AND is_read = 0
+            `).get(currentUserId);
+
+            return sendSuccess(res, { unreadCount: row?.count || 0 }, 'Unread count fetched');
+        } catch (error) {
+            console.error('[CA getUnreadChatCount Error]', error);
+            return sendError(res, 'Failed to fetch unread message count', 500);
         }
     }
 };

@@ -50,6 +50,11 @@ router.post('/presence/login', caController.setUserOnline);
 router.post('/presence/logout', caController.setUserOffline);
 router.post('/presence/heartbeat', caController.updatePresenceHeartbeat);
 
+// Direct Chat Endpoints
+router.get('/messages/unread-count', caController.getUnreadChatCount);
+router.get('/messages/:partnerId', caController.getChatMessages);
+router.post('/messages', caController.sendChatMessage);
+
 // GST Credentials Endpoints
 router.get('/gst-credentials', caController.getGstCredentials);
 router.post('/gst-credentials', caController.saveGstCredentials);
