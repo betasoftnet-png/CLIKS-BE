@@ -71,6 +71,9 @@ router.use('/people',                       auth, require('../people'));
 router.use('/contacts',       auth, require('../contacts'));
 router.use('/segregation',    auth, require('../segregation'));
 router.use('/split-expenses', auth, require('../splitExpense'));
-
+router.use('/tasks',          auth, require('../tasks'));
+router.use('/notifications',   auth, require('../notifications'));
+router.use('/presence',        auth, require('../presence'));
+router.use('/gst-credentials', auth, require('../gstCredentials'));
 
 module.exports = router;

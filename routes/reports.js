@@ -35,8 +35,13 @@ router.get('/profit-loss', reportsController.getProfitLoss);
 router.get('/balance-sheet', reportsController.getBalanceSheet);
 router.get('/cash-flow', reportsController.getCashFlow);
 router.get('/trial-balance', reportsController.getTrialBalance);
-router.get('/general-ledger', reportsController.getGeneralLedger);
-router.get('/day-book', reportsController.getDayBook);
+// Tax & Billing Reports
+router.get('/gst', reportsController.getGstReport);
+router.get('/tds', reportsController.getTdsReport);
+router.get('/professional-invoices', reportsController.getProfessionalInvoiceReport);
+router.get('/payment-report', reportsController.getPaymentReport);
+router.get('/customer-ledger', reportsController.getCustomerLedger);
+router.get('/vendor-ledger', reportsController.getVendorLedger);
 
 
 

@@ -133,15 +133,209 @@ CREATE TABLE IF NOT EXISTS tax_records (
 -- Notifications
 CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sender_id INTEGER,
+  receiver_id INTEGER,
   user_id INTEGER NOT NULL,
   title TEXT,
   message TEXT,
-  type TEXT, -- Alert | Info | Success
+  type TEXT, -- Alert | Info | Success | New Task Assigned | Document Uploaded | GST Credential Request | GST Credential Shared
+  related_task_id INTEGER,
   is_read INTEGER DEFAULT 0,
   link TEXT,
   created_at TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
+
+-- User Presence
+CREATE TABLE IF NOT EXISTS user_presence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER UNIQUE NOT NULL,
+  user_type TEXT,
+  login_time TEXT,
+  last_activity TEXT,
+  logout_time TEXT,
+  status TEXT DEFAULT 'Offline',
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- GST Credentials
+CREATE TABLE IF NOT EXISTS gst_credentials (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  business_owner_id INTEGER NOT NULL,
+  connected_ca_id INTEGER,
+  gst_username TEXT,
+  encrypted_password TEXT,
+  shared_status TEXT DEFAULT 'Not Shared',
+  shared_date TEXT,
+  revoked_date TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(business_owner_id) REFERENCES users(id)
+);
+
+-- CA Tasks (Single Source of Truth for Compliance Tasks)
+CREATE TABLE IF NOT EXISTS ca_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ca_user_id INTEGER,
+  business_owner_id INTEGER,
+  advisor_id INTEGER,
+  client_id INTEGER,
+  client_name TEXT,
+  client_email TEXT,
+  advisor_email TEXT,
+  title TEXT NOT NULL,
+  description TEXT,
+  task_description TEXT,
+  due_date TEXT,
+  priority TEXT DEFAULT 'Medium',
+  status TEXT DEFAULT 'Pending',
+  ask_for_document INTEGER DEFAULT 0,
+  attached_file TEXT,
+  phase TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
+
+DROP VIEW IF EXISTS compliance_tasks;
+DROP TABLE IF EXISTS compliance_tasks;
+CREATE VIEW IF NOT EXISTS compliance_tasks AS SELECT * FROM ca_tasks;
+
+-- CA Audit Sessions
+CREATE TABLE IF NOT EXISTS ca_audit_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT UNIQUE,
+  ca_user_id INTEGER NOT NULL,
+  client_id INTEGER,
+  business_owner_id INTEGER,
+  start_time TEXT,
+  stop_time TEXT,
+  duration_seconds INTEGER,
+  audit_date TEXT,
+  status TEXT DEFAULT 'Completed',
+  created_at TEXT
+);
+DROP VIEW IF EXISTS audit_sessions;
+DROP TABLE IF EXISTS audit_sessions;
+CREATE VIEW IF NOT EXISTS audit_sessions AS SELECT * FROM ca_audit_sessions;
+
+-- Professional Invoices
+CREATE TABLE IF NOT EXISTS ca_professional_invoices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_number TEXT UNIQUE NOT NULL,
+  ca_user_id INTEGER NOT NULL,
+  business_owner_id INTEGER NOT NULL,
+  client_id INTEGER,
+  audit_session_id INTEGER,
+  amount REAL DEFAULT 0,
+  gst_amount REAL DEFAULT 0,
+  total_amount REAL DEFAULT 0,
+  status TEXT DEFAULT 'Unpaid',
+  invoice_date TEXT,
+  pdf_path TEXT,
+  created_at TEXT
+);
+
+-- Invoice Items
+CREATE TABLE IF NOT EXISTS invoice_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL,
+  description TEXT,
+  quantity INTEGER DEFAULT 1,
+  rate REAL DEFAULT 0,
+  amount REAL DEFAULT 0
+);
+
+-- CA Payments
+CREATE TABLE IF NOT EXISTS ca_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  payment_id TEXT UNIQUE,
+  invoice_id INTEGER NOT NULL,
+  ca_user_id INTEGER,
+  user_id INTEGER NOT NULL,
+  amount REAL DEFAULT 0,
+  payment_method TEXT,
+  transaction_id TEXT UNIQUE,
+  status TEXT DEFAULT 'Success',
+  paid_at TEXT,
+  created_at TEXT
+);
+
+-- Payment History View
+DROP VIEW IF EXISTS payment_history;
+CREATE VIEW IF NOT EXISTS payment_history AS 
+SELECT 
+  p.id,
+  p.payment_id,
+  p.invoice_id,
+  i.invoice_number,
+  i.invoice_date,
+  p.paid_at as paid_date,
+  s.duration_seconds,
+  p.amount,
+  p.payment_method,
+  p.status,
+  p.created_at
+FROM ca_payments p
+LEFT JOIN ca_professional_invoices i ON p.invoice_id = i.id
+LEFT JOIN ca_audit_sessions s ON i.audit_session_id = s.id;
+
+-- Phase 3: Vendors Table
+CREATE TABLE IF NOT EXISTS vendors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  gstin TEXT,
+  pan TEXT,
+  email TEXT,
+  phone TEXT,
+  address TEXT,
+  bank_details TEXT,
+  opening_balance REAL DEFAULT 0,
+  status TEXT DEFAULT 'Active',
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Phase 3: Bank Accounts Table
+CREATE TABLE IF NOT EXISTS bank_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  bank_name TEXT NOT NULL,
+  account_holder TEXT NOT NULL,
+  account_number TEXT NOT NULL,
+  ifsc TEXT,
+  branch TEXT,
+  upi_id TEXT,
+  opening_balance REAL DEFAULT 0,
+  current_balance REAL DEFAULT 0,
+  status TEXT DEFAULT 'Active',
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Phase 3: Documents Management Table
+CREATE TABLE IF NOT EXISTS documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  business_owner_id INTEGER NOT NULL,
+  ca_id INTEGER,
+  task_id INTEGER,
+  name TEXT NOT NULL,
+  category TEXT DEFAULT 'General',
+  version INTEGER DEFAULT 1,
+  file_path TEXT NOT NULL,
+  uploaded_by INTEGER NOT NULL,
+  uploaded_date TEXT,
+  status TEXT DEFAULT 'Uploaded',
+  remarks TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
+
+-- Customers View over business_customers
+DROP VIEW IF EXISTS customers;
+CREATE VIEW IF NOT EXISTS customers AS SELECT * FROM business_customers;
 
 -- Finance Reports
 CREATE TABLE IF NOT EXISTS finance_reports (
@@ -2022,11 +2216,31 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE gst_invoices ADD COLUMN receiver_product_name TEXT',
       'ALTER TABLE expenses ADD COLUMN team_members TEXT',
       'ALTER TABLE expenses ADD COLUMN employee_code TEXT',
+      'ALTER TABLE ca_payments ADD COLUMN payment_id TEXT',
+      'ALTER TABLE ca_payments ADD COLUMN ca_user_id INTEGER',
+      'ALTER TABLE ca_payments ADD COLUMN created_at TEXT',
+      'ALTER TABLE ca_audit_sessions ADD COLUMN session_id TEXT',
       'ALTER TABLE expenses ADD COLUMN department TEXT',
       'ALTER TABLE expenses ADD COLUMN proof_files TEXT',
       'ALTER TABLE users ADD COLUMN gst_share_status TEXT DEFAULT \'Not Shared\'',
       'ALTER TABLE ca_clients ADD COLUMN gst_share_status TEXT DEFAULT \'Not Shared\'',
-      'ALTER TABLE ca_gst_access_logs ADD COLUMN action TEXT DEFAULT \'view\''
+      'ALTER TABLE ca_gst_access_logs ADD COLUMN action TEXT DEFAULT \'view\'',
+      'ALTER TABLE business_customers ADD COLUMN gstin TEXT',
+      'ALTER TABLE business_customers ADD COLUMN pan TEXT',
+      'ALTER TABLE business_customers ADD COLUMN address TEXT',
+      'ALTER TABLE business_customers ADD COLUMN state TEXT',
+      'ALTER TABLE business_customers ADD COLUMN country TEXT',
+      'ALTER TABLE business_customers ADD COLUMN opening_balance REAL DEFAULT 0',
+      'ALTER TABLE business_customers ADD COLUMN credit_limit REAL DEFAULT 0',
+      'ALTER TABLE audit_logs ADD COLUMN user_id INTEGER',
+      'ALTER TABLE audit_logs ADD COLUMN role TEXT',
+      'ALTER TABLE audit_logs ADD COLUMN action TEXT',
+      'ALTER TABLE audit_logs ADD COLUMN module TEXT',
+      'ALTER TABLE audit_logs ADD COLUMN record_id TEXT',
+      'ALTER TABLE audit_logs ADD COLUMN old_value TEXT',
+      'ALTER TABLE audit_logs ADD COLUMN new_value TEXT',
+      'ALTER TABLE audit_logs ADD COLUMN ip_address TEXT',
+      'ALTER TABLE audit_logs ADD COLUMN browser TEXT'
     ];
 
     alterQueries.forEach(query => {

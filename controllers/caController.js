@@ -234,6 +234,119 @@ const initTableAndColumns = async () => {
                 created_at TEXT
             )
         `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS user_presence (
+                id ${idType},
+                user_id INTEGER UNIQUE NOT NULL,
+                user_type TEXT,
+                login_time TEXT,
+                last_activity TEXT,
+                logout_time TEXT,
+                status TEXT DEFAULT 'Offline'
+            )
+        `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS gst_credentials (
+                id ${idType},
+                business_owner_id INTEGER NOT NULL,
+                connected_ca_id INTEGER,
+                gst_username TEXT,
+                encrypted_password TEXT,
+                shared_status TEXT DEFAULT 'Not Shared',
+                shared_date TEXT,
+                revoked_date TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS notifications (
+                id ${idType},
+                sender_id INTEGER,
+                receiver_id INTEGER,
+                user_id INTEGER,
+                type TEXT DEFAULT 'Info',
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                related_task_id INTEGER,
+                is_read INTEGER DEFAULT 0,
+                link TEXT,
+                created_at TEXT
+            )
+        `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS ca_audit_sessions (
+                id ${idType},
+                session_id TEXT UNIQUE,
+                ca_user_id INTEGER NOT NULL,
+                client_id INTEGER,
+                business_owner_id INTEGER,
+                start_time TEXT,
+                stop_time TEXT,
+                duration_seconds INTEGER,
+                audit_date TEXT,
+                status TEXT DEFAULT 'Completed',
+                created_at TEXT
+            )
+        `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS ca_professional_invoices (
+                id ${idType},
+                invoice_number TEXT UNIQUE NOT NULL,
+                ca_user_id INTEGER NOT NULL,
+                business_owner_id INTEGER NOT NULL,
+                client_id INTEGER,
+                audit_session_id INTEGER,
+                amount REAL DEFAULT 0,
+                gst_amount REAL DEFAULT 0,
+                total_amount REAL DEFAULT 0,
+                status TEXT DEFAULT 'Unpaid',
+                invoice_date TEXT,
+                pdf_path TEXT,
+                created_at TEXT
+            )
+        `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS invoice_items (
+                id ${idType},
+                invoice_id INTEGER NOT NULL,
+                description TEXT,
+                quantity INTEGER DEFAULT 1,
+                rate REAL DEFAULT 0,
+                amount REAL DEFAULT 0
+            )
+        `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS ca_payments (
+                id ${idType},
+                payment_id TEXT UNIQUE,
+                invoice_id INTEGER NOT NULL,
+                ca_user_id INTEGER,
+                user_id INTEGER NOT NULL,
+                amount REAL DEFAULT 0,
+                payment_method TEXT,
+                transaction_id TEXT UNIQUE,
+                status TEXT DEFAULT 'Success',
+                paid_at TEXT,
+                created_at TEXT
+            )
+        `).run();
+
+        try { await db.prepare("ALTER TABLE notifications ADD COLUMN sender_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE notifications ADD COLUMN receiver_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE notifications ADD COLUMN related_task_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_tasks ADD COLUMN updated_at TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_payments ADD COLUMN payment_id TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_payments ADD COLUMN ca_user_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_payments ADD COLUMN created_at TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN session_id TEXT").run(); } catch(e) {}
     } catch (e) {
         console.error('[CA Dynamic Init Error]', e.message);
     }
@@ -998,9 +1111,9 @@ const caController = {
             if (businessOwnerId) {
                 const messageText = `Your FIN-PRO Advisor has assigned a new compliance task: "${title}". Deadline: ${defaultDate}. Priority: ${priority || 'Medium'}.`;
                 await db.prepare(`
-                    INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
-                    VALUES (?, ?, ?, 'Info', 0, ?)
-                `).run(businessOwnerId, 'New Task Assigned', messageText, now);
+                    INSERT INTO notifications (sender_id, receiver_id, user_id, title, message, type, related_task_id, is_read, created_at)
+                    VALUES (?, ?, ?, 'New Task Assigned', ?, 'New Task Assigned', ?, 0, ?)
+                `).run(req.user.id, businessOwnerId, businessOwnerId, messageText, taskId, now);
             }
 
             const newTask = {
@@ -1097,13 +1210,16 @@ const caController = {
             // Reset review status if it was previously corrected
             await db.prepare("DELETE FROM ca_document_reviews WHERE document_id = ?").run(docId);
 
-            if (task && task.ca_user_id) {
-                const senderName = task.client_name || 'Client';
-                const messageText = `Client ${senderName} has uploaded ${nextVersion > 1 ? 'a revised' : 'a'} document for compliance task: "${task.title}".`;
-                await db.prepare(`
-                    INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
-                    VALUES (?, ?, ?, 'Info', 0, ?)
-                `).run(task.ca_user_id, 'Document Uploaded', messageText, now);
+            if (task) {
+                const targetUserId = task.ca_user_id === req.user.id ? task.business_owner_id : task.ca_user_id;
+                if (targetUserId) {
+                    const senderName = req.user.username || task.client_name || 'User';
+                    const messageText = `${senderName} has uploaded ${nextVersion > 1 ? 'a revised' : 'a'} document for compliance task: "${task.title}".`;
+                    await db.prepare(`
+                        INSERT INTO notifications (sender_id, receiver_id, user_id, title, message, type, related_task_id, is_read, created_at)
+                        VALUES (?, ?, ?, 'Document Uploaded', ?, 'Document Uploaded', ?, 0, ?)
+                    `).run(req.user.id, targetUserId, targetUserId, messageText, id, now);
+                }
             }
 
             return sendSuccess(res, { id: parseInt(id), status: 'Uploaded', attachedFile, version: nextVersion, phase: phase || null }, 'Task document uploaded successfully');
@@ -2031,21 +2147,48 @@ const caController = {
         }
     },
 
-    // --- Billing & Audit Session Methods ---
+    // --- Billing & Audit Session Methods (Phase 2 ERP System) ---
     addAuditSession: async (req, res) => {
-        const { clientId, startTime, stopTime, durationSeconds, auditDate } = req.body;
+        const { clientId, startTime, stopTime, durationSeconds, auditDate, sessionName } = req.body;
         try {
             const now = new Date().toISOString();
-            // Find business owner id from client
-            const client = await db.prepare("SELECT business_owner_id FROM ca_clients WHERE id = ?").get(clientId);
+            const client = await db.prepare("SELECT business_owner_id, name FROM ca_clients WHERE id = ?").get(clientId);
+            const businessOwnerId = client?.business_owner_id || null;
+
+            let durationSec = parseInt(durationSeconds) || 0;
+            if (!durationSec && startTime && stopTime) {
+                durationSec = Math.max(0, Math.floor((new Date(stopTime).getTime() - new Date(startTime).getTime()) / 1000));
+            }
+
+            const sessionId = `AUD-SESS-${Date.now()}`;
+            const dateStr = auditDate || new Date().toISOString().split('T')[0];
 
             const result = await db.prepare(`
                 INSERT INTO ca_audit_sessions (
-                    ca_user_id, client_id, business_owner_id, start_time, stop_time, duration_seconds, audit_date, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Completed', ?)
-            `).run(req.user.id, clientId, client?.business_owner_id || null, startTime, stopTime, durationSeconds, auditDate, now);
+                    session_id, ca_user_id, client_id, business_owner_id, start_time, stop_time, duration_seconds, audit_date, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Completed', ?)
+            `).run(sessionId, req.user.id, clientId, businessOwnerId, startTime || now, stopTime || now, durationSec, dateStr, now);
 
-            return sendSuccess(res, { id: result.lastInsertRowid }, 'Audit session saved successfully');
+            // Notify Business Owner if connected
+            if (businessOwnerId) {
+                const caUser = await db.prepare("SELECT username FROM users WHERE id = ?").get(req.user.id);
+                const caName = caUser?.username || 'Your CA Advisor';
+                const durationMin = Math.ceil(durationSec / 60);
+                const notifMsg = `${caName} completed an audit session for ${client?.name || 'your business'}. Duration: ${durationMin} mins. Date: ${dateStr}.`;
+                await db.prepare(`
+                    INSERT INTO notifications (sender_id, receiver_id, user_id, type, title, message, is_read, created_at)
+                    VALUES (?, ?, ?, 'Timer Stopped', 'Audit Session Completed', ?, 0, ?)
+                `).run(req.user.id, businessOwnerId, businessOwnerId, notifMsg, now);
+            }
+
+            return sendSuccess(res, {
+                id: result.lastInsertRowid,
+                sessionId,
+                clientId,
+                businessOwnerId,
+                durationSeconds: durationSec,
+                auditDate: dateStr
+            }, 'Audit session saved successfully');
         } catch (error) {
             console.error('[CA addAuditSession Error]', error);
             return sendError(res, 'Failed to save audit session', 500);
@@ -2058,9 +2201,9 @@ const caController = {
                 SELECT s.*, c.name as client_name
                 FROM ca_audit_sessions s
                 LEFT JOIN ca_clients c ON s.client_id = c.id
-                WHERE s.ca_user_id = ?
+                WHERE s.ca_user_id = ? OR s.business_owner_id = ?
                 ORDER BY s.id DESC
-            `).all(req.user.id);
+            `).all(req.user.id, req.user.id);
             return sendSuccess(res, list, 'Audit sessions retrieved');
         } catch (error) {
             console.error('[CA getAuditSessions Error]', error);
@@ -2074,11 +2217,29 @@ const caController = {
             const now = new Date().toISOString();
             const invoiceNumber = `INV-PRO-${Date.now().toString().slice(-6)}`;
 
-            // Find business owner id from client
-            const client = await db.prepare("SELECT business_owner_id FROM ca_clients WHERE id = ?").get(clientId);
-            if (!client?.business_owner_id) {
+            const client = await db.prepare("SELECT business_owner_id, name FROM ca_clients WHERE id = ?").get(clientId);
+            const businessOwnerId = client?.business_owner_id || req.body.businessOwnerId;
+            if (!businessOwnerId) {
                 return sendError(res, 'Client is not connected to a business owner account', 400);
             }
+
+            // Calculate billing based on 10 min rate (₹100 per 10 mins) if amount is not explicitly provided
+            let baseAmount = parseFloat(amount);
+            let session = null;
+            if (sessionId) {
+                session = await db.prepare("SELECT * FROM ca_audit_sessions WHERE id = ? OR session_id = ?").get(sessionId, sessionId);
+            }
+
+            if ((isNaN(baseAmount) || baseAmount <= 0) && session) {
+                const durationMins = Math.max(1, Math.ceil((session.duration_seconds || 0) / 60));
+                const tenMinUnits = Math.ceil(durationMins / 10);
+                baseAmount = tenMinUnits * 100;
+            } else if (isNaN(baseAmount) || baseAmount <= 0) {
+                baseAmount = 100;
+            }
+
+            const calculatedGst = parseFloat(gstAmount) || Math.round(baseAmount * 0.18);
+            const calculatedTotal = parseFloat(totalAmount) || (baseAmount + calculatedGst);
 
             const result = await db.prepare(`
                 INSERT INTO ca_professional_invoices (
@@ -2086,20 +2247,35 @@ const caController = {
                     amount, gst_amount, total_amount, status, invoice_date, pdf_path, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Unpaid', ?, ?, ?)
             `).run(
-                invoiceNumber, req.user.id, client.business_owner_id, clientId, sessionId,
-                amount, gstAmount, totalAmount, invoiceDate, `/invoices/${invoiceNumber}.pdf`, now
+                invoiceNumber, req.user.id, businessOwnerId, clientId || null, session?.id || null,
+                baseAmount, calculatedGst, calculatedTotal, invoiceDate || now.split('T')[0], `/invoices/${invoiceNumber}.pdf`, now
             );
+
+            const invoiceId = result.lastInsertRowid;
+
+            // Insert invoice item
+            await db.prepare(`
+                INSERT INTO invoice_items (invoice_id, description, quantity, rate, amount)
+                VALUES (?, ?, 1, ?, ?)
+            `).run(invoiceId, `Professional CA Audit Service Fee (${session ? `${Math.ceil((session.duration_seconds || 0) / 60)} Mins` : 'Standard Audit'})`, baseAmount, baseAmount);
 
             // Notify Business Owner
             const caUser = await db.prepare("SELECT username, email FROM users WHERE id = ?").get(req.user.id);
-            const caName = caUser?.username || caUser?.email || 'Your Accountant';
-            const message = `New professional service invoice "${invoiceNumber}" generated by ${caName} for ₹${totalAmount}.`;
+            const caName = caUser?.username || caUser?.email || 'Your CA Advisor';
+            const message = `New professional service invoice "${invoiceNumber}" generated by ${caName} for ₹${calculatedTotal}.`;
             await db.prepare(`
-                INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
-                VALUES (?, ?, ?, 'Info', 0, ?)
-            `).run(client.business_owner_id, 'New Invoice Received', message, now);
+                INSERT INTO notifications (sender_id, receiver_id, user_id, type, title, message, is_read, created_at)
+                VALUES (?, ?, ?, 'Professional Invoice Generated', 'New Invoice Received', ?, 0, ?)
+            `).run(req.user.id, businessOwnerId, businessOwnerId, message, now);
 
-            return sendSuccess(res, { id: result.lastInsertRowid, invoiceNumber }, 'Professional invoice generated successfully');
+            return sendSuccess(res, {
+                id: invoiceId,
+                invoiceNumber,
+                amount: baseAmount,
+                gstAmount: calculatedGst,
+                totalAmount: calculatedTotal,
+                status: 'Unpaid'
+            }, 'Professional invoice generated successfully');
         } catch (error) {
             console.error('[CA generateProfessionalInvoice Error]', error);
             return sendError(res, 'Failed to generate invoice', 500);
@@ -2108,8 +2284,6 @@ const caController = {
 
     getProfessionalInvoices: async (req, res) => {
         try {
-            // If user is business owner, show invoices sent to them
-            // If user is CA, show invoices they generated
             let list;
             if (req.user.role === 'business') {
                 list = await db.prepare(`
@@ -2137,6 +2311,201 @@ const caController = {
         }
     },
 
+    getProfessionalInvoicePdf: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const invoice = await db.prepare(`
+                SELECT i.*, u.username as ca_name, u.email as ca_email, o.username as owner_name, o.email as owner_email, s.duration_seconds, s.start_time, s.stop_time, s.audit_date
+                FROM ca_professional_invoices i
+                LEFT JOIN users u ON i.ca_user_id = u.id
+                LEFT JOIN users o ON i.business_owner_id = o.id
+                LEFT JOIN ca_audit_sessions s ON i.audit_session_id = s.id
+                WHERE i.id = ? OR i.invoice_number = ?
+            `).get(id, id);
+
+            if (!invoice) return sendError(res, 'Invoice not found', 404);
+
+            // Log access & notify CA if downloaded by client
+            if (req.user.id === invoice.business_owner_id) {
+                const now = new Date().toISOString();
+                const notifMsg = `Invoice ${invoice.invoice_number} was viewed/downloaded by client ${invoice.owner_name || 'Business Owner'}.`;
+                await db.prepare(`
+                    INSERT INTO notifications (sender_id, receiver_id, user_id, type, title, message, is_read, created_at)
+                    VALUES (?, ?, ?, 'Invoice Downloaded', 'Invoice Viewed / Downloaded', ?, 0, ?)
+                `).run(req.user.id, invoice.ca_user_id, invoice.ca_user_id, notifMsg, now);
+            }
+
+            const htmlContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <title>Invoice ${invoice.invoice_number}</title>
+                <style>
+                    body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 40px; color: #1E293B; background: #FFF; }
+                    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1B6B3A; padding-bottom: 20px; }
+                    .title { font-size: 24px; font-weight: 800; color: #1B6B3A; }
+                    .badge { background: ${invoice.status === 'Paid' ? '#DCF2E4' : '#FEF3C7'}; color: ${invoice.status === 'Paid' ? '#1B6B3A' : '#D97706'}; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 700; }
+                    .details { margin-top: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+                    .table { width: 100%; border-collapse: collapse; margin-top: 30px; }
+                    .table th, .table td { border: 1px solid #E2E8F0; padding: 12px; text-align: left; }
+                    .table th { background: #F8FAFC; font-weight: 700; color: #475569; }
+                    .totals { margin-top: 20px; text-align: right; }
+                    .totals div { font-size: 14px; margin-bottom: 6px; }
+                    .grand { font-size: 18px; font-weight: 800; color: #1B6B3A; }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <div>
+                        <div class="title">CLIKS FIN-PRO AUDIT INVOICE</div>
+                        <div style="color: #64748B; font-size: 13px; margin-top: 4px;">Invoice #${invoice.invoice_number}</div>
+                    </div>
+                    <div><span class="badge">${invoice.status}</span></div>
+                </div>
+                <div class="details">
+                    <div>
+                        <strong>CHARTERED ACCOUNTANT (ISSUER):</strong><br>
+                        ${invoice.ca_name || 'CA Practice Manager'}<br>
+                        ${invoice.ca_email || ''}
+                    </div>
+                    <div>
+                        <strong>BUSINESS CLIENT (BILLED TO):</strong><br>
+                        ${invoice.owner_name || 'Client'}<br>
+                        ${invoice.owner_email || ''}
+                    </div>
+                </div>
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Description</th>
+                            <th>Audit Duration</th>
+                            <th>Rate</th>
+                            <th>Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Professional Audit & Compliance Verification</td>
+                            <td>${Math.ceil((invoice.duration_seconds || 0) / 60)} Mins (${invoice.audit_date || invoice.invoice_date})</td>
+                            <td>₹100 / 10 mins</td>
+                            <td>₹${invoice.amount}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="totals">
+                    <div>Professional Fee: ₹${invoice.amount}</div>
+                    <div>GST (18%): ₹${invoice.gst_amount}</div>
+                    <div class="grand">Grand Total: ₹${invoice.total_amount}</div>
+                </div>
+            </body>
+            </html>`;
+
+            res.setHeader('Content-Type', 'text/html');
+            return res.send(htmlContent);
+        } catch (error) {
+            console.error('[CA getProfessionalInvoicePdf Error]', error);
+            return sendError(res, 'Failed to fetch PDF', 500);
+        }
+    },
+
+    payInvoice: async (req, res) => {
+        const { id: invoiceId } = req.params;
+        const { paymentMethod } = req.body;
+        try {
+            const now = new Date().toISOString();
+            const invoice = await db.prepare("SELECT * FROM ca_professional_invoices WHERE id = ? AND business_owner_id = ?").get(invoiceId, req.user.id);
+            if (!invoice) return sendError(res, 'Invoice not found', 404);
+
+            if (invoice.status === 'Paid') {
+                return sendSuccess(res, null, 'Invoice is already paid');
+            }
+
+            const paymentId = `PAY-${Date.now()}`;
+            const txnId = `TXN-${Date.now()}`;
+            const methodStr = paymentMethod || 'UPI';
+
+            await db.prepare("UPDATE ca_professional_invoices SET status = 'Paid' WHERE id = ?").run(invoiceId);
+
+            await db.prepare(`
+                INSERT INTO ca_payments (payment_id, invoice_id, ca_user_id, user_id, amount, payment_method, transaction_id, status, paid_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'Success', ?, ?)
+            `).run(paymentId, invoiceId, invoice.ca_user_id, req.user.id, invoice.total_amount, methodStr, txnId, now, now);
+
+            // Notify CA of payment
+            const ownerUser = await db.prepare("SELECT username, email FROM users WHERE id = ?").get(req.user.id);
+            const ownerName = ownerUser?.username || ownerUser?.email || 'Business Owner';
+            const payMessage = `Payment of ₹${invoice.total_amount} received via ${methodStr} from ${ownerName} for invoice ${invoice.invoice_number}. Reference: ${txnId}.`;
+            await db.prepare(`
+                INSERT INTO notifications (sender_id, receiver_id, user_id, type, title, message, is_read, created_at)
+                VALUES (?, ?, ?, 'Payment Received', 'Payment Received', ?, 0, ?)
+            `).run(req.user.id, invoice.ca_user_id, invoice.ca_user_id, payMessage, now);
+
+            return sendSuccess(res, {
+                paymentId,
+                transactionId: txnId,
+                amount: invoice.total_amount,
+                paymentMethod: methodStr,
+                status: 'Success',
+                paidAt: now
+            }, 'Payment processed successfully');
+        } catch (error) {
+            console.error('[CA payInvoice Error]', error);
+            return sendError(res, 'Failed to process payment', 500);
+        }
+    },
+
+    getPaymentHistory: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            let list;
+            if (req.user.role === 'business') {
+                list = await db.prepare(`
+                    SELECT p.*, i.invoice_number, i.invoice_date, s.duration_seconds, u.username as ca_name
+                    FROM ca_payments p
+                    LEFT JOIN ca_professional_invoices i ON p.invoice_id = i.id
+                    LEFT JOIN ca_audit_sessions s ON i.audit_session_id = s.id
+                    LEFT JOIN users u ON p.ca_user_id = u.id
+                    WHERE p.user_id = ?
+                    ORDER BY p.id DESC
+                `).all(userId);
+            } else {
+                list = await db.prepare(`
+                    SELECT p.*, i.invoice_number, i.invoice_date, s.duration_seconds, c.name as client_name, o.username as owner_name
+                    FROM ca_payments p
+                    LEFT JOIN ca_professional_invoices i ON p.invoice_id = i.id
+                    LEFT JOIN ca_audit_sessions s ON i.audit_session_id = s.id
+                    LEFT JOIN ca_clients c ON i.client_id = c.id
+                    LEFT JOIN users o ON p.user_id = o.id
+                    WHERE p.ca_user_id = ?
+                    ORDER BY p.id DESC
+                `).all(userId);
+            }
+
+            const mapped = list.map(item => ({
+                id: item.id,
+                paymentId: item.payment_id || `PAY-${item.id}`,
+                invoiceId: item.invoice_id,
+                invoiceNumber: item.invoice_number || `INV-${item.invoice_id}`,
+                invoiceDate: item.invoice_date,
+                paidDate: item.paid_at || item.created_at,
+                durationSeconds: item.duration_seconds || 0,
+                durationMins: Math.ceil((item.duration_seconds || 0) / 60),
+                amount: item.amount,
+                paymentMethod: item.payment_method || 'Online',
+                transactionId: item.transaction_id,
+                status: item.status || 'Success',
+                caName: item.ca_name,
+                clientName: item.client_name || item.owner_name
+            }));
+
+            return sendSuccess(res, mapped, 'Payment history retrieved');
+        } catch (error) {
+            console.error('[CA getPaymentHistory Error]', error);
+            return sendError(res, 'Failed to fetch payment history', 500);
+        }
+    },
+
     getEarningsDashboard: async (req, res) => {
         try {
             const userId = req.user.id;
@@ -2160,13 +2529,24 @@ const caController = {
             const weekEarnings = await db.prepare("SELECT SUM(total_amount) as total FROM ca_professional_invoices WHERE ca_user_id = ? AND invoice_date >= ?").get(userId, weekAgoStr);
             const monthEarnings = await db.prepare("SELECT SUM(total_amount) as total FROM ca_professional_invoices WHERE ca_user_id = ? AND invoice_date >= ?").get(userId, monthAgoStr);
 
+            // Audit hours
+            const auditHoursRes = await db.prepare("SELECT SUM(duration_seconds) as total_sec FROM ca_audit_sessions WHERE ca_user_id = ?").get(userId);
+            const totalAuditHours = ((auditHoursRes?.total_sec || 0) / 3600).toFixed(1);
+
+            // Client count for average calculation
+            const clientCountRes = await db.prepare("SELECT COUNT(DISTINCT client_id) as cnt FROM ca_professional_invoices WHERE ca_user_id = ?").get(userId);
+            const clientCnt = clientCountRes?.cnt || 1;
+            const averageBillingPerClient = Math.round((total?.total || 0) / clientCnt);
+
             return sendSuccess(res, {
                 today: todayEarnings?.total || 0,
                 thisWeek: weekEarnings?.total || 0,
                 thisMonth: monthEarnings?.total || 0,
                 pending: pending?.total || 0,
                 paid: paid?.total || 0,
-                totalRevenue: total?.total || 0
+                totalRevenue: total?.total || 0,
+                totalAuditHours: parseFloat(totalAuditHours),
+                averageBillingPerClient
             }, 'Earnings summary retrieved');
         } catch (error) {
             console.error('[CA getEarningsDashboard Error]', error);
@@ -2174,24 +2554,534 @@ const caController = {
         }
     },
 
-    payInvoice: async (req, res) => {
-        const { id: invoiceId } = req.params;
+    updateTask: async (req, res) => {
+        const { id } = req.params;
+        const { title, description, priority, dueDate, status } = req.body;
         try {
-            const now = new Date().toISOString();
-            const invoice = await db.prepare("SELECT * FROM ca_professional_invoices WHERE id = ? AND business_owner_id = ?").get(invoiceId, req.user.id);
-            if (!invoice) return sendError(res, 'Invoice not found', 404);
+            const email = req.user.email || '';
+            const task = await db.prepare(`
+                SELECT * FROM ca_tasks 
+                WHERE id = ? AND (
+                    ca_user_id = ? 
+                    OR business_owner_id = ? 
+                    OR client_id = ?
+                    OR LOWER(client_email) = LOWER(?)
+                    OR LOWER(client_name) = LOWER(?)
+                )
+            `).get(id, req.user.id, req.user.id, req.user.id, email, email);
 
-            await db.prepare("UPDATE ca_professional_invoices SET status = 'Paid' WHERE id = ?").run(invoiceId);
+            if (!task) return sendError(res, 'Task not found or unauthorized', 404);
+
+            const now = new Date().toISOString();
+            const updatedTitle = title !== undefined ? title : task.title;
+            const updatedDesc = description !== undefined ? description : (task.task_description || task.title);
+            const updatedPriority = priority !== undefined ? priority : task.priority;
+            const updatedDueDate = dueDate !== undefined ? dueDate : task.due_date;
+            const updatedStatus = status !== undefined ? status : task.status;
 
             await db.prepare(`
-                INSERT INTO ca_payments (invoice_id, user_id, amount, payment_method, transaction_id, status, paid_at)
-                VALUES (?, ?, ?, 'Wallet/Online', ?, 'Success', ?)
-            `).run(invoiceId, req.user.id, invoice.total_amount, `TXN-${Date.now()}`, now);
+                UPDATE ca_tasks 
+                SET title = ?, task_description = ?, priority = ?, due_date = ?, status = ?, updated_at = ?
+                WHERE id = ?
+            `).run(updatedTitle, updatedDesc, updatedPriority, updatedDueDate, updatedStatus, now, id);
 
-            return sendSuccess(res, null, 'Invoice paid successfully');
+            return sendSuccess(res, {
+                id: parseInt(id),
+                taskId: parseInt(id),
+                title: updatedTitle,
+                taskDescription: updatedDesc,
+                priority: updatedPriority,
+                dueDate: updatedDueDate,
+                status: updatedStatus,
+                updatedAt: now
+            }, 'Task updated successfully');
         } catch (error) {
-            console.error('[CA payInvoice Error]', error);
-            return sendError(res, 'Failed to process payment', 500);
+            console.error('[CA updateTask Error]', error);
+            return sendError(res, 'Failed to update task', 500);
+        }
+    },
+
+    deleteTask: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const email = req.user.email || '';
+            const task = await db.prepare(`
+                SELECT * FROM ca_tasks 
+                WHERE id = ? AND (
+                    ca_user_id = ? 
+                    OR business_owner_id = ? 
+                    OR client_id = ?
+                    OR LOWER(client_email) = LOWER(?)
+                    OR LOWER(client_name) = LOWER(?)
+                )
+            `).get(id, req.user.id, req.user.id, req.user.id, email, email);
+
+            if (!task) return sendError(res, 'Task not found or unauthorized', 404);
+
+            await db.prepare("DELETE FROM ca_tasks WHERE id = ?").run(id);
+            return sendSuccess(res, { id: parseInt(id) }, 'Task deleted successfully');
+        } catch (error) {
+            console.error('[CA deleteTask Error]', error);
+            return sendError(res, 'Failed to delete task', 500);
+        }
+    },
+
+    getNotifications: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const list = await db.prepare(`
+                SELECT * FROM notifications 
+                WHERE receiver_id = ? OR user_id = ?
+                ORDER BY id DESC
+                LIMIT 100
+            `).all(userId, userId);
+
+            const mapped = list.map(n => ({
+                id: n.id,
+                senderId: n.sender_id,
+                receiverId: n.receiver_id || n.user_id,
+                type: n.type || 'Info',
+                title: n.title,
+                message: n.message,
+                relatedTaskId: n.related_task_id,
+                isRead: n.is_read === 1 || n.is_read === true || n.is_read === 'true',
+                text: n.message || n.title,
+                time: n.created_at ? new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently',
+                read: n.is_read === 1 || n.is_read === true || n.is_read === 'true',
+                createdAt: n.created_at
+            }));
+
+            return sendSuccess(res, mapped, 'Notifications retrieved');
+        } catch (error) {
+            console.error('[CA getNotifications Error]', error);
+            return sendError(res, 'Failed to fetch notifications', 500);
+        }
+    },
+
+    addNotification: async (req, res) => {
+        const { receiverId, type, title, message, relatedTaskId } = req.body;
+        if (!title || !message) return sendError(res, 'Title and message are required', 400);
+
+        try {
+            const targetUserId = receiverId || req.user.id;
+            const now = new Date().toISOString();
+            const result = await db.prepare(`
+                INSERT INTO notifications (sender_id, receiver_id, user_id, type, title, message, related_task_id, is_read, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+            `).run(req.user.id, targetUserId, targetUserId, type || 'Info', title, message, relatedTaskId || null, now);
+
+            return sendSuccess(res, {
+                id: result.lastInsertRowid,
+                senderId: req.user.id,
+                receiverId: targetUserId,
+                type: type || 'Info',
+                title,
+                message,
+                relatedTaskId: relatedTaskId || null,
+                isRead: false,
+                createdAt: now
+            }, 'Notification created successfully');
+        } catch (error) {
+            console.error('[CA addNotification Error]', error);
+            return sendError(res, 'Failed to create notification', 500);
+        }
+    },
+
+    markNotificationRead: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const userId = req.user.id;
+            await db.prepare(`
+                UPDATE notifications 
+                SET is_read = 1 
+                WHERE id = ? AND (receiver_id = ? OR user_id = ?)
+            `).run(id, userId, userId);
+
+            return sendSuccess(res, { id: parseInt(id), isRead: true }, 'Notification marked as read');
+        } catch (error) {
+            console.error('[CA markNotificationRead Error]', error);
+            return sendError(res, 'Failed to update notification', 500);
+        }
+    },
+
+    markAllNotificationsRead: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            await db.prepare(`
+                UPDATE notifications 
+                SET is_read = 1 
+                WHERE receiver_id = ? OR user_id = ?
+            `).run(userId, userId);
+
+            return sendSuccess(res, null, 'All notifications marked as read');
+        } catch (error) {
+            console.error('[CA markAllNotificationsRead Error]', error);
+            return sendError(res, 'Failed to update notifications', 500);
+        }
+    },
+
+    getPresenceStatus: async (req, res) => {
+        try {
+            const userIdParam = req.query.user_id ? parseInt(req.query.user_id) : null;
+            const now = new Date();
+            const timeoutThreshold = new Date(Date.now() - 90 * 1000).toISOString();
+
+            // Auto cleanup stale online statuses
+            await db.prepare(`
+                UPDATE user_presence 
+                SET status = 'Offline', logout_time = ? 
+                WHERE status = 'Online' AND last_activity < ?
+            `).run(now.toISOString(), timeoutThreshold);
+
+            await db.prepare(`
+                UPDATE users 
+                SET is_online = 0 
+                WHERE is_online = 1 AND (last_seen_at < ? OR last_seen_at IS NULL)
+            `).run(timeoutThreshold);
+
+            if (userIdParam) {
+                const presence = await db.prepare("SELECT * FROM user_presence WHERE user_id = ?").get(userIdParam);
+                const user = await db.prepare("SELECT is_online, last_seen_at FROM users WHERE id = ?").get(userIdParam);
+                const isOnline = user ? user.is_online === 1 : (presence?.status === 'Online');
+                return sendSuccess(res, {
+                    userId: userIdParam,
+                    status: isOnline ? 'Online' : 'Offline',
+                    loginTime: presence?.login_time || null,
+                    lastActivity: presence?.last_activity || user?.last_seen_at || null,
+                    logoutTime: presence?.logout_time || null
+                }, 'User presence status retrieved');
+            }
+
+            // Return presence for connected advisor or all users
+            const connectedInv = await db.prepare(`
+                SELECT sender_id, receiver_id FROM ca_invitations 
+                WHERE (sender_id = ? OR receiver_id = ?) AND status = 'Accepted'
+                ORDER BY id DESC LIMIT 1
+            `).get(req.user.id, req.user.id);
+
+            let targetId = null;
+            if (connectedInv) {
+                targetId = connectedInv.sender_id === req.user.id ? connectedInv.receiver_id : connectedInv.sender_id;
+            }
+
+            if (targetId) {
+                const presence = await db.prepare("SELECT * FROM user_presence WHERE user_id = ?").get(targetId);
+                const user = await db.prepare("SELECT is_online, last_seen_at FROM users WHERE id = ?").get(targetId);
+                const isOnline = user ? user.is_online === 1 : (presence?.status === 'Online');
+                return sendSuccess(res, {
+                    userId: targetId,
+                    status: isOnline ? 'Online' : 'Offline',
+                    loginTime: presence?.login_time || null,
+                    lastActivity: presence?.last_activity || user?.last_seen_at || null
+                }, 'Presence status retrieved');
+            }
+
+            // Fallback: Return current user presence
+            const currentPresence = await db.prepare("SELECT * FROM user_presence WHERE user_id = ?").get(req.user.id);
+            return sendSuccess(res, {
+                userId: req.user.id,
+                status: currentPresence?.status || 'Online',
+                lastActivity: currentPresence?.last_activity || new Date().toISOString()
+            }, 'Presence status retrieved');
+        } catch (error) {
+            console.error('[CA getPresenceStatus Error]', error);
+            return sendError(res, 'Failed to fetch presence status', 500);
+        }
+    },
+
+    setUserOnline: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const now = new Date().toISOString();
+            const existing = await db.prepare("SELECT * FROM user_presence WHERE user_id = ?").get(userId);
+
+            if (existing) {
+                await db.prepare(`
+                    UPDATE user_presence 
+                    SET status = 'Online', login_time = ?, last_activity = ?, logout_time = NULL 
+                    WHERE user_id = ?
+                `).run(now, now, userId);
+            } else {
+                await db.prepare(`
+                    INSERT INTO user_presence (user_id, user_type, login_time, last_activity, status)
+                    VALUES (?, ?, ?, ?, 'Online')
+                `).run(userId, req.user.role || 'user', now, now);
+            }
+
+            await db.prepare("UPDATE users SET is_online = 1, login_at = ?, last_seen_at = ? WHERE id = ?").run(now, now, userId);
+
+            return sendSuccess(res, { userId, status: 'Online', loginTime: now }, 'User online presence updated');
+        } catch (error) {
+            console.error('[CA setUserOnline Error]', error);
+            return sendError(res, 'Failed to set online status', 500);
+        }
+    },
+
+    setUserOffline: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const now = new Date().toISOString();
+            const existing = await db.prepare("SELECT * FROM user_presence WHERE user_id = ?").get(userId);
+
+            if (existing) {
+                await db.prepare(`
+                    UPDATE user_presence 
+                    SET status = 'Offline', logout_time = ? 
+                    WHERE user_id = ?
+                `).run(now, userId);
+            } else {
+                await db.prepare(`
+                    INSERT INTO user_presence (user_id, user_type, logout_time, status)
+                    VALUES (?, ?, ?, 'Offline')
+                `).run(userId, req.user.role || 'user', now);
+            }
+
+            await db.prepare("UPDATE users SET is_online = 0, last_seen_at = ? WHERE id = ?").run(now, userId);
+
+            return sendSuccess(res, { userId, status: 'Offline', logoutTime: now }, 'User offline presence updated');
+        } catch (error) {
+            console.error('[CA setUserOffline Error]', error);
+            return sendError(res, 'Failed to set offline status', 500);
+        }
+    },
+
+    updatePresenceHeartbeat: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const now = new Date().toISOString();
+            await db.prepare(`
+                UPDATE user_presence 
+                SET status = 'Online', last_activity = ? 
+                WHERE user_id = ?
+            `).run(now, userId);
+
+            await db.prepare("UPDATE users SET is_online = 1, last_seen_at = ? WHERE id = ?").run(now, userId);
+            return sendSuccess(res, { userId, status: 'Online', lastActivity: now }, 'Heartbeat updated');
+        } catch (error) {
+            return sendError(res, 'Failed to update heartbeat', 500);
+        }
+    },
+
+    getGstCredentials: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            let record = await db.prepare(`
+                SELECT * FROM gst_credentials 
+                WHERE business_owner_id = ? OR connected_ca_id = ?
+                ORDER BY id DESC LIMIT 1
+            `).get(userId, userId);
+
+            if (!record) {
+                // Fallback check on users table
+                const user = await db.prepare("SELECT gst_username, gst_password, gst_share_status, gst_shared_at, gst_connected_advisor_id FROM users WHERE id = ?").get(userId);
+                if (user && user.gst_username) {
+                    record = {
+                        business_owner_id: userId,
+                        connected_ca_id: user.gst_connected_advisor_id,
+                        gst_username: user.gst_username,
+                        encrypted_password: user.gst_password,
+                        shared_status: user.gst_share_status || 'Not Shared',
+                        shared_date: user.gst_shared_at,
+                        revoked_date: null
+                    };
+                }
+            }
+
+            if (!record) {
+                return sendSuccess(res, {
+                    gstUsername: '',
+                    sharedStatus: 'Not Shared',
+                    isShared: false,
+                    passwordAvailable: false
+                }, 'No GST credentials stored');
+            }
+
+            const isOwner = record.business_owner_id === userId;
+            const isCA = record.connected_ca_id === userId || !isOwner;
+            const isShared = record.shared_status === 'Shared';
+
+            let decryptedPassword = null;
+            if (isOwner || (isCA && isShared)) {
+                decryptedPassword = decrypt(record.encrypted_password) || record.encrypted_password;
+            }
+
+            if (isCA && isShared) {
+                // Log access to ca_gst_access_logs
+                const caUser = await db.prepare("SELECT username FROM users WHERE id = ?").get(userId);
+                const ownerUser = await db.prepare("SELECT username, business_name FROM users WHERE id = ?").get(record.business_owner_id);
+                await db.prepare(`
+                    INSERT INTO ca_gst_access_logs (ca_user_id, client_id, ca_name, client_name, accessed_at, action)
+                    VALUES (?, ?, ?, ?, ?, 'view')
+                `).run(userId, record.business_owner_id, caUser?.username || 'CA', ownerUser?.business_name || ownerUser?.username || 'Client', new Date().toISOString());
+            }
+
+            return sendSuccess(res, {
+                id: record.id,
+                businessOwnerId: record.business_owner_id,
+                connectedCaId: record.connected_ca_id,
+                gstUsername: record.gst_username || '',
+                gstPassword: decryptedPassword || (isOwner ? '' : '••••••••'),
+                sharedStatus: record.shared_status || 'Not Shared',
+                isShared,
+                sharedDate: record.shared_date,
+                revokedDate: record.revoked_date
+            }, 'GST credentials retrieved');
+        } catch (error) {
+            console.error('[CA getGstCredentials Error]', error);
+            return sendError(res, 'Failed to fetch GST credentials', 500);
+        }
+    },
+
+    saveGstCredentials: async (req, res) => {
+        const { gstUsername, gstPassword, connectedCaId } = req.body;
+        if (!gstUsername || !gstPassword) {
+            return sendError(res, 'GST Username and Password are required', 400);
+        }
+
+        try {
+            const userId = req.user.id;
+            const encryptedPassword = encrypt(gstPassword);
+            const now = new Date().toISOString();
+
+            // Find connected CA if not explicitly passed
+            let caId = connectedCaId;
+            if (!caId) {
+                const inv = await db.prepare(`
+                    SELECT sender_id, receiver_id FROM ca_invitations 
+                    WHERE (sender_id = ? OR receiver_id = ?) AND status = 'Accepted'
+                    ORDER BY id DESC LIMIT 1
+                `).get(userId, userId);
+                if (inv) {
+                    caId = inv.sender_id === userId ? inv.receiver_id : inv.sender_id;
+                }
+            }
+
+            const existing = await db.prepare("SELECT * FROM gst_credentials WHERE business_owner_id = ?").get(userId);
+
+            if (existing) {
+                await db.prepare(`
+                    UPDATE gst_credentials 
+                    SET gst_username = ?, encrypted_password = ?, connected_ca_id = ?, shared_status = 'Shared', shared_date = ?, revoked_date = NULL, updated_at = ?
+                    WHERE business_owner_id = ?
+                `).run(gstUsername, encryptedPassword, caId || existing.connected_ca_id, now, now, userId);
+            } else {
+                await db.prepare(`
+                    INSERT INTO gst_credentials (business_owner_id, connected_ca_id, gst_username, encrypted_password, shared_status, shared_date, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 'Shared', ?, ?, ?)
+                `).run(userId, caId || null, gstUsername, encryptedPassword, now, now, now);
+            }
+
+            // Sync user profile
+            await db.prepare(`
+                UPDATE users 
+                SET gst_username = ?, gst_password = ?, gst_share_status = 'Shared', gst_shared_at = ?, gst_connected_advisor_id = ?
+                WHERE id = ?
+            `).run(gstUsername, encryptedPassword, now, caId || null, userId);
+
+            // Create notification for connected CA
+            if (caId) {
+                const owner = await db.prepare("SELECT username, business_name FROM users WHERE id = ?").get(userId);
+                const ownerName = owner?.business_name || owner?.username || 'Business Owner';
+                const messageText = `Business Owner ${ownerName} has saved and shared GST Portal credentials with you.`;
+                await db.prepare(`
+                    INSERT INTO notifications (sender_id, receiver_id, user_id, type, title, message, is_read, created_at)
+                    VALUES (?, ?, ?, 'GST Credential Shared', 'GST Portal Credentials Shared', ?, 0, ?)
+                `).run(userId, caId, caId, messageText, now);
+            }
+
+            return sendSuccess(res, {
+                gstUsername,
+                sharedStatus: 'Shared',
+                isShared: true,
+                sharedDate: now
+            }, 'GST credentials saved and shared with CA');
+        } catch (error) {
+            console.error('[CA saveGstCredentials Error]', error);
+            return sendError(res, 'Failed to save GST credentials', 500);
+        }
+    },
+
+    requestGstCredentials: async (req, res) => {
+        try {
+            const caId = req.user.id;
+            let { clientId } = req.body;
+
+            // Find business owner ID
+            let ownerId = clientId;
+            const clientRecord = await db.prepare("SELECT business_owner_id FROM ca_clients WHERE id = ? AND ca_user_id = ?").get(clientId, caId);
+            if (clientRecord && clientRecord.business_owner_id) {
+                ownerId = clientRecord.business_owner_id;
+            }
+
+            if (!ownerId) {
+                const inv = await db.prepare(`
+                    SELECT sender_id FROM ca_invitations 
+                    WHERE receiver_id = ? AND status = 'Accepted' 
+                    ORDER BY id DESC LIMIT 1
+                `).get(caId);
+                if (inv) ownerId = inv.sender_id;
+            }
+
+            if (!ownerId) return sendError(res, 'Target client business owner not found', 404);
+
+            const now = new Date().toISOString();
+            const existing = await db.prepare("SELECT * FROM gst_credentials WHERE business_owner_id = ?").get(ownerId);
+
+            if (existing) {
+                await db.prepare(`
+                    UPDATE gst_credentials 
+                    SET connected_ca_id = ?, shared_status = 'Requested', updated_at = ?
+                    WHERE business_owner_id = ?
+                `).run(caId, now, ownerId);
+            } else {
+                await db.prepare(`
+                    INSERT INTO gst_credentials (business_owner_id, connected_ca_id, gst_username, encrypted_password, shared_status, created_at, updated_at)
+                    VALUES (?, ?, '', '', 'Requested', ?, ?)
+                `).run(ownerId, caId, now, now);
+            }
+
+            // Sync user table
+            await db.prepare(`
+                UPDATE users SET gst_share_status = 'Requested', gst_connected_advisor_id = ? WHERE id = ?
+            `).run(caId, ownerId);
+
+            // Insert notification for Business Owner
+            const caUser = await db.prepare("SELECT username FROM users WHERE id = ?").get(caId);
+            const caName = caUser?.username || 'Your CA Advisor';
+            const messageText = `${caName} has requested access to your GST Portal credentials for compliance review.`;
+            await db.prepare(`
+                INSERT INTO notifications (sender_id, receiver_id, user_id, type, title, message, is_read, created_at)
+                VALUES (?, ?, ?, 'GST Credential Request', 'GST Credentials Requested', ?, 0, ?)
+            `).run(caId, ownerId, ownerId, messageText, now);
+
+            return sendSuccess(res, { sharedStatus: 'Requested' }, 'GST credentials requested from client');
+        } catch (error) {
+            console.error('[CA requestGstCredentials Error]', error);
+            return sendError(res, 'Failed to request GST credentials', 500);
+        }
+    },
+
+    revokeGstCredentials: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const now = new Date().toISOString();
+
+            await db.prepare(`
+                UPDATE gst_credentials 
+                SET shared_status = 'Revoked', revoked_date = ?, updated_at = ?
+                WHERE business_owner_id = ?
+            `).run(now, now, userId);
+
+            await db.prepare(`
+                UPDATE users 
+                SET gst_share_status = 'Revoked' 
+                WHERE id = ?
+            `).run(userId);
+
+            return sendSuccess(res, { sharedStatus: 'Revoked', revokedDate: now }, 'GST credentials sharing revoked');
+        } catch (error) {
+            console.error('[CA revokeGstCredentials Error]', error);
+            return sendError(res, 'Failed to revoke GST credentials', 500);
         }
     }
 };

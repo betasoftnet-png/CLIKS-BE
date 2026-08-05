@@ -502,18 +502,142 @@ const reportsController = {
         return sendSuccess(res, { wastage_percentage: '0%' }, 'Wastage report compiled');
     },
 
+    // Phase 3 GST & TDS Reports
+    getGstReport: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const salesGst = await db.prepare("SELECT SUM(tax_amount) as sales_tax, SUM(total_amount) as sales_total FROM business_invoices WHERE user_id = ?").get(userId);
+            const purchaseGst = await db.prepare("SELECT SUM(total_tax) as purchase_tax, SUM(grand_total) as purchase_total FROM business_purchases WHERE user_id = ?").get(userId);
+            const gstInvoices = await db.prepare("SELECT * FROM gst_invoices WHERE user_id = ? ORDER BY id DESC").all(userId);
+
+            const salesTax = parseFloat(salesGst?.sales_tax) || 0;
+            const purchaseTax = parseFloat(purchaseGst?.purchase_tax) || 0;
+            const netGstPayable = salesTax - purchaseTax;
+
+            return sendSuccess(res, {
+                sales_tax: salesTax,
+                purchase_tax: purchaseTax,
+                net_gst_payable: netGstPayable,
+                invoices: gstInvoices || []
+            }, 'GST report compiled');
+        } catch (error) {
+            console.error('[Reports getGstReport Error]', error);
+            return sendError(res, 'Failed to compile GST report', 500);
+        }
+    },
+
+    getTdsReport: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const tdsHistory = await db.prepare("SELECT * FROM ca_tds_history WHERE ca_user_id = ? ORDER BY id DESC").all(userId);
+            const totalTds = await db.prepare("SELECT SUM(calculated_tds) as total FROM ca_tds_history WHERE ca_user_id = ?").get(userId);
+            return sendSuccess(res, {
+                total_tds_deducted: parseFloat(totalTds?.total) || 0,
+                records: tdsHistory || []
+            }, 'TDS report compiled');
+        } catch (error) {
+            console.error('[Reports getTdsReport Error]', error);
+            return sendError(res, 'Failed to compile TDS report', 500);
+        }
+    },
+
+    getProfessionalInvoiceReport: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const invoices = await db.prepare("SELECT * FROM ca_professional_invoices WHERE ca_user_id = ? OR business_owner_id = ? ORDER BY id DESC").all(userId, userId);
+            const summary = await db.prepare("SELECT SUM(amount) as total_fee, SUM(gst_amount) as total_gst, SUM(total_amount) as grand_total FROM ca_professional_invoices WHERE ca_user_id = ? OR business_owner_id = ?").get(userId, userId);
+            return sendSuccess(res, {
+                summary: {
+                    total_fee: summary?.total_fee || 0,
+                    total_gst: summary?.total_gst || 0,
+                    grand_total: summary?.grand_total || 0
+                },
+                invoices: invoices || []
+            }, 'Professional invoice report compiled');
+        } catch (error) {
+            console.error('[Reports getProfessionalInvoiceReport Error]', error);
+            return sendError(res, 'Failed to compile professional invoice report', 500);
+        }
+    },
+
+    getPaymentReport: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const payments = await db.prepare("SELECT * FROM ca_payments WHERE ca_user_id = ? OR user_id = ? ORDER BY id DESC").all(userId, userId);
+            const summary = await db.prepare("SELECT SUM(amount) as total_paid FROM ca_payments WHERE ca_user_id = ? OR user_id = ?").get(userId, userId);
+            return sendSuccess(res, {
+                total_paid: summary?.total_paid || 0,
+                payments: payments || []
+            }, 'Payment report compiled');
+        } catch (error) {
+            console.error('[Reports getPaymentReport Error]', error);
+            return sendError(res, 'Failed to compile payment report', 500);
+        }
+    },
+
+    getCustomerLedger: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const { customerId } = req.query;
+            let sql = "SELECT * FROM business_invoices WHERE user_id = ?";
+            const params = [userId];
+            if (customerId) {
+                sql += " AND customer_id = ?";
+                params.push(customerId);
+            }
+            sql += " ORDER BY invoice_date DESC, id DESC";
+            const invoices = await db.prepare(sql).all(...params);
+            return sendSuccess(res, invoices || [], 'Customer ledger compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to compile customer ledger', 500);
+        }
+    },
+
+    getVendorLedger: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const { vendorId } = req.query;
+            let sql = "SELECT * FROM business_purchases WHERE user_id = ?";
+            const params = [userId];
+            if (vendorId) {
+                sql += " AND vendor_id = ?";
+                params.push(vendorId);
+            }
+            sql += " ORDER BY id DESC";
+            const purchases = await db.prepare(sql).all(...params);
+            return sendSuccess(res, purchases || [], 'Vendor ledger compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to compile vendor ledger', 500);
+        }
+    },
+
     // Date Range & Export
     getDateRange: async (req, res) => {
         return sendSuccess(res, { from: req.query.from, to: req.query.to }, 'Date range report compiled');
     },
     exportPdf: async (req, res) => {
-        return sendSuccess(res, { download_url: '/exports/report.pdf' }, 'PDF exported');
+        const { type = 'General Report' } = req.query;
+        try {
+            const { logAuditEvent } = require('../utils/auditLogger');
+            await logAuditEvent(req, { action: 'Download Report PDF', module: 'Reports', details: `Downloaded ${type} PDF` });
+        } catch(e) {}
+        return sendSuccess(res, { download_url: `/exports/${type.toLowerCase().replace(/ /g, '_')}.pdf`, type: 'PDF' }, 'PDF report exported');
     },
     exportExcel: async (req, res) => {
-        return sendSuccess(res, { download_url: '/exports/report.xlsx' }, 'Excel exported');
+        const { type = 'General Report' } = req.query;
+        try {
+            const { logAuditEvent } = require('../utils/auditLogger');
+            await logAuditEvent(req, { action: 'Download Report Excel', module: 'Reports', details: `Downloaded ${type} Excel` });
+        } catch(e) {}
+        return sendSuccess(res, { download_url: `/exports/${type.toLowerCase().replace(/ /g, '_')}.xlsx`, type: 'Excel' }, 'Excel report exported');
     },
     exportCsv: async (req, res) => {
-        return sendSuccess(res, { download_url: '/exports/report.csv' }, 'CSV exported');
+        const { type = 'General Report' } = req.query;
+        try {
+            const { logAuditEvent } = require('../utils/auditLogger');
+            await logAuditEvent(req, { action: 'Download Report CSV', module: 'Reports', details: `Downloaded ${type} CSV` });
+        } catch(e) {}
+        return sendSuccess(res, { download_url: `/exports/${type.toLowerCase().replace(/ /g, '_')}.csv`, type: 'CSV' }, 'CSV report exported');
     },
 
     getChartSales: async (req, res) => {

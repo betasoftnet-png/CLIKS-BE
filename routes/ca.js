@@ -34,8 +34,28 @@ router.post('/requests/:id/approve', caController.approveRequestDoc);
 
 router.get('/tasks', caController.getTasks);
 router.post('/tasks', caController.addTask);
+router.put('/tasks/:id', caController.updateTask);
+router.delete('/tasks/:id', caController.deleteTask);
 router.post('/tasks/:id/toggle', caController.toggleTaskStatus);
 router.post('/tasks/:id/upload', caController.uploadTaskDoc);
+
+// Notifications & Presence Endpoints
+router.get('/notifications', caController.getNotifications);
+router.post('/notifications', caController.addNotification);
+router.put('/notifications/read-all', caController.markAllNotificationsRead);
+router.put('/notifications/:id/read', caController.markNotificationRead);
+
+router.get('/presence', caController.getPresenceStatus);
+router.post('/presence/login', caController.setUserOnline);
+router.post('/presence/logout', caController.setUserOffline);
+router.post('/presence/heartbeat', caController.updatePresenceHeartbeat);
+
+// GST Credentials Endpoints
+router.get('/gst-credentials', caController.getGstCredentials);
+router.post('/gst-credentials', caController.saveGstCredentials);
+router.post('/gst-credentials/request', caController.requestGstCredentials);
+router.put('/gst-credentials/revoke', caController.revokeGstCredentials);
+router.delete('/gst-credentials', caController.revokeGstCredentials);
 
 router.get('/documents/versions/:docId', caController.getDocumentVersions);
 router.get('/tds/history', caController.getTdsHistory);
@@ -65,8 +85,10 @@ router.post('/audit-sessions', caController.addAuditSession);
 router.get('/audit-sessions', caController.getAuditSessions);
 router.post('/invoices/generate', caController.generateProfessionalInvoice);
 router.get('/invoices', caController.getProfessionalInvoices);
+router.get('/invoices/:id/pdf', caController.getProfessionalInvoicePdf);
 router.get('/earnings/dashboard', caController.getEarningsDashboard);
 router.post('/invoices/:id/pay', caController.payInvoice);
+router.get('/payment-history', caController.getPaymentHistory);
 
 module.exports = router;
 
