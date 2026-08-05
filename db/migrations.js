@@ -1849,8 +1849,20 @@ CREATE TABLE IF NOT EXISTS money_trackers (
     sql = sql.replace(/INTEGER PRIMARY KEY AUTOINCREMENT/g, 'SERIAL PRIMARY KEY');
     sql = sql.replace(/REAL/g, 'NUMERIC');
     
-    // Split the statements so we can execute them if needed, or send as one block
-    await db.pool.query(sql);
+    try {
+      const statements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
+      for (const stmt of statements) {
+        try {
+          await db.pool.query(stmt);
+        } catch (stmtErr) {
+          if (!stmtErr.message.includes('already exists')) {
+            console.warn('⚠️ Postgres migration statement warning:', stmtErr.message);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Could not execute Postgres migration block:', e.message);
+    }
 
     // Ensure columns are updated
     const pgAlters = [
@@ -2083,7 +2095,15 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS items TEXT;`
     ];
     try {
-      for (const q of pgAlters) await db.pool.query(q);
+      for (const q of pgAlters) {
+        try {
+          await db.pool.query(q);
+        } catch (alterErr) {
+          if (!alterErr.message.includes('already exists')) {
+            console.warn('⚠️ Could not execute Postgres alter:', alterErr.message);
+          }
+        }
+      }
       await db.pool.query(`
         CREATE TABLE IF NOT EXISTS ca_document_reviews (
           id SERIAL PRIMARY KEY,
