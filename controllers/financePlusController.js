@@ -385,12 +385,22 @@ const deleteMoneyTracker = async (req, res) => {
 
 // ── Customer Purchase History & Loyalty ───────────────────────────────────────
 const getCustomerPurchases = async (req, res) => {
-  const purchases = await db.prepare('SELECT * FROM customer_purchases WHERE user_id = ? ORDER BY timestamp DESC').all(req.user.id);
-  return sendSuccess(res, purchases);
+  const purchases = await db.prepare('SELECT * FROM customer_purchase_history WHERE customer_user_id = ? ORDER BY created_at DESC').all(req.user.id);
+
+  // Normalize fields to match frontend expectations
+  const normalized = purchases.map(p => ({
+    ...p,
+    grand_total: p.net_amount || p.total_amount,
+    purchase_status: p.invoice_status,
+    points_earned: Math.floor((p.net_amount || p.total_amount) / 100),
+    timestamp: p.created_at
+  }));
+
+  return sendSuccess(res, normalized);
 };
 
 const getLoyaltyStats = async (req, res) => {
-  const wallet = await db.prepare('SELECT * FROM loyalty_wallets WHERE user_id = ?').get(req.user.id);
+  const wallet = await db.prepare('SELECT * FROM customer_loyalty_wallets WHERE user_id = ?').get(req.user.id);
   if (!wallet) {
     return sendSuccess(res, {
       available_points: 0,
@@ -398,7 +408,11 @@ const getLoyaltyStats = async (req, res) => {
       total_redeemed: 0
     });
   }
-  return sendSuccess(res, wallet);
+  return sendSuccess(res, {
+    available_points: wallet.points_balance,
+    lifetime_earned: wallet.total_earned,
+    total_redeemed: wallet.total_redeemed
+  });
 };
 
 module.exports = {

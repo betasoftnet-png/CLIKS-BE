@@ -1,12 +1,8 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { recordAudit } = require('../utils/auditLogger');
-<<<<<<< HEAD
 const gstHelper = require('../utils/gstHelper');
 const { processCustomerInvoiceIntegration } = require('../utils/customerIntegration');
-=======
-const { syncInvoiceToCustomer } = require('../utils/loyaltySync');
->>>>>>> f343a5c (purchase details updates)
 
 const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') => {
     try {
@@ -155,7 +151,7 @@ const billingController = {
                 try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) {}
             }
 
-<<<<<<< HEAD
+            // Sync to accounting entries
             if (numPaid > 0) {
                 const normalizedMode = normalizePaymentMode(payment_mode);
                 await db.prepare(`
@@ -169,11 +165,6 @@ const billingController = {
                     INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
                     VALUES (?, 'income', ?, ?, 'Sales Revenue', 'Accounts Receivable (Credit Sale)', ?, 'posted', ?, ?)
                 `).run(req.user.id, now.split('T')[0], numTotal - numPaid, `Invoice #${invNum} (Credit Sale)`, now, now);
-=======
-            // Real-Time Synchronization to Customer CLIKS App
-            if (createdInvoice) {
-                syncInvoiceToCustomer(createdInvoice).catch(err => console.error('Background sync failed:', err));
->>>>>>> f343a5c (purchase details updates)
             }
 
             await logBusinessAudit(req.user.id, 'INVOICE_CREATE', `Created invoice ${invNum} for client ${client_name} (amount: ₹${numTotal})`, 'SUCCESS');
