@@ -383,6 +383,24 @@ const deleteMoneyTracker = async (req, res) => {
   return res.status(204).end();
 };
 
+// ── Customer Purchase History & Loyalty ───────────────────────────────────────
+const getCustomerPurchases = async (req, res) => {
+  const purchases = await db.prepare('SELECT * FROM customer_purchases WHERE user_id = ? ORDER BY timestamp DESC').all(req.user.id);
+  return sendSuccess(res, purchases);
+};
+
+const getLoyaltyStats = async (req, res) => {
+  const wallet = await db.prepare('SELECT * FROM loyalty_wallets WHERE user_id = ?').get(req.user.id);
+  if (!wallet) {
+    return sendSuccess(res, {
+      available_points: 0,
+      lifetime_earned: 0,
+      total_redeemed: 0
+    });
+  }
+  return sendSuccess(res, wallet);
+};
+
 module.exports = {
   getGoals, createGoal, updateGoal, deleteGoal,
   getSalaryRecords, createSalaryRecord,
@@ -391,5 +409,6 @@ module.exports = {
   getTaxRecords, saveTaxRecord,
   getNotifications, markNotificationRead,
   updateFinanceSettings, updatePrimaryIncomeSource,
-  getMoneyTrackers, createMoneyTracker, getMoneyTrackerById, updateMoneyTracker, deleteMoneyTracker
+  getMoneyTrackers, createMoneyTracker, getMoneyTrackerById, updateMoneyTracker, deleteMoneyTracker,
+  getCustomerPurchases, getLoyaltyStats
 };

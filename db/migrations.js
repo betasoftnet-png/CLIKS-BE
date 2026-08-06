@@ -1844,6 +1844,52 @@ CREATE TABLE IF NOT EXISTS money_trackers (
   updated_at TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
+
+-- Loyalty Wallets (CLIKS Ecosystem)
+CREATE TABLE IF NOT EXISTS loyalty_wallets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL UNIQUE,
+  available_points INTEGER DEFAULT 0,
+  lifetime_earned INTEGER DEFAULT 0,
+  total_redeemed INTEGER DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- Loyalty Transactions
+CREATE TABLE IF NOT EXISTS loyalty_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet_id INTEGER NOT NULL,
+  invoice_id INTEGER,
+  merchant_id INTEGER,
+  type TEXT, -- Earned | Redeemed
+  points INTEGER NOT NULL,
+  description TEXT,
+  date TEXT,
+  created_at TEXT,
+  FOREIGN KEY(wallet_id) REFERENCES loyalty_wallets(id)
+);
+
+-- Customer Purchase History (Sync from Business Invoices)
+CREATE TABLE IF NOT EXISTS customer_purchases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL, -- CLIKS Customer User ID
+  business_invoice_id INTEGER NOT NULL,
+  merchant_name TEXT,
+  invoice_number TEXT,
+  invoice_date TEXT,
+  amount REAL,
+  tax_amount REAL,
+  discount REAL,
+  grand_total REAL,
+  payment_status TEXT,
+  purchase_status TEXT,
+  points_earned INTEGER DEFAULT 0,
+  timestamp TEXT,
+  created_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
   `;
 
   if (dbType === 'postgres') {
