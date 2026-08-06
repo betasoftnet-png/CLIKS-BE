@@ -2,6 +2,7 @@ const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { recordAudit } = require('../utils/auditLogger');
 const gstHelper = require('../utils/gstHelper');
+const { processCustomerInvoiceIntegration } = require('../utils/customerIntegration');
 
 const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') => {
     try {
@@ -171,6 +172,12 @@ const billingController = {
             if (invoice_type === 'GST' || numTax > 0) {
                 await gstHelper.syncInvoiceToGstr1(result.lastInsertRowid, req.user.id);
             }
+
+            // Real-time integration to CLIKS Customer Application
+            await processCustomerInvoiceIntegration({
+                createdInvoice,
+                merchantUserId: req.user.id
+            });
 
             return sendSuccess(res, createdInvoice, 'Invoice created successfully', 201);
         } catch (error) {

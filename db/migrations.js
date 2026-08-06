@@ -2442,6 +2442,89 @@ CREATE TABLE IF NOT EXISTS money_trackers (
     console.warn("⚠️ Skipping infrastructure seed sequence:", err.message);
   }
 
+  // Customer Integration Tables (CLIKS Business ERP -> CLIKS Customer Application)
+  try {
+    const idType = dbType === 'postgres' ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS customer_purchase_history (
+        id ${idType},
+        invoice_number TEXT NOT NULL,
+        merchant_name TEXT,
+        merchant_business_id INTEGER NOT NULL,
+        customer_user_id INTEGER NOT NULL,
+        customer_name TEXT,
+        customer_email TEXT,
+        invoice_date TEXT,
+        total_amount REAL DEFAULT 0,
+        gst REAL DEFAULT 0,
+        discount REAL DEFAULT 0,
+        net_amount REAL DEFAULT 0,
+        payment_status TEXT,
+        invoice_status TEXT,
+        invoice_id INTEGER,
+        items TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS purchase_history (
+        id ${idType},
+        invoice_number TEXT NOT NULL,
+        merchant_name TEXT,
+        merchant_business_id INTEGER NOT NULL,
+        customer_user_id INTEGER NOT NULL,
+        customer_name TEXT,
+        customer_email TEXT,
+        invoice_date TEXT,
+        total_amount REAL DEFAULT 0,
+        gst REAL DEFAULT 0,
+        discount REAL DEFAULT 0,
+        net_amount REAL DEFAULT 0,
+        payment_status TEXT,
+        invoice_status TEXT,
+        invoice_id INTEGER,
+        items TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS customer_loyalty_wallets (
+        id ${idType},
+        user_id INTEGER UNIQUE NOT NULL,
+        points_balance INTEGER DEFAULT 0,
+        total_earned INTEGER DEFAULT 0,
+        total_redeemed INTEGER DEFAULT 0,
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS customer_loyalty_transactions (
+        id ${idType},
+        user_id INTEGER NOT NULL,
+        invoice_number TEXT,
+        merchant_name TEXT,
+        points_earned INTEGER DEFAULT 0,
+        points_redeemed INTEGER DEFAULT 0,
+        description TEXT,
+        created_at TEXT
+      )
+    `).run();
+
+    try {
+      await db.prepare("ALTER TABLE users ADD COLUMN loyalty_points INTEGER DEFAULT 0").run();
+    } catch (e) {
+      // Column may already exist
+    }
+  } catch (err) {
+    console.warn("⚠️ Skipping customer integration migrations:", err.message);
+  }
+
   console.log('✅ Migrations applied');
 }
 
