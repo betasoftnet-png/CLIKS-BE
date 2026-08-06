@@ -2,7 +2,7 @@ const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 
 const customerPurchaseController = {
-    // 1. Get Purchase History for authenticated customer
+    // 1. Get Purchase History for authenticated customer (with Merchant-Specific Loyalty calculations)
     getPurchaseHistory: async (req, res) => {
         try {
             const userId = req.user.id;
@@ -16,12 +16,56 @@ const customerPurchaseController = {
 
             const resultList = Array.isArray(purchases) ? purchases : [];
 
+            // Calculate merchant-specific loyalty totals (NOT global user balance)
+            const merchantLoyaltyMap = {};
+
+            resultList.forEach(p => {
+                const key = p.merchant_business_id || (p.merchant_name ? p.merchant_name.trim().toLowerCase() : 'unknown');
+                if (!merchantLoyaltyMap[key]) {
+                    merchantLoyaltyMap[key] = {
+                        merchant_business_id: p.merchant_business_id,
+                        merchant_name: p.merchant_name,
+                        merchant_email: p.merchant_email,
+                        merchant_logo: p.merchant_logo,
+                        purchases_count: 0,
+                        total_spent: 0,
+                        total_points_earned: 0,
+                        total_points_redeemed: 0,
+                        net_loyalty_points: 0
+                    };
+                }
+                const earned = parseInt(p.points_earned) || 0;
+                const redeemed = parseInt(p.points_redeemed) || 0;
+                const net = parseInt(p.net_points_added) || (earned - redeemed);
+                const spent = parseFloat(p.net_amount || p.total_amount) || 0;
+
+                merchantLoyaltyMap[key].purchases_count += 1;
+                merchantLoyaltyMap[key].total_spent += spent;
+                merchantLoyaltyMap[key].total_points_earned += earned;
+                merchantLoyaltyMap[key].total_points_redeemed += redeemed;
+                merchantLoyaltyMap[key].net_loyalty_points += net;
+            });
+
             resultList.forEach(p => {
                 p.invoiceId = p.invoice_id || p.id;
                 p.invoice_id = p.invoice_id || p.id;
                 if (p.items && typeof p.items === 'string') {
                     try { p.items = JSON.parse(p.items); } catch (e) { p.items = []; }
                 }
+
+                const key = p.merchant_business_id || (p.merchant_name ? p.merchant_name.trim().toLowerCase() : 'unknown');
+                const merchantTotals = merchantLoyaltyMap[key] || {};
+
+                // Attach merchant-specific loyalty attributes
+                p.merchant_loyalty_earned = merchantTotals.total_points_earned || 0;
+                p.merchant_loyalty_points = merchantTotals.net_loyalty_points || 0;
+                p.merchant_points = merchantTotals.total_points_earned || 0;
+                p.merchant_total_purchases = merchantTotals.purchases_count || 1;
+
+                // Override global loyalty_points with merchant-specific loyalty earned
+                p.loyalty_points = merchantTotals.total_points_earned || 0;
+                p.loyalty_earned = merchantTotals.total_points_earned || 0;
+                p.earned_points = parseInt(p.points_earned) || 0;
             });
 
             return sendSuccess(res, resultList, 'Customer purchase history loaded successfully');
@@ -195,6 +239,117 @@ const customerPurchaseController = {
         } catch (error) {
             console.error('[Customer Purchase Controller] getLoyaltyWallet error:', error);
             return sendError(res, 'Failed to fetch loyalty wallet', 500);
+        }
+    },
+
+    // 4. Get Merchant Summary Cards for Customer (Merchant-Specific Loyalty Totals)
+    getMerchantSummary: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
+
+            const purchases = await db.prepare(`
+                SELECT * FROM customer_purchase_history 
+                WHERE customer_user_id = ? OR LOWER(customer_email) = ?
+                ORDER BY created_at DESC, id DESC
+            `).all(userId, userEmail);
+
+            const resultList = Array.isArray(purchases) ? purchases : [];
+            const merchantMap = {};
+
+            resultList.forEach(p => {
+                const merchantId = p.merchant_business_id || (p.merchant_name ? p.merchant_name.trim().toLowerCase() : 'unknown');
+                if (!merchantMap[merchantId]) {
+                    merchantMap[merchantId] = {
+                        merchant_business_id: p.merchant_business_id,
+                        merchant_id: p.merchant_business_id,
+                        merchant_name: p.merchant_name || 'Merchant',
+                        business_name: p.merchant_name || 'Merchant',
+                        merchant_email: p.merchant_email || '',
+                        merchant_logo: p.merchant_logo || '',
+                        purchases_count: 0,
+                        total_spent: 0,
+                        points_earned: 0,
+                        loyalty_earned: 0,
+                        points_redeemed: 0,
+                        net_points: 0,
+                        last_purchase_date: p.invoice_date || p.created_at
+                    };
+                }
+                const earned = parseInt(p.points_earned) || 0;
+                const redeemed = parseInt(p.points_redeemed) || 0;
+                const net = parseInt(p.net_points_added) || (earned - redeemed);
+                const spent = parseFloat(p.net_amount || p.total_amount) || 0;
+
+                merchantMap[merchantId].purchases_count += 1;
+                merchantMap[merchantId].total_spent += spent;
+                merchantMap[merchantId].points_earned += earned;
+                merchantMap[merchantId].loyalty_earned += earned;
+                merchantMap[merchantId].points_redeemed += redeemed;
+                merchantMap[merchantId].net_points += net;
+            });
+
+            return sendSuccess(res, Object.values(merchantMap), 'Merchant summary loaded successfully');
+        } catch (error) {
+            console.error('[Customer Purchase Controller] getMerchantSummary error:', error);
+            return sendError(res, 'Failed to fetch merchant summary', 500);
+        }
+    },
+
+    // 5. Get Merchant-specific Purchase History (History Popup filtered for a single merchant)
+    getMerchantHistory: async (req, res) => {
+        try {
+            const { merchantId } = req.params;
+            const userId = req.user.id;
+            const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
+
+            const purchases = await db.prepare(`
+                SELECT * FROM customer_purchase_history 
+                WHERE (customer_user_id = ? OR LOWER(customer_email) = ?)
+                  AND (merchant_business_id = ? OR LOWER(merchant_name) = LOWER(?))
+                ORDER BY created_at DESC, id DESC
+            `).all(userId, userEmail, merchantId, merchantId);
+
+            const resultList = Array.isArray(purchases) ? purchases : [];
+
+            let merchantTotalEarned = 0;
+            let merchantTotalRedeemed = 0;
+            let merchantTotalSpent = 0;
+
+            resultList.forEach(p => {
+                p.invoiceId = p.invoice_id || p.id;
+                p.invoice_id = p.invoice_id || p.id;
+                if (p.items && typeof p.items === 'string') {
+                    try { p.items = JSON.parse(p.items); } catch (e) { p.items = []; }
+                }
+                const earned = parseInt(p.points_earned) || 0;
+                const redeemed = parseInt(p.points_redeemed) || 0;
+                merchantTotalEarned += earned;
+                merchantTotalRedeemed += redeemed;
+                merchantTotalSpent += parseFloat(p.net_amount || p.total_amount) || 0;
+            });
+
+            // Decorate each purchase with merchant-specific loyalty totals
+            resultList.forEach(p => {
+                p.merchant_loyalty_earned = merchantTotalEarned;
+                p.merchant_loyalty_points = merchantTotalEarned - merchantTotalRedeemed;
+                p.merchant_total_purchases = resultList.length;
+                p.loyalty_points = merchantTotalEarned;
+                p.loyalty_earned = merchantTotalEarned;
+            });
+
+            return sendSuccess(res, {
+                merchant_business_id: merchantId,
+                merchant_name: resultList[0]?.merchant_name || 'Merchant',
+                total_purchases: resultList.length,
+                total_spent: merchantTotalSpent,
+                merchant_loyalty_earned: merchantTotalEarned,
+                merchant_loyalty_points: merchantTotalEarned - merchantTotalRedeemed,
+                purchases: resultList
+            }, 'Merchant history loaded successfully');
+        } catch (error) {
+            console.error('[Customer Purchase Controller] getMerchantHistory error:', error);
+            return sendError(res, 'Failed to fetch merchant history', 500);
         }
     }
 };
