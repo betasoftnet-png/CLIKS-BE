@@ -415,165 +415,26 @@ const getLoyaltyStats = async (req, res) => {
   });
 };
 
-<<<<<<< HEAD
-const getInvoiceById = async (req, res) => {
-  const { invoiceId } = req.params;
-  const searchId = String(invoiceId).trim();
-  const userId = req.user ? req.user.id : 'N/A';
-  const userEmail = req.user && req.user.email ? String(req.user.email).trim().toLowerCase() : '';
-
-  console.log(`[FinancePlus Controller] getInvoiceById requested for identifier: "${searchId}" by user ID: ${userId}, email: ${userEmail || 'N/A'}`);
-
-  try {
-    let invoice = null;
-    let historyRec = null;
-
-    // 1. Search customer_purchase_history by invoice_id, id, or invoice_number
-    historyRec = await db.prepare(`
-      SELECT * FROM customer_purchase_history 
-      WHERE invoice_id = ? OR id = ? OR invoice_number = ?
-    `).get(searchId, searchId, searchId);
-
-    // 2. Search business_invoices by id or invoice_number
-    invoice = await db.prepare(`
-      SELECT * FROM business_invoices 
-      WHERE id = ? OR invoice_number = ?
-    `).get(searchId, searchId);
-
-    if (!invoice && !historyRec) {
-      console.warn(`[FinancePlus Controller] ⚠️ Invoice NOT found in database for identifier: "${searchId}". Searched tables: customer_purchase_history (by invoice_id, id, invoice_number) and business_invoices (by id, invoice_number). Request User ID: ${userId}`);
-      return sendError(res, `Invoice details not found for identifier "${searchId}"`, 404);
-    }
-
-    const realInvoiceId = (invoice && invoice.id) || (historyRec && historyRec.invoice_id) || (historyRec && historyRec.id) || parseInt(searchId);
-
-    // 3. Fetch items from child table invoice_items
-    let itemsFromTable = [];
-    try {
-      itemsFromTable = await db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(realInvoiceId);
-    } catch (e) {
-      console.warn('[FinancePlus Controller] Warning reading invoice_items:', e.message);
-    }
-
-    let parsedItems = [];
-    if (Array.isArray(itemsFromTable) && itemsFromTable.length > 0) {
-      parsedItems = itemsFromTable;
-    } else {
-      const rawItems = (invoice && invoice.items) || (historyRec && historyRec.items) || [];
-      if (typeof rawItems === 'string') {
-        try { parsedItems = JSON.parse(rawItems); } catch (e) { parsedItems = []; }
-      } else if (Array.isArray(rawItems)) {
-        parsedItems = rawItems;
-      }
-    }
-
-    const formattedItems = (parsedItems || []).map(it => {
-      const name = it.product_name || it.description || it.name || 'Item';
-      const desc = it.description || it.product_name || it.name || 'Item';
-      const qty = parseFloat(it.quantity) || 1;
-      const price = parseFloat(it.price || it.rate || it.unit_price) || 0;
-      const discPct = parseFloat(it.discount_percent) || 0;
-      const discAmt = parseFloat(it.discount_amount) || 0;
-      const gstPct = parseFloat(it.tax_rate || it.gst_percentage || it.gst_rate || it.gst_percent) || 0;
-      const gstAmt = parseFloat(it.tax_amount || it.gst_amount) || (qty * price * (gstPct / 100));
-      const lineTotal = parseFloat(it.total || it.amount || it.item_total) || ((qty * price) - discAmt + gstAmt);
-
-      return {
-        product_name: name,
-        productName: name,
-        description: desc,
-        hsn_code: it.hsn_code || it.sku || it.sku_hsn || '',
-        sku: it.hsn_code || it.sku || it.sku_hsn || '',
-        sku_hsn: it.sku_hsn || it.hsn_code || it.sku || '',
-        quantity: qty,
-        unit: it.unit || 'Pcs',
-        price: price,
-        unit_price: price,
-        unitPrice: price,
-        rate: price,
-        discount_percent: discPct,
-        discount_amount: discAmt,
-        gst_percent: gstPct,
-        tax_rate: gstPct,
-        gst_amount: gstAmt,
-        tax_amount: gstAmt,
-        total: lineTotal,
-        item_total: lineTotal,
-        line_total: lineTotal
-      };
-    });
-
-    const invNum = (invoice && invoice.invoice_number) || (historyRec && historyRec.invoice_number) || searchId;
-    const mName = (historyRec && historyRec.merchant_name) || 'CLIKS Merchant';
-    const cName = (historyRec && historyRec.customer_name) || (invoice && invoice.client_name) || 'Customer';
-    const cEmail = (historyRec && historyRec.customer_email) || (invoice && invoice.client_email) || '';
-    const invDate = (invoice && invoice.created_at) || (historyRec && historyRec.invoice_date) || '';
-    const pMode = (invoice && invoice.payment_mode) || (historyRec && historyRec.payment_mode) || 'Cash';
-    const pStatus = (historyRec && historyRec.payment_status) || (invoice && invoice.status) || 'Paid';
-    const shipAddr = (invoice && invoice.shipping_address) || (historyRec && historyRec.shipping_address) || '';
-    const numGst = parseFloat((invoice && invoice.tax_amount) || (historyRec && historyRec.gst) || 0);
-    const numDisc = parseFloat((invoice && invoice.discount_amount) || (historyRec && historyRec.discount) || 0);
-    const loyaltyPts = (historyRec && historyRec.points_earned) || Math.floor(parseFloat((invoice && invoice.total_amount) || (historyRec && historyRec.net_amount) || 0) / 100);
-
-    const pdfUrl = `/api/v1/billing/invoices/${realInvoiceId}/pdf`;
-
-    const responsePayload = {
-      _id: realInvoiceId,
-      id: realInvoiceId,
-      invoiceId: realInvoiceId,
-      invoice_id: realInvoiceId,
-      invoiceNumber: invNum,
-      invoice_number: invNum,
-      merchantId: (invoice && invoice.user_id) || (historyRec && historyRec.merchant_business_id) || 0,
-      merchant_business_id: (invoice && invoice.user_id) || (historyRec && historyRec.merchant_business_id) || 0,
-      merchantName: mName,
-      merchant_name: mName,
-      customerName: cName,
-      customer_name: cName,
-      customerEmail: cEmail,
-      customer_email: cEmail,
-      invoiceDate: invDate,
-      invoice_date: invDate,
-      created_at: invDate,
-      paymentMode: pMode,
-      payment_mode: pMode,
-      paymentStatus: pStatus,
-      payment_status: pStatus,
-      shippingAddress: shipAddr,
-      shipping_address: shipAddr,
-      gst: numGst,
-      tax_amount: numGst,
-      discount: numDisc,
-      discount_amount: numDisc,
-      loyaltyPoints: loyaltyPts,
-      loyalty_points: loyaltyPts,
-      points_earned: loyaltyPts,
-      items: formattedItems,
-      purchased_items: formattedItems,
-      subtotal: parseFloat((invoice && invoice.amount) || (historyRec && historyRec.subtotal) || 0),
-      grand_total: parseFloat((invoice && invoice.total_amount) || (historyRec && historyRec.net_amount) || 0),
-      total_amount: parseFloat((invoice && invoice.total_amount) || (historyRec && historyRec.net_amount) || 0),
-      pdf_url: pdfUrl,
-      pdfUrl: pdfUrl
-    };
-
-    console.log(`[FinancePlus Controller] ✅ Invoice loaded successfully for invoiceId: "${searchId}" (real ID: ${realInvoiceId}, items: ${formattedItems.length})`);
-    return sendSuccess(res, responsePayload, 'Invoice loaded successfully');
-  } catch (error) {
-    console.error(`[FinancePlus Controller] ❌ Error in getInvoiceById for invoiceId "${searchId}":`, error);
-    return sendError(res, 'Failed to fetch invoice details', 500);
-=======
 const getInvoiceDetails = async (req, res) => {
   try {
       const { id } = req.params; // business_invoices.id
       const userId = req.user.id;
 
-      // Security Check: Verify this user owns this purchase via history table
-      const authCheck = await db.prepare(
-          'SELECT invoice_number FROM customer_purchase_history WHERE invoice_id = ? AND customer_user_id = ?'
-      ).get(id, userId);
+      console.log(`[DEBUG] getInvoiceDetails - Received ID: ${id}, User ID: ${userId}`);
 
-      if (!authCheck) {
+      // Security Check: Verify this user owns this purchase via history table
+      const user = await db.prepare('SELECT email FROM users WHERE id = ?').get(userId);
+      const userEmail = user?.email ? user.email.toLowerCase().trim() : '';
+
+      // Get the purchase history record - this contains the "Points" shown on the card
+      const purchaseRecord = await db.prepare(`
+          SELECT *, net_amount, total_amount
+          FROM customer_purchase_history
+          WHERE invoice_id = ? AND (customer_user_id = ? OR LOWER(customer_email) = ?)
+      `).get(id, userId, userEmail);
+
+      if (!purchaseRecord) {
+          console.warn(`[DEBUG] Security Violation or Missing Record: User ${userId} tried to access invoice ${id}`);
           return sendError(res, 'Unauthorized access to this invoice', 403);
       }
 
@@ -582,19 +443,28 @@ const getInvoiceDetails = async (req, res) => {
 
       if (!invoice) return sendError(res, 'Original invoice records not found', 404);
 
-      // Fetch merchant details (The person who created the invoice)
+      // Fetch merchant details
       const merchant = await db.prepare('SELECT business_name, email FROM users WHERE id = ?').get(invoice.user_id);
 
-      // Fetch all payment installments for this invoice
+      // Fetch all payment installments
       const payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ? ORDER BY payment_date DESC').all(id);
 
-      // Fetch loyalty points earned for this specific transaction
-      // We match by invoice_number as recorded in loyalty transactions
+      // Loyalty Calculation - ENSURE CONSISTENCY with history card and loyalty transactions
+      // Priority 1: Official loyalty transaction record
       const loyaltyTx = await db.prepare(`
           SELECT points_earned, points_redeemed
           FROM customer_loyalty_transactions
-          WHERE user_id = ? AND invoice_number = ?
-      `).get(userId, invoice.invoice_number);
+          WHERE user_id = ? AND (invoice_number = ? OR invoice_number = ?)
+      `).get(userId, invoice.invoice_number, purchaseRecord.invoice_number);
+
+      // Priority 2: Recalculate using same logic as getCustomerPurchases
+      const baseAmount = purchaseRecord.net_amount ||
+                         purchaseRecord.total_amount ||
+                         invoice.total_amount ||
+                         invoice.grand_total ||
+                         invoice.amount || 0;
+
+      const earnedPoints = loyaltyTx?.points_earned !== undefined ? loyaltyTx.points_earned : Math.floor(parseFloat(baseAmount) / 100);
 
       // Parse JSON items
       let parsedItems = [];
@@ -610,19 +480,22 @@ const getInvoiceDetails = async (req, res) => {
       const detailedInvoice = {
           ...invoice,
           items: parsedItems,
+          // Ensure we have total_amount and amount for summary consistency
+          total_amount: invoice.total_amount || invoice.grand_total || purchaseRecord.net_amount || 0,
+          amount: invoice.amount || invoice.subtotal || purchaseRecord.total_amount || 0,
           merchant: {
-              name: merchant?.business_name || 'CLIKS Merchant',
+              name: merchant?.business_name || invoice.merchant_name || 'CLIKS Merchant',
               email: merchant?.email || 'N/A',
-              logo: null // Placeholder for future logo support
+              logo: null
           },
           customer: {
-              name: invoice.client_name,
-              email: invoice.client_email,
-              gstin: invoice.client_gstin,
-              shipping_address: invoice.shipping_address
+              name: invoice.client_name || purchaseRecord.customer_name || 'Customer',
+              email: invoice.client_email || purchaseRecord.customer_email || 'N/A',
+              gstin: invoice.client_gstin || purchaseRecord.customer_gstin,
+              shipping_address: invoice.shipping_address || purchaseRecord.shipping_address
           },
           payment_info: {
-              mode: invoice.payment_mode || 'Cash',
+              mode: invoice.payment_mode || purchaseRecord.payment_mode || 'Cash',
               history: payments.map(p => ({
                   method: p.payment_method,
                   amount: p.amount,
@@ -632,7 +505,7 @@ const getInvoiceDetails = async (req, res) => {
               }))
           },
           loyalty: {
-              earned: loyaltyTx?.points_earned || 0,
+              earned: earnedPoints,
               redeemed: loyaltyTx?.points_redeemed || 0
           }
       };
@@ -640,9 +513,8 @@ const getInvoiceDetails = async (req, res) => {
       return sendSuccess(res, detailedInvoice, 'Invoice details loaded successfully');
 
   } catch (error) {
-      console.error('[financePlusController] getInvoiceDetails error:', error);
-      return sendError(res, 'Failed to fetch invoice details', 500);
->>>>>>> d86dbfd (purchase details updates)
+      console.error('[financePlusController] getInvoiceDetails CRITICAL ERROR:', error);
+      return sendError(res, 'Internal Server Error during invoice retrieval: ' + error.message, 500);
   }
 };
 
@@ -655,9 +527,5 @@ module.exports = {
   getNotifications, markNotificationRead,
   updateFinanceSettings, updatePrimaryIncomeSource,
   getMoneyTrackers, createMoneyTracker, getMoneyTrackerById, updateMoneyTracker, deleteMoneyTracker,
-<<<<<<< HEAD
-  getCustomerPurchases, getLoyaltyStats, getInvoiceById
-=======
   getCustomerPurchases, getLoyaltyStats, getInvoiceDetails
->>>>>>> d86dbfd (purchase details updates)
 };
