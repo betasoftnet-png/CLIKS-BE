@@ -3,6 +3,56 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { logAuditEvent } = require('../utils/auditLogger');
 
 const customerController = {
+    lookupCustomerByEmail: async (req, res) => {
+        try {
+            const { email } = req.query;
+            if (!email || !String(email).trim()) {
+                return sendSuccess(res, { exists: false, loyalty_points: 0 });
+            }
+
+            const emailLower = String(email).trim().toLowerCase();
+
+            // 1. Search users table for registered CLIKS customer user account
+            const user = await db.prepare('SELECT id, email, username, loyalty_points FROM users WHERE LOWER(email) = ?').get(emailLower);
+
+            if (user) {
+                // Check customer_loyalty_wallets table for live balance
+                const wallet = await db.prepare('SELECT points_balance FROM customer_loyalty_wallets WHERE user_id = ?').get(user.id);
+                const pts = wallet ? (wallet.points_balance || 0) : (user.loyalty_points || 0);
+
+                return sendSuccess(res, {
+                    exists: true,
+                    user_id: user.id,
+                    email: user.email,
+                    customer_name: user.username,
+                    loyalty_points: pts
+                });
+            }
+
+            // 2. Search merchant's business_customers table as fallback
+            const crmCust = await db.prepare('SELECT id, name, email, loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, req.user.id);
+
+            if (crmCust) {
+                return sendSuccess(res, {
+                    exists: true,
+                    user_id: crmCust.id,
+                    email: crmCust.email,
+                    customer_name: crmCust.name,
+                    loyalty_points: crmCust.loyalty_points || 0
+                });
+            }
+
+            return sendSuccess(res, {
+                exists: false,
+                email: emailLower,
+                loyalty_points: 0
+            });
+        } catch (error) {
+            console.error('[Customer Lookup Error]', error);
+            return sendError(res, 'Failed to lookup customer by email', 500);
+        }
+    },
+
     getCustomers: async (req, res) => {
         try {
             const userId = req.user.id;

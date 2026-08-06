@@ -107,48 +107,73 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
         // 5. Automatically calculate Loyalty Points according to existing business rules
         // Rule: Earn 1 point per 100 units of net bill amount (in active currency)
         const earnedPoints = Math.max(0, Math.floor(numTotal / 100));
+        const redeemedPoints = Math.max(0, parseInt(createdInvoice.redeemed_points) || 0);
+        const netPointsChange = earnedPoints - redeemedPoints;
 
-        // 6. Update Customer's Loyalty Wallet
-        if (earnedPoints > 0) {
+        // 6. Update Customer's Loyalty Wallet in central DB
+        if (earnedPoints > 0 || redeemedPoints > 0) {
             const existingWallet = await db.prepare(
                 'SELECT * FROM customer_loyalty_wallets WHERE user_id = ?'
             ).get(customerUser.id);
 
             if (existingWallet) {
+                const newBal = Math.max(0, (existingWallet.points_balance || 0) + netPointsChange);
                 await db.prepare(`
                     UPDATE customer_loyalty_wallets 
-                    SET points_balance = points_balance + ?, total_earned = total_earned + ?, updated_at = ?
+                    SET points_balance = ?,
+                        total_earned = total_earned + ?,
+                        total_redeemed = total_redeemed + ?,
+                        updated_at = ?
                     WHERE user_id = ?
-                `).run(earnedPoints, earnedPoints, now, customerUser.id);
+                `).run(newBal, earnedPoints, redeemedPoints, now, customerUser.id);
             } else {
+                const initBal = Math.max(0, netPointsChange);
                 await db.prepare(`
                     INSERT INTO customer_loyalty_wallets (user_id, points_balance, total_earned, total_redeemed, created_at, updated_at)
-                    VALUES (?, ?, ?, 0, ?, ?)
-                `).run(customerUser.id, earnedPoints, earnedPoints, now, now);
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).run(customerUser.id, initBal, earnedPoints, redeemedPoints, now, now);
             }
 
-            await db.prepare(`
-                INSERT INTO customer_loyalty_transactions (user_id, invoice_number, merchant_name, points_earned, points_redeemed, description, created_at)
-                VALUES (?, ?, ?, ?, 0, ?, ?)
-            `).run(
-                customerUser.id, invoiceNumber, merchantName, earnedPoints,
-                `Earned ${earnedPoints} pts from purchase #${invoiceNumber} at ${merchantName}`, now
-            );
+            if (earnedPoints > 0) {
+                await db.prepare(`
+                    INSERT INTO customer_loyalty_transactions (user_id, invoice_number, merchant_name, points_earned, points_redeemed, description, created_at)
+                    VALUES (?, ?, ?, ?, 0, ?, ?)
+                `).run(
+                    customerUser.id, invoiceNumber, merchantName, earnedPoints,
+                    `Earned ${earnedPoints} pts from purchase #${invoiceNumber} at ${merchantName}`, now
+                );
+            }
+
+            if (redeemedPoints > 0) {
+                await db.prepare(`
+                    INSERT INTO customer_loyalty_transactions (user_id, invoice_number, merchant_name, points_earned, points_redeemed, description, created_at)
+                    VALUES (?, ?, ?, 0, ?, ?, ?)
+                `).run(
+                    customerUser.id, invoiceNumber, merchantName, redeemedPoints,
+                    `Redeemed ${redeemedPoints} pts on purchase #${invoiceNumber} at ${merchantName}`, now
+                );
+            }
 
             try {
+                const curUserObj = await db.prepare('SELECT loyalty_points FROM users WHERE id = ?').get(customerUser.id);
+                const updatedUserPts = Math.max(0, ((curUserObj && curUserObj.loyalty_points) || 0) + netPointsChange);
                 await db.prepare(`
-                    UPDATE users SET loyalty_points = COALESCE(loyalty_points, 0) + ? WHERE id = ?
-                `).run(earnedPoints, customerUser.id);
+                    UPDATE users SET loyalty_points = ? WHERE id = ?
+                `).run(updatedUserPts, customerUser.id);
             } catch (e) {}
 
             try {
-                await db.prepare(`
-                    UPDATE business_customers 
-                    SET loyalty_points = COALESCE(loyalty_points, 0) + ?,
-                        total_spent = COALESCE(total_spent, 0) + ?,
-                        updated_at = ?
-                    WHERE LOWER(email) = ? AND user_id = ?
-                `).run(earnedPoints, numTotal, now, emailLower, merchantUserId);
+                const curCrm = await db.prepare('SELECT loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, merchantUserId);
+                if (curCrm) {
+                    const updatedCrmPts = Math.max(0, (curCrm.loyalty_points || 0) + netPointsChange);
+                    await db.prepare(`
+                        UPDATE business_customers 
+                        SET loyalty_points = ?,
+                            total_spent = COALESCE(total_spent, 0) + ?,
+                            updated_at = ?
+                        WHERE LOWER(email) = ? AND user_id = ?
+                    `).run(updatedCrmPts, numTotal, now, emailLower, merchantUserId);
+                }
             } catch (e) {}
         }
 

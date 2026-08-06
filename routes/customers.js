@@ -4,6 +4,7 @@ const customerController = require('../controllers/customerController');
 const { authenticateToken } = require('../middleware/auth');
 
 router.get('/', authenticateToken, customerController.getCustomers);
+router.get('/lookup', authenticateToken, customerController.lookupCustomerByEmail);
 router.get('/:id', authenticateToken, customerController.getCustomerById);
 router.post('/', authenticateToken, customerController.createCustomer);
 router.put('/:id', authenticateToken, customerController.updateCustomer);
