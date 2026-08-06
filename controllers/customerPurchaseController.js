@@ -255,6 +255,7 @@ const customerPurchaseController = {
         }
     },
 
+<<<<<<< HEAD
     // 4. Get Merchant Summary Cards for Customer (Merchant-Specific Loyalty Totals)
     getMerchantSummary: async (req, res) => {
         try {
@@ -376,6 +377,50 @@ const customerPurchaseController = {
         } catch (error) {
             console.error('[Customer Purchase Controller] getMerchantHistory error:', error);
             return sendError(res, 'Failed to fetch merchant history', 500);
+=======
+    // 3. Get Full Invoice Details for Customer
+    getInvoiceDetails: async (req, res) => {
+        try {
+            const { id } = req.params; // business_invoices.id
+            const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
+
+            // Fetch invoice
+            const invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(id);
+
+            if (!invoice) return sendError(res, 'Invoice not found', 404);
+
+            // Security: Ensure this customer is authorized to see this invoice
+            if (!invoice.client_email || invoice.client_email.toLowerCase() !== userEmail) {
+                return sendError(res, 'Unauthorized access to this invoice', 403);
+            }
+
+            // Fetch merchant details
+            const merchant = await db.prepare('SELECT business_name, email FROM users WHERE id = ?').get(invoice.user_id);
+
+            // Fetch payments
+            const payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ?').all(id);
+
+            // Loyalty Earned from this invoice
+            const loyalty = await db.prepare('SELECT points FROM loyalty_transactions WHERE invoice_id = ? AND wallet_id = (SELECT id FROM loyalty_wallets WHERE user_id = ?)').get(id, req.user.id);
+
+            if (invoice.items && typeof invoice.items === 'string') {
+                try { invoice.items = JSON.parse(invoice.items); } catch (e) { invoice.items = []; }
+            }
+
+            return sendSuccess(res, {
+                ...invoice,
+                merchant: {
+                    name: merchant?.business_name || 'CLIKS Merchant',
+                    email: merchant?.email || 'N/A'
+                },
+                payments: Array.isArray(payments) ? payments : [],
+                loyalty_earned: loyalty?.points || 0
+            }, 'Invoice details loaded successfully');
+
+        } catch (error) {
+            console.error('[Customer Purchase Controller] getInvoiceDetails error:', error);
+            return sendError(res, 'Failed to fetch invoice details', 500);
+>>>>>>> d86dbfd (purchase details updates)
         }
     }
 };

@@ -12,5 +12,6 @@ router.get('/purchase-history/:id/items', customerPurchaseController.getPurchase
 router.get('/purchases/:id', customerPurchaseController.getPurchaseDetailsById);
 router.get('/invoices/:id', customerPurchaseController.getPurchaseDetailsById);
 router.get('/loyalty-wallet', customerPurchaseController.getLoyaltyWallet);
+router.get('/invoice/:id', customerPurchaseController.getInvoiceDetails);
 
 module.exports = router;

@@ -46,5 +46,6 @@ router.get('/purchases', auth, controller.getCustomerPurchases);
 router.get('/invoice/:invoiceId', controller.getInvoiceById);
 router.get('/invoices/:invoiceId', controller.getInvoiceById);
 router.get('/loyalty', auth, controller.getLoyaltyStats);
+router.get('/invoice/:id', auth, controller.getInvoiceDetails);
 
 module.exports = router;
