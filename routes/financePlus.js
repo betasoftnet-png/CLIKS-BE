@@ -41,8 +41,10 @@ router.get('/money-trackers/:id', auth, controller.getMoneyTrackerById);
 router.put('/money-trackers/:id', auth, controller.updateMoneyTracker);
 router.delete('/money-trackers/:id', auth, controller.deleteMoneyTracker);
 
-// Customer Purchase History & Loyalty
+// Customer Purchase History, Invoices & Loyalty
 router.get('/purchases', auth, controller.getCustomerPurchases);
+router.get('/invoice/:invoiceId', controller.getInvoiceById);
+router.get('/invoices/:invoiceId', controller.getInvoiceById);
 router.get('/loyalty', auth, controller.getLoyaltyStats);
 
 module.exports = router;
