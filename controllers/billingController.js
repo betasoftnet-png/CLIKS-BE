@@ -191,18 +191,106 @@ const billingController = {
     getInvoiceById: async (req, res) => {
         const { id } = req.params;
         try {
-            const invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ? AND user_id = ?').get(id, req.user.id);
-            if (!invoice) return sendError(res, 'Invoice not found', 404);
+            let invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ? AND user_id = ?').get(id, req.user?.id);
 
-            if (invoice.items && typeof invoice.items === 'string') {
-                try { invoice.items = JSON.parse(invoice.items); } catch (e) { invoice.items = []; }
+            if (!invoice) {
+                invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ? OR invoice_number = ?').get(id, id);
             }
 
+            if (!invoice) {
+                const historyRec = await db.prepare('SELECT * FROM customer_purchase_history WHERE id = ? OR invoice_id = ? OR invoice_number = ?').get(id, id, id);
+                if (historyRec) {
+                    invoice = {
+                        id: historyRec.invoice_id || historyRec.id,
+                        invoice_id: historyRec.invoice_id || historyRec.id,
+                        invoiceId: historyRec.invoice_id || historyRec.id,
+                        invoice_number: historyRec.invoice_number,
+                        user_id: historyRec.merchant_business_id,
+                        client_name: historyRec.customer_name,
+                        client_email: historyRec.customer_email,
+                        client_gstin: historyRec.customer_gstin,
+                        shipping_address: historyRec.shipping_address,
+                        amount: historyRec.subtotal,
+                        tax_amount: historyRec.gst,
+                        total_amount: historyRec.net_amount,
+                        paid_amount: historyRec.paid_amount,
+                        due_amount: historyRec.due_amount,
+                        discount_amount: historyRec.discount,
+                        round_off: historyRec.round_off,
+                        status: historyRec.invoice_status,
+                        due_date: historyRec.due_date,
+                        payment_mode: historyRec.payment_mode,
+                        upi_id: historyRec.upi_id,
+                        bank_account_id: historyRec.bank_account_id,
+                        invoice_type: historyRec.invoice_type || 'GST',
+                        items: historyRec.items,
+                        created_at: historyRec.invoice_date || historyRec.created_at
+                    };
+                }
+            }
+
+            if (!invoice) return sendError(res, 'Invoice not found', 404);
+
+            const targetId = invoice.id || invoice.invoice_id || id;
+            invoice.id = targetId;
+            invoice.invoice_id = targetId;
+            invoice.invoiceId = targetId;
+
+            let parsedItems = [];
+            try {
+                const itemsFromTable = await db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(targetId);
+                if (Array.isArray(itemsFromTable) && itemsFromTable.length > 0) {
+                    parsedItems = itemsFromTable;
+                }
+            } catch (e) {}
+
+            if (parsedItems.length === 0) {
+                if (invoice.items && typeof invoice.items === 'string') {
+                    try { parsedItems = JSON.parse(invoice.items); } catch (e) { parsedItems = []; }
+                } else if (Array.isArray(invoice.items)) {
+                    parsedItems = invoice.items;
+                }
+            }
+
+            invoice.items = (parsedItems || []).map(it => {
+                const name = it.product_name || it.description || it.name || 'Item';
+                const desc = it.description || it.product_name || it.name || 'Item';
+                const qty = parseFloat(it.quantity) || 1;
+                const price = parseFloat(it.price || it.rate || it.unit_price) || 0;
+                const discPct = parseFloat(it.discount_percent) || 0;
+                const discAmt = parseFloat(it.discount_amount) || 0;
+                const gstPct = parseFloat(it.tax_rate || it.gst_percentage || it.gst_rate || it.gst_percent) || 0;
+                const gstAmt = parseFloat(it.tax_amount || it.gst_amount) || (qty * price * (gstPct / 100));
+                const lineTotal = parseFloat(it.total || it.amount || it.item_total) || ((qty * price) - discAmt + gstAmt);
+
+                return {
+                    product_name: name,
+                    description: desc,
+                    hsn_code: it.hsn_code || it.sku || it.sku_hsn || '',
+                    sku: it.hsn_code || it.sku || it.sku_hsn || '',
+                    sku_hsn: it.sku_hsn || it.hsn_code || it.sku || '',
+                    quantity: qty,
+                    unit: it.unit || 'Pcs',
+                    price: price,
+                    unit_price: price,
+                    rate: price,
+                    discount_percent: discPct,
+                    discount_amount: discAmt,
+                    gst_percent: gstPct,
+                    tax_rate: gstPct,
+                    gst_amount: gstAmt,
+                    tax_amount: gstAmt,
+                    total: lineTotal,
+                    item_total: lineTotal,
+                    line_total: lineTotal
+                };
+            });
+
             // Fetch nested notes, documents, payments, returns
-            invoice.payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ?').all(id);
-            invoice.returns = await db.prepare('SELECT * FROM business_invoice_returns WHERE invoice_id = ?').all(id);
-            invoice.notes = await db.prepare('SELECT * FROM business_invoice_notes WHERE invoice_id = ?').all(id);
-            invoice.documents = await db.prepare('SELECT * FROM business_invoice_documents WHERE invoice_id = ?').all(id);
+            try { invoice.payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ?').all(targetId); } catch(e) { invoice.payments = []; }
+            try { invoice.returns = await db.prepare('SELECT * FROM business_invoice_returns WHERE invoice_id = ?').all(targetId); } catch(e) { invoice.returns = []; }
+            try { invoice.notes = await db.prepare('SELECT * FROM business_invoice_notes WHERE invoice_id = ?').all(targetId); } catch(e) { invoice.notes = []; }
+            try { invoice.documents = await db.prepare('SELECT * FROM business_invoice_documents WHERE invoice_id = ?').all(targetId); } catch(e) { invoice.documents = []; }
 
             return sendSuccess(res, invoice, 'Invoice loaded successfully');
         } catch (error) {

@@ -2568,6 +2568,52 @@ CREATE TABLE IF NOT EXISTS money_trackers (
     }
 
     await db.prepare(`
+      CREATE TABLE IF NOT EXISTS invoice_items (
+        id ${idType},
+        invoice_id INTEGER NOT NULL,
+        product_name TEXT,
+        description TEXT,
+        hsn_code TEXT,
+        quantity REAL DEFAULT 1,
+        unit TEXT,
+        rate REAL DEFAULT 0,
+        price REAL DEFAULT 0,
+        discount_percent REAL DEFAULT 0,
+        discount_amount REAL DEFAULT 0,
+        tax_rate REAL DEFAULT 0,
+        tax_amount REAL DEFAULT 0,
+        amount REAL DEFAULT 0,
+        total REAL DEFAULT 0,
+        created_at TEXT
+      )
+    `).run();
+
+    const invoiceItemsAlters = [
+      'ALTER TABLE invoice_items ADD COLUMN product_name TEXT',
+      'ALTER TABLE invoice_items ADD COLUMN description TEXT',
+      'ALTER TABLE invoice_items ADD COLUMN hsn_code TEXT',
+      'ALTER TABLE invoice_items ADD COLUMN quantity REAL DEFAULT 1',
+      'ALTER TABLE invoice_items ADD COLUMN unit TEXT',
+      'ALTER TABLE invoice_items ADD COLUMN rate REAL DEFAULT 0',
+      'ALTER TABLE invoice_items ADD COLUMN price REAL DEFAULT 0',
+      'ALTER TABLE invoice_items ADD COLUMN discount_percent REAL DEFAULT 0',
+      'ALTER TABLE invoice_items ADD COLUMN discount_amount REAL DEFAULT 0',
+      'ALTER TABLE invoice_items ADD COLUMN tax_rate REAL DEFAULT 0',
+      'ALTER TABLE invoice_items ADD COLUMN tax_amount REAL DEFAULT 0',
+      'ALTER TABLE invoice_items ADD COLUMN amount REAL DEFAULT 0',
+      'ALTER TABLE invoice_items ADD COLUMN total REAL DEFAULT 0',
+      'ALTER TABLE invoice_items ADD COLUMN created_at TEXT'
+    ];
+
+    for (const altSql of invoiceItemsAlters) {
+      try {
+        await db.prepare(altSql).run();
+      } catch (e) {
+        // Ignore column already exists
+      }
+    }
+
+    await db.prepare(`
       CREATE TABLE IF NOT EXISTS customer_loyalty_wallets (
         id ${idType},
         user_id INTEGER UNIQUE NOT NULL,

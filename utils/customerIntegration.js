@@ -21,19 +21,35 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
             try { items = JSON.parse(items); } catch (e) { items = []; }
         }
         if (Array.isArray(items) && items.length > 0 && invoiceId) {
+            try {
+                await db.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').run(invoiceId);
+            } catch (e) {}
+
             for (const item of items) {
-                const desc = item.description || item.name || item.product_name || 'Item';
+                const prodName = item.product_name || item.name || item.description || 'Item';
+                const desc = item.description || item.product_name || item.name || 'Item';
+                const hsn = item.hsn_code || item.sku || item.hsn_sac || item.sku_hsn || '';
                 const qty = parseFloat(item.quantity) || 1;
-                const rate = parseFloat(item.rate || item.price || item.unit_price) || 0;
-                const amt = parseFloat(item.amount || item.total) || (qty * rate);
+                const unit = item.unit || 'Pcs';
+                const rate = parseFloat(item.price || item.rate || item.unit_price) || 0;
+                const discPct = parseFloat(item.discount_percent) || 0;
+                const discAmt = parseFloat(item.discount_amount) || 0;
+                const gstPct = parseFloat(item.tax_rate || item.gst_percentage || item.gst_rate) || 0;
+                const gstAmt = parseFloat(item.tax_amount || item.gst_amount) || (qty * rate * (gstPct / 100));
+                const amt = parseFloat(item.total || item.amount) || ((qty * rate) - discAmt + gstAmt);
 
                 try {
                     await db.prepare(`
-                        INSERT INTO invoice_items (invoice_id, description, quantity, rate, amount)
-                        VALUES (?, ?, ?, ?, ?)
-                    `).run(invoiceId, desc, qty, rate, amt);
+                        INSERT INTO invoice_items (
+                            invoice_id, product_name, description, hsn_code, quantity, unit,
+                            rate, price, discount_percent, discount_amount, tax_rate, tax_amount, amount, total, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        invoiceId, prodName, desc, hsn, qty, unit,
+                        rate, rate, discPct, discAmt, gstPct, gstAmt, amt, amt, now
+                    );
                 } catch (err) {
-                    // Ignore duplicate insertion or table error
+                    console.error('[Customer Integration] Error inserting invoice_item:', err);
                 }
             }
         }
