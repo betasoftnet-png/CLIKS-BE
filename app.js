@@ -35,16 +35,41 @@ app.use(helmet({
 }));
 */
 app.use(compression());
-const defaultOrigins = 'http://localhost:5173,https://cliks.beta-softnet.com,https://cliksbusiness.com,https://account.beta-softnet.com'.split(',');
-let allowedOrigins = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : defaultOrigins;
-if (!allowedOrigins.includes('https://account.beta-softnet.com')) {
-  allowedOrigins.push('https://account.beta-softnet.com');
-}
+const defaultOrigins = [
+  'https://cliksbusiness.com',
+  'https://www.cliksbusiness.com',
+  'https://cliks.beta-softnet.com',
+  'https://account.beta-softnet.com',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000'
+];
 
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true
-}));
+let envOrigins = process.env.CORS_ORIGIN 
+  ? process.env.CORS_ORIGIN.split(',').map(s => s.trim()).filter(Boolean)
+  : [];
+
+const allowedOriginsSet = new Set([...defaultOrigins, ...envOrigins]);
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOriginsSet.has(origin) || allowedOriginsSet.has('*')) {
+      return callback(null, true);
+    }
+    if (/\.(cliksbusiness\.com|beta-softnet\.com)$/.test(origin)) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version', 'X-Request-Id'],
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // ── Structured Request Logger + Request ID ──────────────────────────────────────
 // Replaces morgan. Adds: X-Request-Id header, structured JSON logs,
