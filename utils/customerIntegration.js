@@ -61,12 +61,16 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
         const merchantName = (merchantUser && (merchantUser.business_name || merchantUser.username)) 
             ? (merchantUser.business_name || merchantUser.username) 
             : 'CLIKS Merchant';
+        const merchantEmail = (merchantUser && merchantUser.email) ? merchantUser.email : '';
+        const merchantLogo = (merchantUser && (merchantUser.logo_url || merchantUser.business_logo)) ? (merchantUser.logo_url || merchantUser.business_logo) : '';
 
         const numTotal = parseFloat(createdInvoice.total_amount) || 0;
         const numTax = parseFloat(createdInvoice.tax_amount) || 0;
         const numDiscount = parseFloat(createdInvoice.discount_amount) || 0;
         const numAmount = parseFloat(createdInvoice.amount) || (numTotal - numTax + numDiscount);
         const numPaid = parseFloat(createdInvoice.paid_amount) || 0;
+        const numDue = parseFloat(createdInvoice.due_amount) || Math.max(0, numTotal - numPaid);
+        const numRoundOff = parseFloat(createdInvoice.round_off) || 0;
 
         let paymentStatus = createdInvoice.payment_status;
         if (!paymentStatus) {
@@ -74,41 +78,114 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
         }
         const invoiceStatus = createdInvoice.status || 'Active';
         const invoiceDate = createdInvoice.created_at || createdInvoice.due_date || now;
-
-        // 4. Automatically create a Purchase History record for that customer
-        const historyParams = [
-            invoiceNumber, merchantName, merchantUserId, customerUser.id,
-            clientName, customerUser.email || clientEmail, invoiceDate, numAmount, numTax,
-            numDiscount, numTotal, paymentStatus, invoiceStatus, invoiceId,
-            typeof createdInvoice.items === 'string' ? createdInvoice.items : JSON.stringify(items || []),
-            now, now
-        ];
-
-        await db.prepare(`
-            INSERT INTO customer_purchase_history (
-                invoice_number, merchant_name, merchant_business_id, customer_user_id,
-                customer_name, customer_email, invoice_date, total_amount, gst,
-                discount, net_amount, payment_status, invoice_status, invoice_id, items,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(...historyParams);
-
-        try {
-            await db.prepare(`
-                INSERT INTO purchase_history (
-                    invoice_number, merchant_name, merchant_business_id, customer_user_id,
-                    customer_name, customer_email, invoice_date, total_amount, gst,
-                    discount, net_amount, payment_status, invoice_status, invoice_id, items,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(...historyParams);
-        } catch (e) {}
+        const dueDate = createdInvoice.due_date || '';
+        const invoiceType = createdInvoice.invoice_type || 'GST';
+        const paymentMode = createdInvoice.payment_mode || 'Cash';
+        const upiId = createdInvoice.upi_id || '';
+        const bankAccountId = createdInvoice.bank_account_id ? String(createdInvoice.bank_account_id) : '';
+        const customerGstin = createdInvoice.client_gstin || '';
+        const shippingAddress = createdInvoice.shipping_address || '';
 
         // 5. Automatically calculate Loyalty Points according to existing business rules
-        // Rule: Earn 1 point per 100 units of net bill amount (in active currency)
         const earnedPoints = Math.max(0, Math.floor(numTotal / 100));
         const redeemedPoints = Math.max(0, parseInt(createdInvoice.redeemed_points) || 0);
         const netPointsChange = earnedPoints - redeemedPoints;
+
+        // Formatted Purchased Products array
+        const formattedItems = (items || []).map(item => {
+            const desc = item.description || item.product_name || item.name || 'Item';
+            const qty = parseFloat(item.quantity) || 1;
+            const price = parseFloat(item.price || item.rate || item.unit_price) || 0;
+            const discPct = parseFloat(item.discount_percent) || 0;
+            const discAmt = parseFloat(item.discount_amount) || 0;
+            const gstPct = parseFloat(item.tax_rate || item.gst_percentage || item.gst_rate) || 0;
+            const gstAmt = parseFloat(item.tax_amount || item.gst_amount) || (qty * price * (gstPct / 100));
+            const total = parseFloat(item.total || item.amount) || ((qty * price) - discAmt + gstAmt);
+
+            return {
+                product_name: item.product_name || desc,
+                description: desc,
+                sku_hsn: item.hsn_code || item.sku || item.hsn_sac || '',
+                quantity: qty,
+                unit: item.unit || 'Pcs',
+                unit_price: price,
+                discount_percent: discPct,
+                discount_amount: discAmt,
+                gst_percent: gstPct,
+                gst_amount: gstAmt,
+                item_total: total
+            };
+        });
+        const itemsJson = JSON.stringify(formattedItems);
+
+        // 4. Automatically create/update Purchase History record (Duplicate Prevention)
+        const existingRecord = await db.prepare(
+            'SELECT id FROM customer_purchase_history WHERE invoice_number = ? AND merchant_business_id = ?'
+        ).get(invoiceNumber, merchantUserId);
+
+        if (existingRecord) {
+            await db.prepare(`
+                UPDATE customer_purchase_history SET
+                    invoice_type = ?, invoice_date = ?, due_date = ?, invoice_status = ?,
+                    payment_status = ?, payment_mode = ?, upi_id = ?, bank_account_id = ?,
+                    merchant_name = ?, merchant_email = ?, merchant_logo = ?,
+                    customer_name = ?, customer_email = ?, customer_gstin = ?, shipping_address = ?,
+                    subtotal = ?, total_amount = ?, gst = ?, discount = ?, round_off = ?,
+                    net_amount = ?, paid_amount = ?, due_amount = ?,
+                    points_earned = ?, points_redeemed = ?, net_points_added = ?,
+                    invoice_id = ?, items = ?, updated_at = ?
+                WHERE id = ?
+            `).run(
+                invoiceType, invoiceDate, dueDate, invoiceStatus,
+                paymentStatus, paymentMode, upiId, bankAccountId,
+                merchantName, merchantEmail, merchantLogo,
+                clientName, customerUser.email || clientEmail, customerGstin, shippingAddress,
+                numAmount, numTotal, numTax, numDiscount, numRoundOff,
+                numTotal, numPaid, numDue,
+                earnedPoints, redeemedPoints, netPointsChange,
+                invoiceId, itemsJson, now,
+                existingRecord.id
+            );
+        } else {
+            const insertParams = [
+                invoiceNumber, invoiceType, invoiceDate, dueDate, invoiceStatus,
+                paymentStatus, paymentMode, upiId, bankAccountId,
+                merchantUserId, merchantName, merchantEmail, merchantLogo,
+                customerUser.id, clientName, customerUser.email || clientEmail, customerGstin, shippingAddress,
+                numAmount, numTotal, numTax, numDiscount, numRoundOff,
+                numTotal, numPaid, numDue,
+                earnedPoints, redeemedPoints, netPointsChange,
+                invoiceId, itemsJson, now, now
+            ];
+
+            await db.prepare(`
+                INSERT INTO customer_purchase_history (
+                    invoice_number, invoice_type, invoice_date, due_date, invoice_status,
+                    payment_status, payment_mode, upi_id, bank_account_id,
+                    merchant_business_id, merchant_name, merchant_email, merchant_logo,
+                    customer_user_id, customer_name, customer_email, customer_gstin, shipping_address,
+                    subtotal, total_amount, gst, discount, round_off,
+                    net_amount, paid_amount, due_amount,
+                    points_earned, points_redeemed, net_points_added,
+                    invoice_id, items, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(...insertParams);
+
+            try {
+                await db.prepare(`
+                    INSERT INTO purchase_history (
+                        invoice_number, invoice_type, invoice_date, due_date, invoice_status,
+                        payment_status, payment_mode, upi_id, bank_account_id,
+                        merchant_business_id, merchant_name, merchant_email, merchant_logo,
+                        customer_user_id, customer_name, customer_email, customer_gstin, shipping_address,
+                        subtotal, total_amount, gst, discount, round_off,
+                        net_amount, paid_amount, due_amount,
+                        points_earned, points_redeemed, net_points_added,
+                        invoice_id, items, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(...insertParams);
+            } catch (e) {}
+        }
 
         // 6. Update Customer's Loyalty Wallet in central DB
         if (earnedPoints > 0 || redeemedPoints > 0) {
