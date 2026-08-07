@@ -7,6 +7,8 @@ const customerPurchaseController = {
         try {
             const userId = req.user.id;
             const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
+            const receiveDataParam = req.query.receiveData;
+            const isReceiveDataYes = !receiveDataParam || String(receiveDataParam).toUpperCase() === 'YES' || String(receiveDataParam) === 'true';
 
             const purchases = await db.prepare(`
                 SELECT * FROM customer_purchase_history 
@@ -14,7 +16,11 @@ const customerPurchaseController = {
                 ORDER BY created_at DESC, id DESC
             `).all(userId, userEmail);
 
-            const resultList = Array.isArray(purchases) ? purchases : [];
+            const rawList = Array.isArray(purchases) ? purchases : [];
+            const resultList = rawList.filter(p => {
+                const isSynced = (p.sendToCustomerHistory === 1 || p.sendToCustomerHistory === true || p.sendToCustomerHistory === undefined || p.sendToCustomerHistory === null);
+                return isReceiveDataYes ? isSynced : !isSynced;
+            });
 
             // Calculate merchant-specific loyalty totals (NOT global user balance)
             const merchantLoyaltyMap = {};
@@ -247,6 +253,8 @@ const customerPurchaseController = {
         try {
             const userId = req.user.id;
             const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
+            const receiveDataParam = req.query.receiveData;
+            const isReceiveDataYes = !receiveDataParam || String(receiveDataParam).toUpperCase() === 'YES' || String(receiveDataParam) === 'true';
 
             const purchases = await db.prepare(`
                 SELECT * FROM customer_purchase_history 
@@ -254,7 +262,11 @@ const customerPurchaseController = {
                 ORDER BY created_at DESC, id DESC
             `).all(userId, userEmail);
 
-            const resultList = Array.isArray(purchases) ? purchases : [];
+            const rawList = Array.isArray(purchases) ? purchases : [];
+            const resultList = rawList.filter(p => {
+                const isSynced = (p.sendToCustomerHistory === 1 || p.sendToCustomerHistory === true || p.sendToCustomerHistory === undefined || p.sendToCustomerHistory === null);
+                return isReceiveDataYes ? isSynced : !isSynced;
+            });
             const merchantMap = {};
 
             resultList.forEach(p => {

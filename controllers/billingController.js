@@ -93,7 +93,7 @@ const billingController = {
         const {
             invoice_number, client_name, client_email, client_gstin, billing_address, shipping_address,
             amount, tax_amount, total_amount, paid_amount, due_amount, bank_account_id,
-            discount_amount, round_off, status, due_date, payment_mode, invoice_type, tax_type, items
+            discount_amount, round_off, status, due_date, payment_mode, invoice_type, tax_type, sendToCustomerHistory, items
         } = req.body;
 
         if (!client_name) return sendError(res, 'Client name is required', 400);
@@ -107,6 +107,7 @@ const billingController = {
         const numDue = parseFloat(due_amount) || 0;
         const numDiscount = parseFloat(discount_amount) || 0;
         const numRoundOff = parseFloat(round_off) || 0;
+        const sendToCustVal = (sendToCustomerHistory === false || sendToCustomerHistory === 0 || sendToCustomerHistory === 'false' || sendToCustomerHistory === '0') ? 0 : 1;
 
         try {
             const now = new Date().toISOString();
@@ -127,21 +128,22 @@ const billingController = {
                 numPaid,
                 numDue,
                 numDiscount,
-                numRoundOff
+                numRoundOff,
+                sendToCustVal
             });
             const result = await db.prepare(`
                 INSERT INTO business_invoices (
                     user_id, invoice_number, client_name, client_email, client_gstin,
                     billing_address, shipping_address, amount, tax_amount, total_amount,
                     paid_amount, due_amount, bank_account_id, discount_amount, round_off,
-                    status, due_date, payment_mode, invoice_type, tax_type, items,
+                    status, due_date, payment_mode, invoice_type, tax_type, sendToCustomerHistory, items,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, invNum, client_name, client_email || null, client_gstin || null,
                 billing_address || null, shipping_address || null, numAmount, numTax, numTotal,
                 numPaid, numDue, bank_account_id || null, numDiscount, numRoundOff,
-                status || 'Draft', due_date, payment_mode || 'Cash', invoice_type || 'GST', tax_type || 'Exclusive',
+                status || 'Draft', due_date, payment_mode || 'Cash', invoice_type || 'GST', tax_type || 'Exclusive', sendToCustVal,
                 typeof items === 'string' ? items : JSON.stringify(items || []),
                 now, now
             );

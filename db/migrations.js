@@ -928,6 +928,7 @@ CREATE TABLE IF NOT EXISTS business_invoices (
   payment_mode TEXT,
   invoice_type TEXT,
   tax_type TEXT,
+  sendToCustomerHistory INTEGER DEFAULT 1,
   items TEXT, -- JSON string
   created_at TEXT,
   updated_at TEXT,
@@ -2166,6 +2167,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE business_invoices ADD COLUMN payment_mode TEXT',
       'ALTER TABLE business_invoices ADD COLUMN invoice_type TEXT',
       'ALTER TABLE business_invoices ADD COLUMN tax_type TEXT',
+      'ALTER TABLE business_invoices ADD COLUMN sendToCustomerHistory INTEGER DEFAULT 1',
       'ALTER TABLE warehouses ADD COLUMN code TEXT',
       'ALTER TABLE warehouses ADD COLUMN type TEXT',
       'ALTER TABLE warehouses ADD COLUMN status TEXT DEFAULT \'active\'',
@@ -2477,6 +2479,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
         points_earned INTEGER DEFAULT 0,
         points_redeemed INTEGER DEFAULT 0,
         net_points_added INTEGER DEFAULT 0,
+        sendToCustomerHistory INTEGER DEFAULT 1,
         invoice_id INTEGER,
         items TEXT,
         created_at TEXT,
@@ -2540,6 +2543,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE customer_purchase_history ADD COLUMN points_earned INTEGER DEFAULT 0',
       'ALTER TABLE customer_purchase_history ADD COLUMN points_redeemed INTEGER DEFAULT 0',
       'ALTER TABLE customer_purchase_history ADD COLUMN net_points_added INTEGER DEFAULT 0',
+      'ALTER TABLE customer_purchase_history ADD COLUMN sendToCustomerHistory INTEGER DEFAULT 1',
 
       'ALTER TABLE purchase_history ADD COLUMN invoice_type TEXT',
       'ALTER TABLE purchase_history ADD COLUMN due_date TEXT',

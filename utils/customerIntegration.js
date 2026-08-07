@@ -54,6 +54,16 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
             }
         }
 
+        // Check sendToCustomerHistory rule: Synchronization is only allowed if sendToCustomerHistory is true
+        const isSendToCustomer = createdInvoice.sendToCustomerHistory !== undefined
+            ? (createdInvoice.sendToCustomerHistory === true || createdInvoice.sendToCustomerHistory === 1 || createdInvoice.sendToCustomerHistory === 'true' || createdInvoice.sendToCustomerHistory === '1')
+            : true;
+
+        if (!isSendToCustomer) {
+            console.log(`[Customer Integration] sendToCustomerHistory is false for invoice #${invoiceNumber}. Skipping synchronization to customer CLIKS account.`);
+            return;
+        }
+
         // If no email was entered in the invoice, continue normal workflow quietly
         if (!clientEmail) return;
 
@@ -170,7 +180,7 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
                 customerUser.id, clientName, customerUser.email || clientEmail, customerGstin, shippingAddress,
                 numAmount, numTotal, numTax, numDiscount, numRoundOff,
                 numTotal, numPaid, numDue,
-                earnedPoints, redeemedPoints, netPointsChange,
+                earnedPoints, redeemedPoints, netPointsChange, 1,
                 invoiceId, itemsJson, now, now
             ];
 
@@ -182,9 +192,9 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
                     customer_user_id, customer_name, customer_email, customer_gstin, shipping_address,
                     subtotal, total_amount, gst, discount, round_off,
                     net_amount, paid_amount, due_amount,
-                    points_earned, points_redeemed, net_points_added,
+                    points_earned, points_redeemed, net_points_added, sendToCustomerHistory,
                     invoice_id, items, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(...insertParams);
 
             try {
@@ -196,9 +206,9 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
                         customer_user_id, customer_name, customer_email, customer_gstin, shipping_address,
                         subtotal, total_amount, gst, discount, round_off,
                         net_amount, paid_amount, due_amount,
-                        points_earned, points_redeemed, net_points_added,
+                        points_earned, points_redeemed, net_points_added, sendToCustomerHistory,
                         invoice_id, items, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(...insertParams);
             } catch (e) {}
         }
