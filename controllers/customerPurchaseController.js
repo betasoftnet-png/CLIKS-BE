@@ -5,6 +5,10 @@ const customerPurchaseController = {
     // 1. Get Purchase History for authenticated customer (with Merchant-Specific Loyalty calculations)
     getPurchaseHistory: async (req, res) => {
         try {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+
             const userId = req.user.id;
             const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
             const receiveDataParam = req.query.receiveData;
@@ -62,6 +66,12 @@ const customerPurchaseController = {
             resultList.forEach(p => {
                 p.invoiceId = p.invoice_id || p.id;
                 p.invoice_id = p.invoice_id || p.id;
+                p.sendToCustomerHistory = true;
+                p.send_to_customer_history = true;
+                p.sendPurchaseHistoryToCustomer = true;
+                p.grand_total = p.net_amount || p.total_amount;
+                p.timestamp = p.created_at || p.invoice_date;
+
                 if (p.items && typeof p.items === 'string') {
                     try { p.items = JSON.parse(p.items); } catch (e) { p.items = []; }
                 }
@@ -91,6 +101,10 @@ const customerPurchaseController = {
     // 2. Get Single Purchase / Invoice Details by ID for customer
     getPurchaseDetailsById: async (req, res) => {
         try {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+
             const { id } = req.params;
 
             // 1. Check business_invoices table by ID or invoice_number
@@ -222,6 +236,10 @@ const customerPurchaseController = {
     // 3. Get Customer Loyalty Wallet and Transactions
     getLoyaltyWallet: async (req, res) => {
         try {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+
             const userId = req.user.id;
 
             let wallet = await db.prepare(
@@ -255,10 +273,13 @@ const customerPurchaseController = {
         }
     },
 
-<<<<<<< HEAD
     // 4. Get Merchant Summary Cards for Customer (Merchant-Specific Loyalty Totals)
     getMerchantSummary: async (req, res) => {
         try {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+
             const userId = req.user.id;
             const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
             const receiveDataParam = req.query.receiveData;
@@ -326,6 +347,10 @@ const customerPurchaseController = {
     // 5. Get Merchant-specific Purchase History (History Popup filtered for a single merchant)
     getMerchantHistory: async (req, res) => {
         try {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+
             const { merchantId } = req.params;
             const userId = req.user.id;
             const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
@@ -346,6 +371,12 @@ const customerPurchaseController = {
             resultList.forEach(p => {
                 p.invoiceId = p.invoice_id || p.id;
                 p.invoice_id = p.invoice_id || p.id;
+                p.sendToCustomerHistory = true;
+                p.send_to_customer_history = true;
+                p.sendPurchaseHistoryToCustomer = true;
+                p.grand_total = p.net_amount || p.total_amount;
+                p.timestamp = p.created_at || p.invoice_date;
+
                 if (p.items && typeof p.items === 'string') {
                     try { p.items = JSON.parse(p.items); } catch (e) { p.items = []; }
                 }
@@ -377,10 +408,16 @@ const customerPurchaseController = {
         } catch (error) {
             console.error('[Customer Purchase Controller] getMerchantHistory error:', error);
             return sendError(res, 'Failed to fetch merchant history', 500);
-=======
-    // 3. Get Full Invoice Details for Customer
+        }
+    },
+
+    // 6. Get Full Invoice Details for Customer
     getInvoiceDetails: async (req, res) => {
         try {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+
             const { id } = req.params; // business_invoices.id
             const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
 
@@ -398,10 +435,16 @@ const customerPurchaseController = {
             const merchant = await db.prepare('SELECT business_name, email FROM users WHERE id = ?').get(invoice.user_id);
 
             // Fetch payments
-            const payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ?').all(id);
+            let payments = [];
+            try {
+                payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ?').all(id);
+            } catch (e) {}
 
             // Loyalty Earned from this invoice
-            const loyalty = await db.prepare('SELECT points FROM loyalty_transactions WHERE invoice_id = ? AND wallet_id = (SELECT id FROM loyalty_wallets WHERE user_id = ?)').get(id, req.user.id);
+            let loyalty = null;
+            try {
+                loyalty = await db.prepare('SELECT points FROM loyalty_transactions WHERE invoice_id = ? AND wallet_id = (SELECT id FROM loyalty_wallets WHERE user_id = ?)').get(id, req.user.id);
+            } catch (e) {}
 
             if (invoice.items && typeof invoice.items === 'string') {
                 try { invoice.items = JSON.parse(invoice.items); } catch (e) { invoice.items = []; }
@@ -420,7 +463,6 @@ const customerPurchaseController = {
         } catch (error) {
             console.error('[Customer Purchase Controller] getInvoiceDetails error:', error);
             return sendError(res, 'Failed to fetch invoice details', 500);
->>>>>>> d86dbfd (purchase details updates)
         }
     }
 };

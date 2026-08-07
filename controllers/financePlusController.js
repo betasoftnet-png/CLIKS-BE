@@ -390,15 +390,38 @@ const deleteMoneyTracker = async (req, res) => {
 
 // ── Customer Purchase History & Loyalty ───────────────────────────────────────
 const getCustomerPurchases = async (req, res) => {
-  const purchases = await db.prepare('SELECT * FROM customer_purchase_history WHERE customer_user_id = ? ORDER BY created_at DESC').all(req.user.id);
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
-  // Normalize fields to match frontend expectations
-  const normalized = purchases.map(p => ({
+  const userId = req.user.id;
+  const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
+
+  const purchases = await db.prepare(`
+    SELECT * FROM customer_purchase_history 
+    WHERE customer_user_id = ? OR LOWER(customer_email) = ? 
+    ORDER BY created_at DESC, id DESC
+  `).all(userId, userEmail);
+
+  const rawList = Array.isArray(purchases) ? purchases : [];
+
+  const filtered = rawList.filter(p => {
+    const s1 = p.sendToCustomerHistory;
+    const s2 = p.sendPurchaseHistoryToCustomer;
+    return (s1 === true || s1 === 1 || String(s1) === '1' || String(s1).toLowerCase() === 'true' || s1 === undefined || s1 === null) &&
+           (s2 === true || s2 === 1 || String(s2) === '1' || String(s2).toLowerCase() === 'true' || s2 === undefined || s2 === null);
+  });
+
+  // Normalize fields to match frontend expectations and guarantee records are not discarded
+  const normalized = filtered.map(p => ({
     ...p,
+    sendToCustomerHistory: true,
+    send_to_customer_history: true,
+    sendPurchaseHistoryToCustomer: true,
     grand_total: p.net_amount || p.total_amount,
-    purchase_status: p.invoice_status,
-    points_earned: Math.floor((p.net_amount || p.total_amount) / 100),
-    timestamp: p.created_at
+    purchase_status: p.invoice_status || 'Paid',
+    points_earned: parseInt(p.points_earned) || Math.floor((p.net_amount || p.total_amount) / 100),
+    timestamp: p.created_at || p.invoice_date
   }));
 
   return sendSuccess(res, normalized);

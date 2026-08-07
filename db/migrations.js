@@ -2527,6 +2527,8 @@ CREATE TABLE IF NOT EXISTS money_trackers (
         points_earned INTEGER DEFAULT 0,
         points_redeemed INTEGER DEFAULT 0,
         net_points_added INTEGER DEFAULT 0,
+        sendToCustomerHistory INTEGER DEFAULT 1,
+        sendPurchaseHistoryToCustomer INTEGER DEFAULT 1,
         invoice_id INTEGER,
         items TEXT,
         send_to_customer_history INTEGER DEFAULT 1,
@@ -2570,7 +2572,9 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE purchase_history ADD COLUMN due_amount REAL DEFAULT 0',
       'ALTER TABLE purchase_history ADD COLUMN points_earned INTEGER DEFAULT 0',
       'ALTER TABLE purchase_history ADD COLUMN points_redeemed INTEGER DEFAULT 0',
-      'ALTER TABLE purchase_history ADD COLUMN net_points_added INTEGER DEFAULT 0'
+      'ALTER TABLE purchase_history ADD COLUMN net_points_added INTEGER DEFAULT 0',
+      'ALTER TABLE purchase_history ADD COLUMN sendToCustomerHistory INTEGER DEFAULT 1',
+      'ALTER TABLE purchase_history ADD COLUMN sendPurchaseHistoryToCustomer INTEGER DEFAULT 1'
     ];
 
     for (const altSql of purchaseAlters) {
@@ -2649,6 +2653,44 @@ CREATE TABLE IF NOT EXISTS money_trackers (
         points_redeemed INTEGER DEFAULT 0,
         description TEXT,
         created_at TEXT
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS merchant_summary (
+        id ${idType},
+        merchant_business_id INTEGER NOT NULL,
+        merchant_name TEXT,
+        merchant_email TEXT,
+        merchant_logo TEXT,
+        customer_user_id INTEGER NOT NULL,
+        customer_email TEXT,
+        purchases_count INTEGER DEFAULT 0,
+        total_spent REAL DEFAULT 0,
+        points_earned INTEGER DEFAULT 0,
+        points_redeemed INTEGER DEFAULT 0,
+        net_points INTEGER DEFAULT 0,
+        last_purchase_date TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        UNIQUE(merchant_business_id, customer_user_id)
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS active_integrations (
+        id ${idType},
+        user_id INTEGER NOT NULL,
+        integration_name TEXT DEFAULT 'CLIKS Business Invoice Sync',
+        integration_type TEXT DEFAULT 'merchant_sync',
+        merchant_business_id INTEGER,
+        merchant_name TEXT,
+        customer_user_id INTEGER,
+        customer_email TEXT,
+        status TEXT DEFAULT 'Active',
+        last_synced_at TEXT,
+        created_at TEXT,
+        updated_at TEXT
       )
     `).run();
 
