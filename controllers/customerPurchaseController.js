@@ -18,7 +18,14 @@ const customerPurchaseController = {
 
             const rawList = Array.isArray(purchases) ? purchases : [];
             const resultList = rawList.filter(p => {
-                const isSynced = (p.sendToCustomerHistory === 1 || p.sendToCustomerHistory === true || p.sendToCustomerHistory === undefined || p.sendToCustomerHistory === null);
+                const sendVal1 = p.sendPurchaseHistoryToCustomer;
+                const sendVal2 = p.sendToCustomerHistory;
+                const isSynced = (
+                    sendVal1 === 1 || sendVal1 === true || String(sendVal1) === '1' || String(sendVal1).toLowerCase() === 'true' ||
+                    sendVal2 === 1 || sendVal2 === true || String(sendVal2) === '1' || String(sendVal2).toLowerCase() === 'true' ||
+                    (sendVal1 === undefined && sendVal2 === undefined) ||
+                    (sendVal1 === null && sendVal2 === null)
+                );
                 return isReceiveDataYes ? isSynced : !isSynced;
             });
 
@@ -264,7 +271,14 @@ const customerPurchaseController = {
 
             const rawList = Array.isArray(purchases) ? purchases : [];
             const resultList = rawList.filter(p => {
-                const isSynced = (p.sendToCustomerHistory === 1 || p.sendToCustomerHistory === true || p.sendToCustomerHistory === undefined || p.sendToCustomerHistory === null);
+                const sendVal1 = p.sendPurchaseHistoryToCustomer;
+                const sendVal2 = p.sendToCustomerHistory;
+                const isSynced = (
+                    sendVal1 === 1 || sendVal1 === true || String(sendVal1) === '1' || String(sendVal1).toLowerCase() === 'true' ||
+                    sendVal2 === 1 || sendVal2 === true || String(sendVal2) === '1' || String(sendVal2).toLowerCase() === 'true' ||
+                    (sendVal1 === undefined && sendVal2 === undefined) ||
+                    (sendVal1 === null && sendVal2 === null)
+                );
                 return isReceiveDataYes ? isSynced : !isSynced;
             });
             const merchantMap = {};
