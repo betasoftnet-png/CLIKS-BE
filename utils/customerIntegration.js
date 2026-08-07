@@ -70,15 +70,25 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
         if (!clientEmail) return;
 
         // 2. Check whether the customer's email entered in the invoice exists as a registered CLIKS user (case-insensitive)
-        const emailLower = clientEmail.toLowerCase();
-        const customerUser = await db.prepare(
+        const emailLower = clientEmail.toLowerCase().trim();
+        let customerUser = await db.prepare(
             'SELECT * FROM users WHERE LOWER(email) = ?'
         ).get(emailLower);
 
-        // If no matching CLIKS account exists, continue normal invoice workflow without any changes
+        // If no matching CLIKS user account exists, auto-create customer user record so purchase history, loyalty, merchant card, and invoice sync immediately
         if (!customerUser) {
-            console.log(`[Customer Integration] No registered CLIKS user for ${clientEmail}. Continuing standard workflow.`);
-            return;
+            console.log(`[Customer Integration] Auto-registering customer user entry for ${emailLower}...`);
+            const defaultName = clientName || emailLower.split('@')[0];
+            try {
+                const insertUserRes = await db.prepare(`
+                    INSERT INTO users (username, email, password_hash, role, receive_data, receiveData, loyalty_points, created_at, updated_at)
+                    VALUES (?, ?, 'sso-managed', 'user', 1, 1, 0, ?, ?)
+                `).run(defaultName, emailLower, now, now);
+                customerUser = await db.prepare('SELECT * FROM users WHERE id = ?').get(insertUserRes.lastInsertRowid);
+            } catch (err) {
+                console.error('[Customer Integration] Error auto-creating customer user:', err);
+                customerUser = await db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(emailLower);
+            }
         }
 
         // 3. Two-Way Consent Check: Customer Receive Data Permission
