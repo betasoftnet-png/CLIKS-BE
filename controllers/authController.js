@@ -79,7 +79,16 @@ const ssoLogin = async (req, res) => {
   const now = new Date().toISOString();
   await db.prepare('UPDATE users SET is_online = 1, login_at = ?, last_seen_at = ? WHERE id = ?').run(now, now, user.id);
 
-  const safeUser = { id: user.id, username: user.username, email: user.email, role: user.role, tier: user.tier, subscription_days_remaining: user.subscription_days_remaining, created_at: user.created_at };
+  const safeUser = {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    role: user.role,
+    tier: user.tier,
+    subscription_days_remaining: user.subscription_days_remaining,
+    receive_purchase_data: user.receive_purchase_data,
+    created_at: user.created_at
+  };
   return sendSuccess(res, { accessToken, refreshToken, user: safeUser }, 'SSO login successful', 200);
 };
 

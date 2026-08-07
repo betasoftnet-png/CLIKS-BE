@@ -119,6 +119,12 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
             return;
         }
 
+        // Requirement: Only sync if BOTH merchant (sendToCustomerHistory) AND customer (receive_purchase_data) are true
+        if (customerUser.receive_purchase_data === 0) {
+            console.log(`[Customer Integration] Skipping sync for invoice #${invoiceNumber} - Customer #${customerUser.id} has disabled Receive Data`);
+            return;
+        }
+
         // 3. Matching CLIKS user account exists! Fetch Merchant Info
         const merchantUser = await db.prepare(
             'SELECT id, username, business_name, email FROM users WHERE id = ?'

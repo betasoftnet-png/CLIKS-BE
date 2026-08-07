@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
   gst_username TEXT,
   gst_password TEXT,
   is_online INTEGER DEFAULT 0,
+  receive_purchase_data INTEGER DEFAULT 1,
   last_seen_at TEXT,
   login_at TEXT,
   created_at TEXT,
@@ -2286,6 +2287,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE business_customers ADD COLUMN due_days INTEGER DEFAULT 30',
       'ALTER TABLE business_customers ADD COLUMN preferred_contact TEXT',
       'ALTER TABLE business_customers ADD COLUMN reminder_enabled INTEGER DEFAULT 1',
+      'ALTER TABLE users ADD COLUMN receive_purchase_data INTEGER DEFAULT 1',
       'ALTER TABLE audit_logs ADD COLUMN user_id INTEGER',
       'ALTER TABLE audit_logs ADD COLUMN role TEXT',
       'ALTER TABLE audit_logs ADD COLUMN action TEXT',
@@ -2487,6 +2489,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
         sendPurchaseHistoryToCustomer INTEGER DEFAULT 1,
         invoice_id INTEGER,
         items TEXT,
+        send_to_customer_history INTEGER DEFAULT 1,
         created_at TEXT,
         updated_at TEXT
       )
@@ -2526,6 +2529,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
         net_points_added INTEGER DEFAULT 0,
         invoice_id INTEGER,
         items TEXT,
+        send_to_customer_history INTEGER DEFAULT 1,
         created_at TEXT,
         updated_at TEXT
       )

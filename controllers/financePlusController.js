@@ -193,7 +193,7 @@ const markNotificationRead = async (req, res) => {
 
 // ── Role-Based Settings & Global Budget ───────────────────────────────────────
 const updateFinanceSettings = async (req, res) => {
-  const { source, global_budget } = req.body;
+  const { source, global_budget, receive_purchase_data } = req.body;
   const updates = [];
   const params = [];
 
@@ -205,6 +205,11 @@ const updateFinanceSettings = async (req, res) => {
   if (global_budget !== undefined) {
     updates.push('global_budget = ?');
     params.push(global_budget);
+  }
+
+  if (receive_purchase_data !== undefined) {
+    updates.push('receive_purchase_data = ?');
+    params.push(receive_purchase_data ? 1 : 0);
   }
 
   if (updates.length > 0) {
@@ -459,11 +464,11 @@ const getInvoiceDetails = async (req, res) => {
           invoice.grand_total ||
           invoice.amount || 0;
 
-      const earnedPoints = Math.floor(baseAmount / 100);
+      const earnedPoints = Math.floor(parseFloat(baseAmount) / 100);
 
       // Also try to find if there was a redemption in the transaction record
       const loyaltyTx = await db.prepare(`
-          SELECT points_redeemed
+          SELECT points_earned, points_redeemed
           FROM customer_loyalty_transactions
           WHERE user_id = ? AND (invoice_number = ? OR invoice_number = ?)
       `).get(userId, invoice.invoice_number, purchaseRecord.invoice_number);

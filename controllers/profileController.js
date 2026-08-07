@@ -10,7 +10,8 @@ const initColumns = async () => {
   const columns = [
     'tier TEXT DEFAULT \'Free Plan\'',
     'subscription_days_remaining INTEGER DEFAULT 0',
-    'favorite_products TEXT'
+    'favorite_products TEXT',
+    'receive_purchase_data INTEGER DEFAULT 1'
   ];
   for (const col of columns) {
     try {
