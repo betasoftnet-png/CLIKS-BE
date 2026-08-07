@@ -8,6 +8,12 @@ const { getIO } = require('../socketServer');
 async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserId }) {
     if (!createdInvoice) return;
 
+    // Requirement: Only sync if sendToCustomerHistory is true
+    if (createdInvoice.sendToCustomerHistory === false || createdInvoice.sendToCustomerHistory === 'false' || createdInvoice.sendToCustomerHistory === 0) {
+        console.log(`[Customer Integration] Skipping sync for invoice #${createdInvoice.invoice_number} - sendToCustomerHistory is OFF`);
+        return;
+    }
+
     try {
         const now = new Date().toISOString();
         const invoiceId = createdInvoice.id;

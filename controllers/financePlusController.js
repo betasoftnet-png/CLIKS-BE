@@ -449,22 +449,24 @@ const getInvoiceDetails = async (req, res) => {
       // Fetch all payment installments
       const payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ? ORDER BY payment_date DESC').all(id);
 
-      // Loyalty Calculation - ENSURE CONSISTENCY with history card and loyalty transactions
-      // Priority 1: Official loyalty transaction record
+      // Loyalty Calculation - MUST match getCustomerPurchases exactly for consistency
+      // getCustomerPurchases uses: Math.floor((p.net_amount || p.total_amount) / 100)
+
+      const baseAmount =
+          purchaseRecord.net_amount ||
+          purchaseRecord.total_amount ||
+          invoice.total_amount ||
+          invoice.grand_total ||
+          invoice.amount || 0;
+
+      const earnedPoints = Math.floor(baseAmount / 100);
+
+      // Also try to find if there was a redemption in the transaction record
       const loyaltyTx = await db.prepare(`
-          SELECT points_earned, points_redeemed
+          SELECT points_redeemed
           FROM customer_loyalty_transactions
           WHERE user_id = ? AND (invoice_number = ? OR invoice_number = ?)
       `).get(userId, invoice.invoice_number, purchaseRecord.invoice_number);
-
-      // Priority 2: Recalculate using same logic as getCustomerPurchases
-      const baseAmount = purchaseRecord.net_amount ||
-                         purchaseRecord.total_amount ||
-                         invoice.total_amount ||
-                         invoice.grand_total ||
-                         invoice.amount || 0;
-
-      const earnedPoints = loyaltyTx?.points_earned !== undefined ? loyaltyTx.points_earned : Math.floor(parseFloat(baseAmount) / 100);
 
       // Parse JSON items
       let parsedItems = [];
