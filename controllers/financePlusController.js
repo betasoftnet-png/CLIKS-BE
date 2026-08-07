@@ -500,18 +500,20 @@ const getInvoiceDetails = async (req, res) => {
           userEmail = user?.email ? user.email.toLowerCase().trim() : '';
       }
 
+<<<<<<< HEAD
       let purchaseRecord = await db.prepare(`
           SELECT *, net_amount, total_amount
           FROM customer_purchase_history
-          WHERE (id = ? OR invoice_id = ?) ${userId ? 'AND (customer_user_id = ? OR (customer_email IS NOT NULL AND LOWER(customer_email) = ?))' : ''}
-      `).get(...(userId ? [targetId, targetId, userId, userEmail] : [targetId, targetId]));
+          WHERE (id = ? OR invoice_id = ? OR invoice_number = ?)
+            ${userId ? 'AND (customer_user_id = ? OR (customer_email IS NOT NULL AND LOWER(customer_email) = ?))' : ''}
+      `).get(...(userId ? [targetId, targetId, targetId, userId, userEmail] : [targetId, targetId, targetId]));
 
       // Fallback: If not matched directly by customer_user_id/email, check if connection is accepted
-      if (!purchaseRecord) {
+      if (!purchaseRecord && userId) {
           const rec = await db.prepare(`
               SELECT *, net_amount, total_amount FROM customer_purchase_history
-              WHERE id = ? OR invoice_id = ?
-          `).get(targetId, targetId);
+              WHERE id = ? OR invoice_id = ? OR invoice_number = ?
+          `).get(targetId, targetId, targetId);
 
           if (rec) {
               const conn = await db.prepare(`
@@ -533,8 +535,8 @@ const getInvoiceDetails = async (req, res) => {
       }
 
       if (!invoice) {
-          invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(targetId);
-          if (invoice) {
+          invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ? OR invoice_number = ?').get(targetId, targetId);
+          if (invoice && userId) {
               const conn = await db.prepare(`
                   SELECT status FROM customer_connections
                   WHERE business_id = ? AND (website_user_id = ? OR (customer_email IS NOT NULL AND LOWER(customer_email) = ?))
@@ -579,23 +581,23 @@ const getInvoiceDetails = async (req, res) => {
           payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ? ORDER BY payment_date DESC').all(invoice.id || targetId);
       } catch (e) {}
 
-      // Loyalty Calculation - ENSURE CONSISTENCY with history card and loyalty transactions
-      // Priority 1: Official loyalty transaction record
-      // getCustomerPurchases uses: Math.floor((p.net_amount || p.total_amount) / 100)
-      const loyaltyTx = await db.prepare(`
-          SELECT points_earned, points_redeemed
-          FROM customer_loyalty_transactions
-          WHERE user_id = ? AND (invoice_number = ? OR invoice_number = ?)
-      `).get(userId, invoice?.invoice_number, purchaseRecord?.invoice_number);
+      // Loyalty Calculation - MUST match getCustomerPurchases exactly for consistency
+      let loyaltyTx = null;
+      try {
+          loyaltyTx = await db.prepare(`
+              SELECT points_earned, points_redeemed
+              FROM customer_loyalty_transactions
+              WHERE user_id = ? AND (invoice_number = ? OR invoice_number = ?)
+          `).get(userId, invoice?.invoice_number, purchaseRecord?.invoice_number);
+      } catch (e) {}
 
-      // Priority 2: Recalculate using same logic as getCustomerPurchases
       const baseAmount = purchaseRecord?.net_amount ||
                          purchaseRecord?.total_amount ||
                          invoice?.total_amount ||
                          invoice?.grand_total ||
                          invoice?.amount || 0;
 
-      const earnedPoints = loyaltyTx?.points_earned !== undefined ? loyaltyTx.points_earned : Math.floor(parseFloat(baseAmount) / 100);
+      const earnedPoints = (loyaltyTx && loyaltyTx.points_earned !== undefined) ? loyaltyTx.points_earned : Math.floor(parseFloat(baseAmount) / 100);
 
       // Parse JSON items
       let parsedItems = [];
@@ -616,7 +618,7 @@ const getInvoiceDetails = async (req, res) => {
           grand_total: invoice.grand_total || invoice.total_amount || purchaseRecord?.net_amount || 0,
           amount: invoice.amount || invoice.subtotal || purchaseRecord?.total_amount || 0,
           merchant: {
-              name: merchant?.business_name || invoice.merchant_name || 'CLIKS Merchant',
+              name: merchant?.business_name || invoice.merchant_name || purchaseRecord.merchant_name || 'CLIKS Merchant',
               email: merchant?.email || 'N/A',
               logo: null
           },
