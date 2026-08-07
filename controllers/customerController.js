@@ -90,12 +90,15 @@ const customerController = {
             const normalized = (customers || []).map(c => {
                 const phoneVal = c.phone_number || c.phone || '';
                 const panVal = c.pan_number || c.pan || '';
+                const addrVal = c.billing_address || c.address || '';
                 return {
                     ...c,
                     phone: phoneVal,
                     phone_number: phoneVal,
                     pan: panVal,
-                    pan_number: panVal
+                    pan_number: panVal,
+                    address: addrVal,
+                    billing_address: addrVal
                 };
             });
 
@@ -123,12 +126,15 @@ const customerController = {
             }
             const phoneVal = customer.phone_number || customer.phone || '';
             const panVal = customer.pan_number || customer.pan || '';
+            const addrVal = customer.billing_address || customer.address || '';
             const normalized = {
                 ...customer,
                 phone: phoneVal,
                 phone_number: phoneVal,
                 pan: panVal,
-                pan_number: panVal
+                pan_number: panVal,
+                address: addrVal,
+                billing_address: addrVal
             };
             return sendSuccess(res, normalized, 'Customer fetched successfully');
         } catch (error) {
@@ -145,6 +151,7 @@ const customerController = {
             const alters = [
                 'ALTER TABLE business_customers ADD COLUMN phone_number TEXT',
                 'ALTER TABLE business_customers ADD COLUMN pan_number TEXT',
+                'ALTER TABLE business_customers ADD COLUMN billing_address TEXT',
                 'ALTER TABLE business_customers ADD COLUMN alternate_phone TEXT',
                 'ALTER TABLE business_customers ADD COLUMN current_balance REAL DEFAULT 0'
             ];
@@ -176,7 +183,9 @@ const customerController = {
             const customer_type = body.customer_type || null;
             const tax_type = body.tax_type || null;
             const place_of_supply = body.place_of_supply || null;
-            const address = body.address || body.billing_address || null;
+            const addrVal = body.billing_address || body.address || null;
+            const address = addrVal;
+            const billing_address = addrVal;
             const shipping_address = body.shipping_address || null;
             const city = body.city || null;
             const state = body.state || null;
@@ -196,16 +205,16 @@ const customerController = {
             const sql = `
                 INSERT INTO business_customers (
                     user_id, name, company, business_name, contact_person, gstin, pan, pan_number, email, phone, phone_number,
-                    alternate_phone, website, customer_type, tax_type, place_of_supply, address, 
+                    alternate_phone, website, customer_type, tax_type, place_of_supply, address, billing_address,
                     shipping_address, city, state, country, pincode, opening_balance, credit_limit, 
                     status, customer_code, due_days, notes, preferred_contact, reminder_enabled, 
                     loyalty_points, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const params = [
                 userId, name, company, business_name, contact_person, gstin, pan, pan_number, email, phone, phone_number,
-                alternate_phone, website, customer_type, tax_type, place_of_supply, address,
+                alternate_phone, website, customer_type, tax_type, place_of_supply, address, billing_address,
                 shipping_address, city, state, country, pincode, opening_balance, credit_limit,
                 status, customer_code, due_days, notes, preferred_contact, reminder_enabled,
                 loyalty_points, now, now
@@ -218,7 +227,9 @@ const customerController = {
                 phone: phoneVal,
                 phone_number: phoneVal,
                 pan: panVal,
-                pan_number: panVal
+                pan_number: panVal,
+                address: addrVal,
+                billing_address: addrVal
             };
 
             await logAuditEvent(req, {
@@ -270,6 +281,14 @@ const customerController = {
                 params.push(inputPan);
             }
 
+            const inputAddr = body.billing_address !== undefined ? body.billing_address : body.address;
+            if (inputAddr !== undefined) {
+                updates.push('address = ?');
+                params.push(inputAddr);
+                updates.push('billing_address = ?');
+                params.push(inputAddr);
+            }
+
             if (body.alternate_phone !== undefined) { updates.push('alternate_phone = ?'); params.push(body.alternate_phone); }
             if (body.name !== undefined) { updates.push('name = ?'); params.push(body.name); }
             if (body.email !== undefined) { updates.push('email = ?'); params.push(body.email); }
@@ -281,7 +300,6 @@ const customerController = {
             if (body.customer_type !== undefined) { updates.push('customer_type = ?'); params.push(body.customer_type); }
             if (body.tax_type !== undefined) { updates.push('tax_type = ?'); params.push(body.tax_type); }
             if (body.place_of_supply !== undefined) { updates.push('place_of_supply = ?'); params.push(body.place_of_supply); }
-            if (body.address !== undefined || body.billing_address !== undefined) { updates.push('address = ?'); params.push(body.address !== undefined ? body.address : body.billing_address); }
             if (body.shipping_address !== undefined) { updates.push('shipping_address = ?'); params.push(body.shipping_address); }
             if (body.city !== undefined) { updates.push('city = ?'); params.push(body.city); }
             if (body.state !== undefined) { updates.push('state = ?'); params.push(body.state); }
@@ -310,12 +328,15 @@ const customerController = {
             const updated = await db.prepare('SELECT * FROM business_customers WHERE id = ?').get(id);
             const phoneVal = updated.phone_number || updated.phone || '';
             const panVal = updated.pan_number || updated.pan || '';
+            const addrVal = updated.billing_address || updated.address || '';
             const normalized = {
                 ...updated,
                 phone: phoneVal,
                 phone_number: phoneVal,
                 pan: panVal,
-                pan_number: panVal
+                pan_number: panVal,
+                address: addrVal,
+                billing_address: addrVal
             };
 
             await logAuditEvent(req, {
