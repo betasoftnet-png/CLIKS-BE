@@ -2279,6 +2279,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE business_customers ADD COLUMN contact_person TEXT',
       'ALTER TABLE business_customers ADD COLUMN alternate_phone TEXT',
       'ALTER TABLE business_customers ADD COLUMN phone_number TEXT',
+      'ALTER TABLE business_customers ADD COLUMN pan_number TEXT',
       'ALTER TABLE business_customers ADD COLUMN current_balance REAL DEFAULT 0',
       'ALTER TABLE business_customers ADD COLUMN website TEXT',
       'ALTER TABLE business_customers ADD COLUMN customer_type TEXT',
