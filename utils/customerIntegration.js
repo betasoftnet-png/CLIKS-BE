@@ -54,13 +54,15 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
             }
         }
 
-        // Check sendToCustomerHistory rule: Synchronization is only allowed if sendToCustomerHistory is true
-        const isSendToCustomer = createdInvoice.sendToCustomerHistory !== undefined
-            ? (createdInvoice.sendToCustomerHistory === true || createdInvoice.sendToCustomerHistory === 1 || createdInvoice.sendToCustomerHistory === 'true' || createdInvoice.sendToCustomerHistory === '1')
-            : true;
+        // 1. Merchant permission check: sendPurchaseHistoryToCustomer
+        const merchantPermission = createdInvoice.sendPurchaseHistoryToCustomer !== undefined
+            ? (createdInvoice.sendPurchaseHistoryToCustomer === true || createdInvoice.sendPurchaseHistoryToCustomer === 1 || createdInvoice.sendPurchaseHistoryToCustomer === 'true' || createdInvoice.sendPurchaseHistoryToCustomer === '1')
+            : (createdInvoice.sendToCustomerHistory !== undefined
+                ? (createdInvoice.sendToCustomerHistory === true || createdInvoice.sendToCustomerHistory === 1 || createdInvoice.sendToCustomerHistory === 'true' || createdInvoice.sendToCustomerHistory === '1')
+                : true);
 
-        if (!isSendToCustomer) {
-            console.log(`[Customer Integration] sendToCustomerHistory is false for invoice #${invoiceNumber}. Skipping synchronization to customer CLIKS account.`);
+        if (!merchantPermission) {
+            console.log(`[Customer Integration] Merchant permission = NO (sendPurchaseHistoryToCustomer = false) for invoice #${invoiceNumber}. Skipping synchronization, purchase history, loyalty points, merchant history, and notifications.`);
             return;
         }
 
@@ -76,6 +78,28 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
         // If no matching CLIKS account exists, continue normal invoice workflow without any changes
         if (!customerUser) {
             console.log(`[Customer Integration] No registered CLIKS user for ${clientEmail}. Continuing standard workflow.`);
+            return;
+        }
+
+        // 3. Two-Way Consent Check: Customer Receive Data Permission
+        let customerReceiveData = true; // Default = YES
+        if (customerUser.receive_data !== undefined && customerUser.receive_data !== null) {
+            customerReceiveData = customerUser.receive_data === true || customerUser.receive_data === 1 || String(customerUser.receive_data).toUpperCase() === 'YES' || String(customerUser.receive_data) === 'true';
+        } else if (customerUser.receiveData !== undefined && customerUser.receiveData !== null) {
+            customerReceiveData = customerUser.receiveData === true || customerUser.receiveData === 1 || String(customerUser.receiveData).toUpperCase() === 'YES' || String(customerUser.receiveData) === 'true';
+        } else if (customerUser.settings) {
+            try {
+                const parsedSettings = typeof customerUser.settings === 'string' ? JSON.parse(customerUser.settings) : customerUser.settings;
+                if (parsedSettings.receiveData !== undefined) {
+                    customerReceiveData = parsedSettings.receiveData === true || parsedSettings.receiveData === 1 || String(parsedSettings.receiveData).toUpperCase() === 'YES' || String(parsedSettings.receiveData) === 'true';
+                } else if (parsedSettings.receive_data !== undefined) {
+                    customerReceiveData = parsedSettings.receive_data === true || parsedSettings.receive_data === 1 || String(parsedSettings.receive_data).toUpperCase() === 'YES' || String(parsedSettings.receive_data) === 'true';
+                }
+            } catch (e) {}
+        }
+
+        if (!customerReceiveData) {
+            console.log(`[Customer Integration] Customer ${clientEmail} has Receive Data = NO. Two-way consent requirement not met. Invoice #${invoiceNumber} will NOT be delivered/synchronized.`);
             return;
         }
 
@@ -180,7 +204,7 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
                 customerUser.id, clientName, customerUser.email || clientEmail, customerGstin, shippingAddress,
                 numAmount, numTotal, numTax, numDiscount, numRoundOff,
                 numTotal, numPaid, numDue,
-                earnedPoints, redeemedPoints, netPointsChange, 1,
+                earnedPoints, redeemedPoints, netPointsChange, 1, 1,
                 invoiceId, itemsJson, now, now
             ];
 
@@ -192,9 +216,9 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
                     customer_user_id, customer_name, customer_email, customer_gstin, shipping_address,
                     subtotal, total_amount, gst, discount, round_off,
                     net_amount, paid_amount, due_amount,
-                    points_earned, points_redeemed, net_points_added, sendToCustomerHistory,
+                    points_earned, points_redeemed, net_points_added, sendToCustomerHistory, sendPurchaseHistoryToCustomer,
                     invoice_id, items, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(...insertParams);
 
             try {
@@ -206,9 +230,9 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
                         customer_user_id, customer_name, customer_email, customer_gstin, shipping_address,
                         subtotal, total_amount, gst, discount, round_off,
                         net_amount, paid_amount, due_amount,
-                        points_earned, points_redeemed, net_points_added, sendToCustomerHistory,
+                        points_earned, points_redeemed, net_points_added, sendToCustomerHistory, sendPurchaseHistoryToCustomer,
                         invoice_id, items, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(...insertParams);
             } catch (e) {}
         }
