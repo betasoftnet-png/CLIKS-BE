@@ -53,11 +53,20 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
 
         const emailLower = clientEmail.toLowerCase().trim();
 
-        // 2. Customer-Business Connection Check: Must be 'accepted' (CONNECTED)
+        // Match customer user using normalized email
+        let customerUser = await db.prepare(
+            'SELECT * FROM users WHERE LOWER(email) = ?'
+        ).get(emailLower);
+
+        // 2. Customer-Business Connection Check: Must belong to business_id AND match normalized email OR website_user_id, with status = 'accepted'
         const connRecord = await db.prepare(`
             SELECT status FROM customer_connections 
-            WHERE business_id = ? AND LOWER(customer_email) = ?
-        `).get(merchantUserId, emailLower);
+            WHERE business_id = ? 
+              AND (
+                  LOWER(customer_email) = ?
+                  ${customerUser ? 'OR website_user_id = ?' : ''}
+              )
+        `).get(...(customerUser ? [merchantUserId, emailLower, customerUser.id] : [merchantUserId, emailLower]));
 
         console.log(`[SYNC DIAGNOSTIC] invoice_number=${invoiceNumber}, business_id=${merchantUserId}, customer_email=${emailLower}, connection_status=${connRecord ? connRecord.status : 'UNCONNECTED'}`);
 
@@ -65,11 +74,6 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
             console.log(`[SYNC NOTICE] Connection status is ${connRecord ? connRecord.status : 'UNCONNECTED'} (not accepted) for customer ${emailLower} with merchant ${merchantUserId}. Invoice #${invoiceNumber} synchronization skipped.`);
             return;
         }
-
-        // 2. Match customer using email (case-insensitive)
-        let customerUser = await db.prepare(
-            'SELECT * FROM users WHERE LOWER(email) = ?'
-        ).get(emailLower);
 
         // If no matching CLIKS user account exists, auto-create customer user record so purchase history, loyalty, merchant card, and invoice sync immediately
         if (!customerUser) {
