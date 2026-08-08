@@ -956,6 +956,23 @@ CREATE TABLE IF NOT EXISTS business_customers (
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
+-- Customer Connections (CLIKS Business <-> CLIKS Website Connection Requests)
+CREATE TABLE IF NOT EXISTS customer_connections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  business_id INTEGER NOT NULL,
+  business_customer_id INTEGER NOT NULL,
+  website_user_id INTEGER,
+  customer_email TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_at TEXT,
+  responded_at TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY(business_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(business_customer_id) REFERENCES business_customers(id) ON DELETE CASCADE,
+  FOREIGN KEY(website_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- Customer Addresses
 CREATE TABLE IF NOT EXISTS customer_addresses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2311,6 +2328,18 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE ca_audit_sessions ADD COLUMN payment_status TEXT DEFAULT \'Unpaid\'',
       'ALTER TABLE ca_professional_invoices ADD COLUMN audit_description TEXT',
       'ALTER TABLE ca_professional_invoices ADD COLUMN start_time TEXT',
+      `CREATE TABLE IF NOT EXISTS customer_connections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        business_id INTEGER NOT NULL,
+        business_customer_id INTEGER NOT NULL,
+        website_user_id INTEGER,
+        customer_email TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        requested_at TEXT,
+        responded_at TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      )`,
       'ALTER TABLE ca_professional_invoices ADD COLUMN end_time TEXT',
       'ALTER TABLE ca_professional_invoices ADD COLUMN hourly_rate REAL DEFAULT 500',
       'ALTER TABLE ca_professional_invoices ADD COLUMN duration_text TEXT'

@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const connectionService = require('../utils/connectionService');
 
 // ── Financial Goals ──────────────────────────────────────────────────────────
 const getGoals = async (req, res) => {
@@ -405,7 +406,20 @@ const getCustomerPurchases = async (req, res) => {
 
   const rawList = Array.isArray(purchases) ? purchases : [];
 
+  // Filter out invoices from merchants where connection status is rejected
+  const activeConnRows = await db.prepare(`
+    SELECT business_id, status FROM customer_connections
+    WHERE website_user_id = ? ${userEmail ? 'OR LOWER(customer_email) = ?' : ''}
+  `).all(...(userEmail ? [userId, userEmail] : [userId]));
+
+  const rejectedBusinessIds = new Set(
+    (activeConnRows || []).filter(r => String(r.status).toLowerCase() === 'rejected').map(r => r.business_id)
+  );
+
   const filtered = rawList.filter(p => {
+    if (p.merchant_business_id && rejectedBusinessIds.has(p.merchant_business_id)) {
+      return false;
+    }
     const s1 = p.sendToCustomerHistory;
     const s2 = p.sendPurchaseHistoryToCustomer;
     return (s1 === true || s1 === 1 || String(s1) === '1' || String(s1).toLowerCase() === 'true' || s1 === undefined || s1 === null) &&
@@ -425,6 +439,35 @@ const getCustomerPurchases = async (req, res) => {
   }));
 
   return sendSuccess(res, normalized);
+};
+
+const getIntegrations = async (req, res) => {
+  try {
+    const list = await connectionService.getWebsiteUserIntegrations(req.user.id, req.user.email);
+    return sendSuccess(res, list, 'Integrations fetched successfully');
+  } catch (error) {
+    console.error('[getIntegrations Error]', error);
+    return sendError(res, 'Failed to fetch active integrations', 500);
+  }
+};
+
+const respondIntegration = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, status } = req.body || {};
+    const targetAction = action || status;
+    const updated = await connectionService.respondToIntegrationRequest({
+      website_user_id: req.user.id,
+      website_user_email: req.user.email,
+      connection_id: id,
+      action: targetAction
+    });
+    return sendSuccess(res, updated, 'Connection request updated successfully');
+  } catch (error) {
+    console.error('[respondIntegration Error]', error);
+    const code = error.statusCode || 500;
+    return sendError(res, error.message || 'Failed to update integration status', code);
+  }
 };
 
 const getLoyaltyStats = async (req, res) => {
@@ -556,5 +599,6 @@ module.exports = {
   getNotifications, markNotificationRead,
   updateFinanceSettings, updatePrimaryIncomeSource,
   getMoneyTrackers, createMoneyTracker, getMoneyTrackerById, updateMoneyTracker, deleteMoneyTracker,
-  getCustomerPurchases, getLoyaltyStats, getInvoiceDetails
+  getCustomerPurchases, getLoyaltyStats, getInvoiceDetails,
+  getIntegrations, respondIntegration
 };

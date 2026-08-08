@@ -48,4 +48,8 @@ router.get('/invoices/:invoiceId', controller.getInvoiceDetails);
 router.get('/loyalty', auth, controller.getLoyaltyStats);
 router.get('/invoice/:id', auth, controller.getInvoiceDetails);
 
+// Active Business Connections / Integrations
+router.get('/integrations', auth, controller.getIntegrations);
+router.post('/integrations/:id/respond', auth, controller.respondIntegration);
+
 module.exports = router;

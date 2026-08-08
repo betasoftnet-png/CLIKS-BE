@@ -37,8 +37,20 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
             return;
         }
 
-        // 2. Match customer using email (case-insensitive)
         const emailLower = clientEmail.toLowerCase().trim();
+
+        // 1b. Customer-Business Connection Check: Must be accepted (CONNECTED)
+        const connRecord = await db.prepare(`
+            SELECT status FROM customer_connections 
+            WHERE business_id = ? AND LOWER(customer_email) = ?
+        `).get(merchantUserId, emailLower);
+
+        if (!connRecord || String(connRecord.status).toLowerCase() !== 'accepted') {
+            console.log(`[SYNC NOTICE] Connection status is ${connRecord ? connRecord.status : 'UNCONNECTED'} (not accepted) for customer ${emailLower} with merchant ${merchantUserId}. Invoice #${invoiceNumber} synchronization skipped.`);
+            return;
+        }
+
+        // 2. Match customer using email (case-insensitive)
         let customerUser = await db.prepare(
             'SELECT * FROM users WHERE LOWER(email) = ?'
         ).get(emailLower);

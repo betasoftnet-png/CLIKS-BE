@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { logAuditEvent } = require('../utils/auditLogger');
+const connectionService = require('../utils/connectionService');
 
 const customerController = {
     lookupCustomerByEmail: async (req, res) => {
@@ -87,10 +88,11 @@ const customerController = {
             params.push(parseInt(limit), offset);
 
             const customers = await db.prepare(sql).all(...params);
-            const normalized = (customers || []).map(c => {
+            const normalized = await Promise.all((customers || []).map(async c => {
                 const phoneVal = c.phone_number || c.phone || '';
                 const panVal = c.pan_number || c.pan || '';
                 const addrVal = c.billing_address || c.address || '';
+                const connStatus = await connectionService.getCustomerConnectionStatus(userId, c.id, c.email);
                 return {
                     ...c,
                     phone: phoneVal,
@@ -98,9 +100,11 @@ const customerController = {
                     pan: panVal,
                     pan_number: panVal,
                     address: addrVal,
-                    billing_address: addrVal
+                    billing_address: addrVal,
+                    connection_status: connStatus,
+                    connectionStatus: connStatus
                 };
-            });
+            }));
 
             return sendSuccess(res, {
                 customers: normalized,
@@ -222,6 +226,18 @@ const customerController = {
 
             const result = await db.prepare(sql).run(...params);
             const newCustomer = await db.prepare('SELECT * FROM business_customers WHERE id = ?').get(result.lastInsertRowid);
+            
+            // Sync connection request if email belongs to a CLIKS Website user
+            if (email) {
+                await connectionService.syncCustomerConnectionOnCreateOrUpdate({
+                    business_id: userId,
+                    business_customer_id: newCustomer.id,
+                    customer_email: email
+                });
+            }
+
+            const connStatus = await connectionService.getCustomerConnectionStatus(userId, newCustomer.id, email);
+
             const normalized = {
                 ...newCustomer,
                 phone: phoneVal,
@@ -229,7 +245,9 @@ const customerController = {
                 pan: panVal,
                 pan_number: panVal,
                 address: addrVal,
-                billing_address: addrVal
+                billing_address: addrVal,
+                connection_status: connStatus,
+                connectionStatus: connStatus
             };
 
             await logAuditEvent(req, {
@@ -326,6 +344,16 @@ const customerController = {
             `).run(...params);
 
             const updated = await db.prepare('SELECT * FROM business_customers WHERE id = ?').get(id);
+            if (updated.email) {
+                await connectionService.syncCustomerConnectionOnCreateOrUpdate({
+                    business_id: userId,
+                    business_customer_id: updated.id,
+                    customer_email: updated.email
+                });
+            }
+
+            const connStatus = await connectionService.getCustomerConnectionStatus(userId, updated.id, updated.email);
+
             const phoneVal = updated.phone_number || updated.phone || '';
             const panVal = updated.pan_number || updated.pan || '';
             const addrVal = updated.billing_address || updated.address || '';
@@ -336,7 +364,9 @@ const customerController = {
                 pan: panVal,
                 pan_number: panVal,
                 address: addrVal,
-                billing_address: addrVal
+                billing_address: addrVal,
+                connection_status: connStatus,
+                connectionStatus: connStatus
             };
 
             await logAuditEvent(req, {

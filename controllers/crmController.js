@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const connectionService = require('../utils/connectionService');
 
 /**
  * CRM Controller
@@ -9,10 +10,11 @@ const crmController = {
     getCustomers: async (req, res) => {
         try {
             const customers = await db.prepare('SELECT * FROM business_customers WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
-            const normalized = (customers || []).map(c => {
+            const normalized = await Promise.all((customers || []).map(async c => {
                 const phoneVal = c.phone_number || c.phone || '';
                 const panVal = c.pan_number || c.pan || '';
                 const addrVal = c.billing_address || c.address || '';
+                const connStatus = await connectionService.getCustomerConnectionStatus(req.user.id, c.id, c.email);
                 return {
                     ...c,
                     phone: phoneVal,
@@ -20,9 +22,11 @@ const crmController = {
                     pan: panVal,
                     pan_number: panVal,
                     address: addrVal,
-                    billing_address: addrVal
+                    billing_address: addrVal,
+                    connection_status: connStatus,
+                    connectionStatus: connStatus
                 };
-            });
+            }));
             return sendSuccess(res, normalized, 'Customers fetched successfully');
         } catch (error) {
             console.error('[CRM Controller] Error fetching customers:', error);
@@ -112,6 +116,16 @@ const crmController = {
             const result = await db.prepare(sql).run(...params);
             const newCustomer = await db.prepare('SELECT * FROM business_customers WHERE id = ?').get(result.lastInsertRowid);
 
+            if (email) {
+                await connectionService.syncCustomerConnectionOnCreateOrUpdate({
+                    business_id: userId,
+                    business_customer_id: newCustomer.id,
+                    customer_email: email
+                });
+            }
+
+            const connStatus = await connectionService.getCustomerConnectionStatus(userId, newCustomer.id, email);
+
             const normalized = {
                 ...newCustomer,
                 phone: phoneVal,
@@ -119,7 +133,9 @@ const crmController = {
                 pan: panVal,
                 pan_number: panVal,
                 address: addrVal,
-                billing_address: addrVal
+                billing_address: addrVal,
+                connection_status: connStatus,
+                connectionStatus: connStatus
             };
 
             return sendSuccess(res, normalized, 'Customer created successfully', 201);
