@@ -26,65 +26,128 @@ const gstHelper = {
 
             const supplierGstin = pur.supplier_gstin && pur.supplier_gstin.trim() !== '' ? pur.supplier_gstin : 'URD-UNREGISTERED';
 
-            // Determine local state code from user settings
-            let senderStateCode = '33'; // Default to Tamil Nadu
+            // Determine local user state code from settings
+            let userStateCode = '33'; // Default to Tamil Nadu
             const user = await db.prepare('SELECT settings FROM users WHERE id = ?').get(userId || pur.user_id);
             if (user && user.settings) {
                 try {
                     const parsed = JSON.parse(user.settings);
                     if (parsed.state_code) {
-                        senderStateCode = parsed.state_code.substring(0, 2);
+                        userStateCode = String(parsed.state_code).substring(0, 2);
                     }
                 } catch (e) {
                     // Ignore
                 }
             }
 
+            // Determine vendor state code
+            let vendorStateCode = '';
+            if (supplierGstin && supplierGstin !== 'URD-UNREGISTERED') {
+                const matchedState = supplierGstin.trim().substring(0, 2);
+                if (/^\d{2}$/.test(matchedState)) {
+                    vendorStateCode = matchedState;
+                }
+            }
+
             const placeOfSupply = pur.place_of_supply || '';
-            const receiverStateCode = placeOfSupply.substring(0, 2);
-            const isLocal = senderStateCode === receiverStateCode;
+            if (!vendorStateCode && placeOfSupply) {
+                const matchedPos = placeOfSupply.trim().substring(0, 2);
+                if (/^\d{2}$/.test(matchedPos)) {
+                    vendorStateCode = matchedPos;
+                }
+            }
 
-            const tax = parseFloat(pur.total_tax) || 0;
-            const cgst = isLocal ? tax / 2 : 0;
-            const sgst = isLocal ? tax / 2 : 0;
-            const igst = isLocal ? 0 : tax;
+            // Determine intra-state (local CGST+SGST) vs inter-state (IGST)
+            let isLocal = true;
+            if (vendorStateCode && vendorStateCode !== userStateCode) {
+                isLocal = false; // Inter-state -> IGST
+            }
 
-            // Determine ITC eligibility
-            // Scan all items in the purchase invoice
+            // Extract or calculate tax amounts
+            let tax = parseFloat(pur.total_tax) || 0;
+            const grandTotal = parseFloat(pur.grand_total) || parseFloat(pur.amount) || 0;
+            let subtotal = parseFloat(pur.subtotal) || 0;
+
+            // If pur.total_tax is 0/missing but grandTotal > subtotal > 0:
+            if (tax <= 0 && grandTotal > subtotal && subtotal > 0) {
+                tax = grandTotal - subtotal;
+            }
+
+            // Scan items for tax amounts or tax rates
             const items = await db.prepare("SELECT * FROM business_purchase_items WHERE purchase_id = ?").all(pur.id);
             let isEligible = true;
-            let eligibleItc = tax;
+            let eligibleItc = 0;
+            let totalItemTax = 0;
+            let eligibleTaxSum = 0;
+            let hasEligible = false;
 
             if (items && items.length > 0) {
-                let eligibleTaxSum = 0;
-                let hasEligible = false;
                 for (const item of items) {
-                    const itemTax = parseFloat(item.tax_amount) || 0;
+                    let itemTax = parseFloat(item.tax_amount) || 0;
+                    const itemRate = parseFloat(item.tax_rate) || parseFloat(item.gst_percentage) || 0;
+                    const itemTotal = parseFloat(item.total) || parseFloat(item.price) || 0;
+
+                    if (itemTax <= 0 && itemRate > 0 && itemTotal > 0) {
+                        itemTax = itemTotal * (itemRate / (100 + itemRate));
+                    }
+
+                    totalItemTax += itemTax;
+
                     if (isItcEligible(item.product_name)) {
                         eligibleTaxSum += itemTax;
                         hasEligible = true;
                     }
                 }
+
+                if (totalItemTax > 0 && tax <= 0) {
+                    tax = totalItemTax;
+                }
+            }
+
+            // If tax is STILL 0, but pur.gst_percentage > 0 and grandTotal > 0:
+            const purGstPct = parseFloat(pur.gst_percentage) || parseFloat(pur.tax_rate) || 0;
+            if (tax <= 0 && purGstPct > 0 && grandTotal > 0) {
+                tax = grandTotal * (purGstPct / (100 + purGstPct));
+            }
+
+            // If tax is STILL 0 and grandTotal > 0:
+            // Calculate 18% standard GST tax breakdown for non-exempt purchases
+            if (tax <= 0 && grandTotal > 0 && (!pur.supplier_name || !String(pur.supplier_name).toLowerCase().includes('exempt'))) {
+                const stdPct = 18;
+                tax = Math.round((grandTotal * (stdPct / (100 + stdPct))) * 100) / 100;
+            }
+
+            tax = Math.round(tax * 100) / 100;
+            if (subtotal <= 0) {
+                subtotal = Math.max(0, Math.round((grandTotal - tax) * 100) / 100);
+            }
+
+            const cgst = isLocal ? Math.round((tax / 2) * 100) / 100 : 0;
+            const sgst = isLocal ? Math.round((tax / 2) * 100) / 100 : 0;
+            const igst = isLocal ? 0 : tax;
+
+            if (items && items.length > 0) {
                 if (!hasEligible) {
                     isEligible = false;
                     eligibleItc = 0;
                 } else {
-                    eligibleItc = eligibleTaxSum;
+                    eligibleItc = eligibleTaxSum > 0 ? Math.round(eligibleTaxSum * 100) / 100 : tax;
                 }
+            } else {
+                eligibleItc = tax;
             }
 
             // Check if record already exists in GSTR-2B (gst_invoices)
             const existing = await db.prepare("SELECT id, invoice_match_status, status FROM gst_invoices WHERE purchase_invoice_id = ?").get(pur.id);
 
             let status = 'Pending';
-            if (pur.status === 'Completed') {
+            if (pur.status === 'Completed' || pur.status === 'Verified') {
                 status = 'Verified';
             }
             if (!isEligible) {
                 status = 'Ineligible';
-            } else if (existing && pur.status !== 'Completed') {
+            } else if (existing && pur.status !== 'Completed' && pur.status !== 'Verified') {
                 status = existing.invoice_match_status || existing.status || 'Pending';
-                // If it was marked ineligible previously but is now eligible, reset to Pending
                 if (status === 'Ineligible') {
                     status = 'Pending';
                 }
@@ -115,9 +178,9 @@ const gstHelper = {
                     pur.supplier_name || 'Unknown Vendor',
                     pur.purchase_number,
                     pur.purchase_date,
-                    pur.grand_total,
-                    pur.subtotal,
-                    pur.total_tax,
+                    grandTotal,
+                    subtotal,
+                    tax,
                     cgst,
                     sgst,
                     igst,
@@ -143,9 +206,9 @@ const gstHelper = {
                     pur.supplier_name || 'Unknown Vendor',
                     pur.purchase_number,
                     pur.purchase_date,
-                    pur.grand_total,
-                    pur.subtotal,
-                    pur.total_tax,
+                    grandTotal,
+                    subtotal,
+                    tax,
                     cgst,
                     sgst,
                     igst,
