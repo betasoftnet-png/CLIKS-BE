@@ -15,6 +15,17 @@ const { ZodError } = require('zod');
 function errorHandler(err, req, res, _next) {
   const isDev = process.env.NODE_ENV !== 'production';
 
+  // Ensure CORS headers are present on all error responses
+  const origin = req.headers?.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Version, X-Request-Id, Cache-Control, Pragma');
+
   // ── Zod Validation Error ──────────────────────────────────────────────────
   if (err instanceof ZodError) {
     logger.warn(`[ZodValidation] ${req.method} ${req.path} - ${err.errors.map(e => e.message).join(', ')}`);

@@ -16,8 +16,9 @@ router.post('/logout', asyncHandler(logout));
 // POST /auth/logout-all    — Logout from all devices (revoke all tokens)
 router.post('/logout-all', asyncHandler(logoutAll));
 
-// GET /auth/heartbeat      — Update user presence status
+// GET / POST /auth/heartbeat      — Update user presence status
 const { auth } = require('../middleware/auth');
 router.get('/heartbeat', auth, asyncHandler(heartbeat));
+router.post('/heartbeat', auth, asyncHandler(heartbeat));
 
 module.exports = router;
