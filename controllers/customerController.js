@@ -93,6 +93,20 @@ const customerController = {
                 const panVal = c.pan_number || c.pan || '';
                 const addrVal = c.billing_address || c.address || '';
                 const connStatus = await connectionService.getCustomerConnectionStatus(userId, c.id, c.email);
+
+                const salesRow = await db.prepare(`
+                    SELECT COALESCE(SUM(COALESCE(total_amount, amount, 0)), 0) as total_sales
+                    FROM business_invoices
+                    WHERE user_id = ?
+                      AND (
+                          (client_email IS NOT NULL AND client_email != '' AND LOWER(client_email) = LOWER(?))
+                          OR (client_name IS NOT NULL AND client_name != '' AND LOWER(client_name) = LOWER(?))
+                      )
+                      AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
+                `).get(userId, c.email || '', c.name || '');
+
+                const totalSales = parseFloat(salesRow?.total_sales) || 0;
+
                 return {
                     ...c,
                     phone: phoneVal,
@@ -102,7 +116,10 @@ const customerController = {
                     address: addrVal,
                     billing_address: addrVal,
                     connection_status: connStatus,
-                    connectionStatus: connStatus
+                    connectionStatus: connStatus,
+                    total_sales: totalSales,
+                    totalSales: totalSales,
+                    total_spent: totalSales
                 };
             }));
 

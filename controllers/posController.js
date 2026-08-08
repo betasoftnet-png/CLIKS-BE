@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const { processCustomerInvoiceIntegration } = require('../utils/customerIntegration');
 
 const posController = {
     // POS Checkout: Create Invoice and Decrement stock
@@ -87,6 +88,12 @@ const posController = {
             if (createdInvoice && createdInvoice.items) {
                 try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) {}
             }
+
+            // Real-time integration to CLIKS Customer Application
+            await processCustomerInvoiceIntegration({
+                createdInvoice,
+                merchantUserId: userId
+            });
 
             return sendSuccess(res, createdInvoice, 'POS checkout completed successfully', 201);
         } catch (error) {

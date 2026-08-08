@@ -20,26 +20,40 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
     console.log(`[SYNC LOG] Invoice Saved: #${invoiceNumber} (ID: ${invoiceId})`);
 
     try {
-        // 1. Merchant permission check: sendPurchaseHistoryToCustomer
-        const merchantPermission = createdInvoice.sendPurchaseHistoryToCustomer !== undefined
-            ? (createdInvoice.sendPurchaseHistoryToCustomer === true || createdInvoice.sendPurchaseHistoryToCustomer === 1 || createdInvoice.sendPurchaseHistoryToCustomer === 'true' || createdInvoice.sendPurchaseHistoryToCustomer === '1')
-            : (createdInvoice.sendToCustomerHistory !== undefined
-                ? (createdInvoice.sendToCustomerHistory === true || createdInvoice.sendToCustomerHistory === 1 || createdInvoice.sendToCustomerHistory === 'true' || createdInvoice.sendToCustomerHistory === '1')
-                : true);
+        // 1. Resolve Customer Email
+        let clientEmail = createdInvoice.client_email ? String(createdInvoice.client_email).trim() : null;
 
-        if (!merchantPermission) {
-            console.log(`[SYNC NOTICE] Merchant permission = NO (sendPurchaseHistoryToCustomer = false) for invoice #${invoiceNumber}. Synchronization skipped.`);
-            return;
+        if (!clientEmail || clientEmail.length === 0) {
+            // Attempt email lookup from business_customers table by customer_id or client_name
+            const custRow = await db.prepare(`
+                SELECT email, name FROM business_customers 
+                WHERE user_id = ? 
+                  AND (
+                      (id IS NOT NULL AND id = ?)
+                      OR (name IS NOT NULL AND LOWER(name) = LOWER(?))
+                  )
+                  AND email IS NOT NULL AND email != ''
+                ORDER BY id DESC LIMIT 1
+            `).get(merchantUserId, createdInvoice.customer_id || 0, clientName);
+
+            if (custRow && custRow.email) {
+                clientEmail = String(custRow.email).trim();
+                // Backfill email in business_invoices table
+                try {
+                    await db.prepare('UPDATE business_invoices SET client_email = ? WHERE id = ?').run(clientEmail, invoiceId);
+                    createdInvoice.client_email = clientEmail;
+                } catch (e) {}
+            }
         }
 
         if (!clientEmail) {
-            console.log(`[SYNC NOTICE] No customer email specified for invoice #${invoiceNumber}. Synchronization skipped.`);
+            console.log(`[SYNC NOTICE] No customer email could be resolved for invoice #${invoiceNumber}. Synchronization skipped.`);
             return;
         }
 
         const emailLower = clientEmail.toLowerCase().trim();
 
-        // 1b. Customer-Business Connection Check: Must be accepted (CONNECTED)
+        // 2. Customer-Business Connection Check: Must be 'accepted' (CONNECTED)
         const connRecord = await db.prepare(`
             SELECT status FROM customer_connections 
             WHERE business_id = ? AND LOWER(customer_email) = ?

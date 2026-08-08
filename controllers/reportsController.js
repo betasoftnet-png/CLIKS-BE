@@ -46,7 +46,22 @@ const reportsController = {
     },
     getSalesByCustomer: async (req, res) => {
         try {
-            const list = await db.prepare("SELECT customer as name, SUM(grand_total) as total_sales FROM business_orders WHERE user_id = ? GROUP BY customer ORDER BY total_sales DESC").all(req.user.id);
+            const list = await db.prepare(`
+                SELECT 
+                    COALESCE(c.name, i.client_name) as name, 
+                    SUM(COALESCE(i.total_amount, i.amount, 0)) as total_sales 
+                FROM business_invoices i
+                LEFT JOIN business_customers c 
+                    ON i.user_id = c.user_id 
+                    AND (
+                        (i.client_email IS NOT NULL AND i.client_email != '' AND LOWER(i.client_email) = LOWER(c.email))
+                        OR (i.client_name IS NOT NULL AND i.client_name != '' AND LOWER(i.client_name) = LOWER(c.name))
+                    )
+                WHERE i.user_id = ? 
+                  AND (i.status IS NULL OR LOWER(i.status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
+                GROUP BY COALESCE(c.name, i.client_name)
+                ORDER BY total_sales DESC
+            `).all(req.user.id);
             return sendSuccess(res, list || [], 'Sales by customer compiled');
         } catch (error) {
             console.error('Error in getSalesByCustomer:', error);
@@ -465,7 +480,31 @@ const reportsController = {
         return sendSuccess(res, [], 'Customers outstanding report compiled');
     },
     getTopCustomers: async (req, res) => {
-        return sendSuccess(res, [], 'Top customers report compiled');
+        try {
+            const list = await db.prepare(`
+                SELECT 
+                    c.id,
+                    c.name,
+                    c.customer_code,
+                    COALESCE(SUM(COALESCE(i.total_amount, i.amount, 0)), 0) as total_sales,
+                    COALESCE(SUM(COALESCE(i.total_amount, i.amount, 0)), 0) as total_spent
+                FROM business_customers c
+                LEFT JOIN business_invoices i 
+                    ON c.user_id = i.user_id 
+                    AND (
+                        (i.client_email IS NOT NULL AND i.client_email != '' AND LOWER(i.client_email) = LOWER(c.email))
+                        OR (i.client_name IS NOT NULL AND i.client_name != '' AND LOWER(i.client_name) = LOWER(c.name))
+                    )
+                    AND (i.status IS NULL OR LOWER(i.status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
+                WHERE c.user_id = ?
+                GROUP BY c.id, c.name
+                ORDER BY total_sales DESC
+            `).all(req.user.id);
+            return sendSuccess(res, list || [], 'Top customers report compiled');
+        } catch (error) {
+            console.error('Error in getTopCustomers:', error);
+            return sendError(res, 'Failed to compile top customers', 500);
+        }
     },
     getSuppliers: async (req, res) => {
         return sendSuccess(res, [], 'Suppliers list compiled');

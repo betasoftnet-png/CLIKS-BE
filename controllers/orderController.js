@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const { processCustomerInvoiceIntegration } = require('../utils/customerIntegration');
 
 const orderController = {
     // 1. Create Sales Order
@@ -347,6 +348,14 @@ const orderController = {
             // 3. Update customer total spent metrics
             if (order.customer_id) {
                 await db.prepare("UPDATE business_customers SET total_spent = total_spent + ? WHERE id = ?").run(order.grand_total, order.customer_id);
+            }
+
+            const createdInvoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(invoiceResult.lastInsertRowid);
+            if (createdInvoice) {
+                await processCustomerInvoiceIntegration({
+                    createdInvoice,
+                    merchantUserId: req.user.id
+                });
             }
 
             return sendSuccess(res, { id, invoice_id: invoiceResult.lastInsertRowid, status: 'Invoiced' }, 'Order successfully converted to Invoice via backend processing.');

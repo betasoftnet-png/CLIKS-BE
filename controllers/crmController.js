@@ -9,12 +9,27 @@ const crmController = {
     // Get all customers for the business
     getCustomers: async (req, res) => {
         try {
-            const customers = await db.prepare('SELECT * FROM business_customers WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
+            const userId = req.user.id;
+            const customers = await db.prepare('SELECT * FROM business_customers WHERE user_id = ? ORDER BY created_at DESC').all(userId);
             const normalized = await Promise.all((customers || []).map(async c => {
                 const phoneVal = c.phone_number || c.phone || '';
                 const panVal = c.pan_number || c.pan || '';
                 const addrVal = c.billing_address || c.address || '';
-                const connStatus = await connectionService.getCustomerConnectionStatus(req.user.id, c.id, c.email);
+                const connStatus = await connectionService.getCustomerConnectionStatus(userId, c.id, c.email);
+
+                const salesRow = await db.prepare(`
+                    SELECT COALESCE(SUM(COALESCE(total_amount, amount, 0)), 0) as total_sales
+                    FROM business_invoices
+                    WHERE user_id = ?
+                      AND (
+                          (client_email IS NOT NULL AND client_email != '' AND LOWER(client_email) = LOWER(?))
+                          OR (client_name IS NOT NULL AND client_name != '' AND LOWER(client_name) = LOWER(?))
+                      )
+                      AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
+                `).get(userId, c.email || '', c.name || '');
+
+                const totalSales = parseFloat(salesRow?.total_sales) || 0;
+
                 return {
                     ...c,
                     phone: phoneVal,
@@ -24,9 +39,16 @@ const crmController = {
                     address: addrVal,
                     billing_address: addrVal,
                     connection_status: connStatus,
-                    connectionStatus: connStatus
+                    connectionStatus: connStatus,
+                    total_sales: totalSales,
+                    totalSales: totalSales,
+                    total_spent: totalSales
                 };
             }));
+
+            // Sort customers by total_sales DESC so top customers appear first
+            normalized.sort((a, b) => b.total_sales - a.total_sales);
+
             return sendSuccess(res, normalized, 'Customers fetched successfully');
         } catch (error) {
             console.error('[CRM Controller] Error fetching customers:', error);
