@@ -59,6 +59,8 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
             WHERE business_id = ? AND LOWER(customer_email) = ?
         `).get(merchantUserId, emailLower);
 
+        console.log(`[SYNC DIAGNOSTIC] invoice_number=${invoiceNumber}, business_id=${merchantUserId}, customer_email=${emailLower}, connection_status=${connRecord ? connRecord.status : 'UNCONNECTED'}`);
+
         if (!connRecord || String(connRecord.status).toLowerCase() !== 'accepted') {
             console.log(`[SYNC NOTICE] Connection status is ${connRecord ? connRecord.status : 'UNCONNECTED'} (not accepted) for customer ${emailLower} with merchant ${merchantUserId}. Invoice #${invoiceNumber} synchronization skipped.`);
             return;
