@@ -427,7 +427,17 @@ const customerPurchaseController = {
             if (!invoice) return sendError(res, 'Invoice not found', 404);
 
             // Security: Ensure this customer is authorized to see this invoice
-            if (!invoice.client_email || invoice.client_email.toLowerCase() !== userEmail) {
+            const clientMatch = invoice.client_email && invoice.client_email.toLowerCase().trim() === userEmail;
+            let connMatch = false;
+            if (!clientMatch) {
+                const conn = await db.prepare(`
+                    SELECT status FROM customer_connections
+                    WHERE business_id = ? AND (website_user_id = ? OR (customer_email IS NOT NULL AND LOWER(customer_email) = ?))
+                `).get(invoice.user_id, req.user.id, userEmail);
+                connMatch = conn && String(conn.status).toLowerCase() === 'accepted';
+            }
+
+            if (!clientMatch && !connMatch) {
                 return sendError(res, 'Unauthorized access to this invoice', 403);
             }
 

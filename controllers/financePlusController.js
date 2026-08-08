@@ -488,37 +488,96 @@ const getLoyaltyStats = async (req, res) => {
 
 const getInvoiceDetails = async (req, res) => {
   try {
-      const { id } = req.params; // business_invoices.id
-      const userId = req.user.id;
+      const targetId = req.params.invoiceId || req.params.id; // business_invoices.id OR customer_purchase_history.id/invoice_id
+      const userId = req.user ? req.user.id : null;
 
-      console.log(`[DEBUG] getInvoiceDetails - Received ID: ${id}, User ID: ${userId}`);
+      console.log(`[DEBUG] getInvoiceDetails - Received targetId: ${targetId}, User ID: ${userId}`);
 
       // Security Check: Verify this user owns this purchase via history table
-      const user = await db.prepare('SELECT email FROM users WHERE id = ?').get(userId);
-      const userEmail = user?.email ? user.email.toLowerCase().trim() : '';
+      let userEmail = '';
+      if (userId) {
+          const user = await db.prepare('SELECT email FROM users WHERE id = ?').get(userId);
+          userEmail = user?.email ? user.email.toLowerCase().trim() : '';
+      }
 
-      // Get the purchase history record - this contains the "Points" shown on the card
-      const purchaseRecord = await db.prepare(`
+      let purchaseRecord = await db.prepare(`
           SELECT *, net_amount, total_amount
           FROM customer_purchase_history
-          WHERE invoice_id = ? AND (customer_user_id = ? OR LOWER(customer_email) = ?)
-      `).get(id, userId, userEmail);
+          WHERE (id = ? OR invoice_id = ?) ${userId ? 'AND (customer_user_id = ? OR (customer_email IS NOT NULL AND LOWER(customer_email) = ?))' : ''}
+      `).get(...(userId ? [targetId, targetId, userId, userEmail] : [targetId, targetId]));
 
+      // Fallback: If not matched directly by customer_user_id/email, check if connection is accepted
       if (!purchaseRecord) {
-          console.warn(`[DEBUG] Security Violation or Missing Record: User ${userId} tried to access invoice ${id}`);
+          const rec = await db.prepare(`
+              SELECT *, net_amount, total_amount FROM customer_purchase_history
+              WHERE id = ? OR invoice_id = ?
+          `).get(targetId, targetId);
+
+          if (rec) {
+              const conn = await db.prepare(`
+                  SELECT status FROM customer_connections
+                  WHERE business_id = ? AND (website_user_id = ? OR (customer_email IS NOT NULL AND LOWER(customer_email) = ?))
+              `).get(rec.merchant_business_id, userId, userEmail);
+
+              if (conn && String(conn.status).toLowerCase() === 'accepted') {
+                  purchaseRecord = rec;
+              }
+          }
+      }
+
+      // Direct fallback to business_invoices table if purchase_history record was created before connection
+      let invoice = null;
+      if (purchaseRecord) {
+          const actualInvId = purchaseRecord.invoice_id || purchaseRecord.id;
+          invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ? OR invoice_number = ?').get(actualInvId, purchaseRecord.invoice_number);
+      }
+
+      if (!invoice) {
+          invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(targetId);
+          if (invoice) {
+              const conn = await db.prepare(`
+                  SELECT status FROM customer_connections
+                  WHERE business_id = ? AND (website_user_id = ? OR (customer_email IS NOT NULL AND LOWER(customer_email) = ?))
+              `).get(invoice.user_id, userId, userEmail);
+              if (invoice.client_email && invoice.client_email.toLowerCase().trim() === userEmail) {
+                  // Authorized by email
+              } else if (conn && String(conn.status).toLowerCase() === 'accepted') {
+                  // Authorized by connection
+              } else {
+                  invoice = null;
+              }
+          }
+      }
+
+      if (!purchaseRecord && !invoice) {
+          console.warn(`[DEBUG] Security Violation or Missing Record: User ${userId} tried to access invoice ${targetId}`);
           return sendError(res, 'Unauthorized access to this invoice', 403);
       }
 
-      // Fetch actual invoice from CLIKS Business table
-      const invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(id);
+      if (!invoice && purchaseRecord) {
+          invoice = {
+              id: purchaseRecord.id,
+              invoice_number: purchaseRecord.invoice_number,
+              total_amount: purchaseRecord.total_amount || purchaseRecord.net_amount,
+              grand_total: purchaseRecord.total_amount || purchaseRecord.net_amount,
+              amount: purchaseRecord.total_amount || purchaseRecord.net_amount,
+              status: purchaseRecord.payment_status || 'Paid',
+              invoice_status: purchaseRecord.invoice_status || purchaseRecord.payment_status || 'Paid',
+              user_id: purchaseRecord.merchant_business_id,
+              client_name: purchaseRecord.customer_name,
+              client_email: purchaseRecord.customer_email,
+              items: purchaseRecord.items || '[]'
+          };
+      }
 
-      if (!invoice) return sendError(res, 'Original invoice records not found', 404);
-
-      // Fetch merchant details
-      const merchant = await db.prepare('SELECT business_name, email FROM users WHERE id = ?').get(invoice.user_id);
+      const merchantId = invoice.user_id || (purchaseRecord ? purchaseRecord.merchant_business_id : 0);
+      const merchant = await db.prepare('SELECT business_name, email FROM users WHERE id = ?').get(merchantId);
 
       // Fetch all payment installments
-      const payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ? ORDER BY payment_date DESC').all(id);
+      let payments = [];
+      try {
+          payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ? ORDER BY payment_date DESC').all(invoice.id || targetId);
+      } catch (e) {}
 
       // Loyalty Calculation - ENSURE CONSISTENCY with history card and loyalty transactions
       // Priority 1: Official loyalty transaction record
@@ -527,14 +586,14 @@ const getInvoiceDetails = async (req, res) => {
           SELECT points_earned, points_redeemed
           FROM customer_loyalty_transactions
           WHERE user_id = ? AND (invoice_number = ? OR invoice_number = ?)
-      `).get(userId, invoice.invoice_number, purchaseRecord.invoice_number);
+      `).get(userId, invoice?.invoice_number, purchaseRecord?.invoice_number);
 
       // Priority 2: Recalculate using same logic as getCustomerPurchases
-      const baseAmount = purchaseRecord.net_amount ||
-                         purchaseRecord.total_amount ||
-                         invoice.total_amount ||
-                         invoice.grand_total ||
-                         invoice.amount || 0;
+      const baseAmount = purchaseRecord?.net_amount ||
+                         purchaseRecord?.total_amount ||
+                         invoice?.total_amount ||
+                         invoice?.grand_total ||
+                         invoice?.amount || 0;
 
       const earnedPoints = loyaltyTx?.points_earned !== undefined ? loyaltyTx.points_earned : Math.floor(parseFloat(baseAmount) / 100);
 
@@ -553,8 +612,9 @@ const getInvoiceDetails = async (req, res) => {
           ...invoice,
           items: parsedItems,
           // Ensure we have total_amount and amount for summary consistency
-          total_amount: invoice.total_amount || invoice.grand_total || purchaseRecord.net_amount || 0,
-          amount: invoice.amount || invoice.subtotal || purchaseRecord.total_amount || 0,
+          total_amount: invoice.total_amount || invoice.grand_total || purchaseRecord?.net_amount || 0,
+          grand_total: invoice.grand_total || invoice.total_amount || purchaseRecord?.net_amount || 0,
+          amount: invoice.amount || invoice.subtotal || purchaseRecord?.total_amount || 0,
           merchant: {
               name: merchant?.business_name || invoice.merchant_name || 'CLIKS Merchant',
               email: merchant?.email || 'N/A',
