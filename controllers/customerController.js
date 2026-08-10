@@ -88,24 +88,54 @@ const customerController = {
             params.push(parseInt(limit), offset);
 
             const customers = await db.prepare(sql).all(...params);
-            const normalized = await Promise.all((customers || []).map(async c => {
+            if (!customers || customers.length === 0) {
+                return sendSuccess(res, { customers: [], total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) }, 'Customers fetched successfully');
+            }
+
+            // Batch fetch connections
+            let connections = [];
+            try {
+                connections = await db.prepare('SELECT * FROM customer_connections WHERE business_id = ?').all(userId);
+            } catch (e) {}
+
+            const connMapByCustId = new Map();
+            const connMapByEmail = new Map();
+            (connections || []).forEach(conn => {
+                const st = String(conn.status || '').toLowerCase();
+                const status = (st === 'accepted' || st === 'connected') ? 'CONNECTED' : (st === 'pending' ? 'PENDING' : 'UNCONNECTED');
+                if (conn.business_customer_id) connMapByCustId.set(conn.business_customer_id, status);
+                if (conn.customer_email) connMapByEmail.set(String(conn.customer_email).toLowerCase(), status);
+            });
+
+            // Batch aggregate sales
+            let salesRows = [];
+            try {
+                salesRows = await db.prepare(`
+                    SELECT LOWER(client_email) as email, LOWER(client_name) as name, SUM(COALESCE(total_amount, amount, 0)) as total_sales
+                    FROM business_invoices
+                    WHERE user_id = ?
+                      AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
+                    GROUP BY LOWER(client_email), LOWER(client_name)
+                `).all(userId);
+            } catch (e) {}
+
+            const salesByEmail = new Map();
+            const salesByName = new Map();
+            (salesRows || []).forEach(r => {
+                const val = parseFloat(r.total_sales) || 0;
+                if (r.email) salesByEmail.set(r.email, (salesByEmail.get(r.email) || 0) + val);
+                if (r.name) salesByName.set(r.name, (salesByName.get(r.name) || 0) + val);
+            });
+
+            const normalized = customers.map(c => {
                 const phoneVal = c.phone_number || c.phone || '';
                 const panVal = c.pan_number || c.pan || '';
                 const addrVal = c.billing_address || c.address || '';
-                const connStatus = await connectionService.getCustomerConnectionStatus(userId, c.id, c.email);
+                const emailLower = c.email ? String(c.email).toLowerCase().trim() : '';
+                const nameLower = c.name ? String(c.name).toLowerCase().trim() : '';
 
-                const salesRow = await db.prepare(`
-                    SELECT COALESCE(SUM(COALESCE(total_amount, amount, 0)), 0) as total_sales
-                    FROM business_invoices
-                    WHERE user_id = ?
-                      AND (
-                          (client_email IS NOT NULL AND client_email != '' AND LOWER(client_email) = LOWER(?))
-                          OR (client_name IS NOT NULL AND client_name != '' AND LOWER(client_name) = LOWER(?))
-                      )
-                      AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
-                `).get(userId, c.email || '', c.name || '');
-
-                const totalSales = parseFloat(salesRow?.total_sales) || 0;
+                const connStatus = connMapByCustId.get(c.id) || (emailLower ? connMapByEmail.get(emailLower) : null) || 'UNCONNECTED';
+                const totalSales = (emailLower ? salesByEmail.get(emailLower) : 0) || (nameLower ? salesByName.get(nameLower) : 0) || 0;
 
                 return {
                     ...c,
@@ -121,7 +151,7 @@ const customerController = {
                     totalSales: totalSales,
                     total_spent: totalSales
                 };
-            }));
+            });
 
             return sendSuccess(res, {
                 customers: normalized,

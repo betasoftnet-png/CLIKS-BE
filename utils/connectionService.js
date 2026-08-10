@@ -1,4 +1,4 @@
-const db = require('../db/connection');
+let tableEnsured = false;
 
 /**
  * Customer Connection Service - CLIKS Business <-> CLIKS Website Connection System
@@ -8,6 +8,7 @@ const connectionService = {
      * Self-healing table check
      */
     ensureTable: async () => {
+        if (tableEnsured) return;
         try {
             await db.prepare(`
                 CREATE TABLE IF NOT EXISTS customer_connections (
@@ -23,6 +24,7 @@ const connectionService = {
                     updated_at TEXT
                 )
             `).run();
+            tableEnsured = true;
         } catch (e) {}
     },
 
