@@ -30,9 +30,17 @@ const returnsController = {
 
             const returns = await db.prepare(query).all(...params);
 
-            // Fetch items for each return
+            // Fetch items for each return & resolve missing customer_name from invoice
             for (const ret of returns) {
                 ret.items = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(ret.id);
+                if ((!ret.customer_name || !String(ret.customer_name).trim()) && ret.invoice_id) {
+                    try {
+                        const inv = await db.prepare('SELECT client_name, customer_name, client_email FROM business_invoices WHERE user_id = ? AND (invoice_number = ? OR id = ?)').get(req.user.id, ret.invoice_id, ret.invoice_id);
+                        if (inv) {
+                            ret.customer_name = inv.client_name || inv.customer_name || inv.client_email || '';
+                        }
+                    } catch (e) {}
+                }
             }
 
             return sendSuccess(res, returns, 'Returns loaded successfully');
@@ -55,6 +63,16 @@ const returnsController = {
             const now = new Date().toISOString();
             const retNum = return_number || `RET-${Date.now().toString().slice(-6)}`;
 
+            let resolvedCustName = customer_name || null;
+            if (!resolvedCustName && invoice_id) {
+                try {
+                    const inv = await db.prepare('SELECT client_name, customer_name, client_email FROM business_invoices WHERE user_id = ? AND (invoice_number = ? OR id = ?)').get(req.user.id, invoice_id, invoice_id);
+                    if (inv) {
+                        resolvedCustName = inv.client_name || inv.customer_name || inv.client_email || null;
+                    }
+                } catch (e) {}
+            }
+
             const result = await db.prepare(`
                 INSERT INTO business_returns (
                     user_id, return_number, return_type, return_date, status, invoice_id, purchase_id,
@@ -64,7 +82,7 @@ const returnsController = {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, retNum, return_type || 'sales', return_date, status || 'Pending',
-                invoice_id || null, purchase_id || null, customer_name || null, supplier_name || null,
+                invoice_id || null, purchase_id || null, resolvedCustName, supplier_name || null,
                 refund_amount || 0, adjustment_amount || 0, tax_adjustment || 0,
                 refund_mode || 'Cash', refund_status || 'pending', refund_date || null, refund_reference || null,
                 reason_code || null, inspection_status || 'Pending Check', warehouse_id || 'Main Godown',
