@@ -54,7 +54,8 @@ const getProfile = async (req, res) => {
 
 // ── PATCH / — Update username, email, or avatar ───────────────────────────────
 const updateProfile = async (req, res) => {
-  const { username, email, name, avatar_data, avatar_name, tier, subscription_days_remaining, favorite_products } = req.body;
+  const bodyData = { ...req.query, ...req.body };
+  const { username, email, name, avatar_data, avatar_name, tier, subscription_days_remaining, favorite_products } = bodyData;
   const targetUsername = username || name;
 
   if (!targetUsername && !email && !avatar_data && tier === undefined && subscription_days_remaining === undefined && favorite_products === undefined) {

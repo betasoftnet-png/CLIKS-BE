@@ -143,7 +143,9 @@ const paymentController = {
     },
 
     createCashfreeOrder: async (req, res) => {
-        const { amount, orderId, currency } = req.body;
+        const amount = req.body?.amount || req.query?.amount || req.body?.order_amount || req.query?.order_amount;
+        const orderId = req.body?.orderId || req.query?.orderId || req.body?.order_id || req.query?.order_id;
+        const currency = req.body?.currency || req.query?.currency || 'INR';
         if (!amount) return sendError(res, 'Amount is required', 400);
 
         try {

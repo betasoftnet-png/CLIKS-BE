@@ -8,8 +8,11 @@ router.get('/subscription/:email', getSubscriptionDetails);
 // GET    /profile                    — Get the currently authenticated user's profile
 router.get('/', getProfile);
 
-// PATCH  /profile                    — Update username or email
+// PATCH / PUT / POST / GET /profile — Update username or email
 router.patch('/', updateProfile);
+router.put('/', updateProfile);
+router.post('/', updateProfile);
+router.get('/update', updateProfile);
 
 // PATCH  /profile/change-password    — Change the user's password (requires current password)
 router.patch('/change-password', changePassword);

@@ -20,5 +20,6 @@ router.post('/pay', paymentController.paySupplier);
 router.get('/reports', paymentController.getReports);
 router.get('/outstanding', paymentController.getOutstanding);
 router.post('/create-order', paymentController.createCashfreeOrder);
+router.get('/create-order', paymentController.createCashfreeOrder);
 
 module.exports = router;
