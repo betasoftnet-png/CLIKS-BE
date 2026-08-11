@@ -4,9 +4,10 @@ const { authLimiter } = require('../middleware/rateLimiter');
 const asyncHandler = require('../utils/asyncHandler');
 const { ssoLogin, refresh, logout, logoutAll, heartbeat } = require('../controllers/authController');
 
-// POST /auth/sso & POST /auth/sso/ — SSO Login using BNX Token
+// GET & POST /auth/sso — SSO Login using BNX Token
+router.get('/sso', authLimiter, asyncHandler(ssoLogin));
 router.post('/sso', authLimiter, asyncHandler(ssoLogin));
-router.post('/sso/', authLimiter, asyncHandler(ssoLogin));
+router.get('/sso-login', authLimiter, asyncHandler(ssoLogin));
 router.post('/sso-login', authLimiter, asyncHandler(ssoLogin));
 
 // POST /auth/refresh       — Refresh access token using a refresh token

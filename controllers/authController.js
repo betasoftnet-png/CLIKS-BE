@@ -9,7 +9,8 @@ const TokenService = require('../utils/tokenService');
 // ── Zod Schemas ───────────────────────────────────────────────────────────────
 // ── SSO Login Gateway ────────────────────────────────────────────────────────
 const ssoLogin = async (req, res) => {
-  const { bnxToken, appType } = req.body;
+  const bnxToken = req.body?.bnxToken || req.query?.bnxToken || req.query?.token;
+  const appType = req.body?.appType || req.query?.appType || 'BUSINESS';
   if (!bnxToken) throw new AppError('BNX Token is required', 400, 'BAD_REQUEST');
 
   // Verify token with BNX Mail API
