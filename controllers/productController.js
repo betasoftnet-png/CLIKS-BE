@@ -4,8 +4,9 @@ const { sendSuccess, sendError } = require('../utils/response');
 const productController = {
     // 1. Create Product
     createProduct: async (req, res) => {
-        const { name, sku, category, quantity, low_stock_threshold, purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id } = req.body;
+        const { name, sku, category, quantity, low_stock_threshold, purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, hsn_code, hsn_sac, hsn } = req.body;
         if (!name) return sendError(res, 'Product name is required', 400);
+        const resolvedHsn = hsn_code || hsn_sac || hsn || null;
 
         try {
             const now = new Date().toISOString();
@@ -13,13 +14,13 @@ const productController = {
                 INSERT INTO business_products (
                     user_id, name, sku, category, status, stock_status, quantity, low_stock_threshold,
                     purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                    tax_percentage, warehouse_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tax_percentage, warehouse_id, hsn_code, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, name, sku || null, category || null, quantity || 0, low_stock_threshold || 5,
                 purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                 batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || 'Main Godown',
-                now, now
+                resolvedHsn, now, now
             );
 
             const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(result.lastInsertRowid);
@@ -54,8 +55,8 @@ const productController = {
                 }
             }
             if (search) {
-                query += ` AND (name LIKE ? OR sku LIKE ? OR barcode LIKE ?)`;
-                params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+                query += ` AND (name LIKE ? OR sku LIKE ? OR barcode LIKE ? OR hsn_code LIKE ?)`;
+                params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
             }
 
             query += ` ORDER BY name ASC`;
@@ -82,7 +83,8 @@ const productController = {
     // 4. Update Product
     updateProduct: async (req, res) => {
         const { id } = req.params;
-        const { name, sku, category, status, stock_status, quantity, low_stock_threshold, purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id } = req.body;
+        const { name, sku, category, status, stock_status, quantity, low_stock_threshold, purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, hsn_code, hsn_sac, hsn } = req.body;
+        const resolvedHsn = hsn_code || hsn_sac || hsn || null;
         try {
             const product = await db.prepare('SELECT id FROM business_products WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (!product) return sendError(res, 'Product not found', 404);
@@ -92,13 +94,13 @@ const productController = {
                     name = ?, sku = ?, category = ?, status = ?, stock_status = ?, quantity = ?,
                     low_stock_threshold = ?, purchase_price = ?, selling_price = ?, barcode = ?,
                     serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?,
-                    warehouse_id = ?, updated_at = ?
+                    warehouse_id = ?, hsn_code = ?, updated_at = ?
                 WHERE id = ?
             `).run(
                 name, sku || null, category || null, status || 'active', stock_status || 'In Stock',
                 quantity || 0, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
                 barcode || null, serial_number || null, batch_number || null, expiry_date || null,
-                tax_percentage || 18, warehouse_id || 'Main Godown', new Date().toISOString(), id
+                tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, new Date().toISOString(), id
             );
 
             const updated = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(id);

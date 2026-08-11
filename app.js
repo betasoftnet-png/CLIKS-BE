@@ -208,6 +208,8 @@ app.use('/api/v1/returns',          auth, require('./routes/returns'));
 app.use('/api/v1/purchases',        auth, require('./routes/purchases'));
 app.use('/api/v1/suppliers',        auth, require('./routes/suppliers'));
 app.use('/api/v1/products',         auth, require('./routes/products'));
+app.use('/api/v1/hsn',              auth, require('./routes/hsn'));
+app.use('/api/hsn',                 auth, require('./routes/hsn'));
 app.use('/api/v1/staffing',         auth, require('./routes/staffing'));
 app.use('/api/v1/staff',            auth, require('./routes/staff'));
 app.use('/api/v1/business-plans',   auth, require('./routes/businessFinancialPlan'));

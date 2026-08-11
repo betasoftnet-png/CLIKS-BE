@@ -75,5 +75,6 @@ router.use('/tasks',          auth, require('../tasks'));
 router.use('/notifications',   auth, require('../notifications'));
 router.use('/presence',        auth, require('../presence'));
 router.use('/gst-credentials', auth, require('../gstCredentials'));
+router.use('/hsn',             auth, require('../hsn'));
 
 module.exports = router;

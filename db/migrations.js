@@ -1,5 +1,6 @@
 const db = require('./connection');
 const dbType = process.env.DB_TYPE || 'sqlite';
+const { seedHsnMaster } = require('../utils/hsnSeed');
 
 async function runMigrations() {
   let sql = `
@@ -2734,6 +2735,40 @@ CREATE TABLE IF NOT EXISTS money_trackers (
     }
   } catch (err) {
     console.warn("⚠️ Skipping customer integration migrations:", err.message);
+  }
+
+  // ── HSN Master Table Migration & Seeding ──────────────────────────────────
+  try {
+    const idType = dbType === 'postgres' ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS hsn_master (
+        id ${idType},
+        hsn_code TEXT NOT NULL,
+        description TEXT NOT NULL
+      )
+    `).run();
+
+    try {
+      await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_hsn_code_desc ON hsn_master(hsn_code, description)").run();
+    } catch (e) {
+      // Index exists or conflict
+    }
+
+    try {
+      await db.prepare("CREATE INDEX IF NOT EXISTS idx_hsn_code ON hsn_master(hsn_code)").run();
+    } catch (e) {
+      // Index exists
+    }
+
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN hsn_code TEXT").run();
+    } catch (e) {
+      // Column already exists
+    }
+
+    await seedHsnMaster();
+  } catch (hsnErr) {
+    console.warn("⚠️ Error initializing HSN master migrations:", hsnErr.message);
   }
 
   console.log('✅ Migrations applied');
