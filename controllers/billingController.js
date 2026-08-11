@@ -175,8 +175,10 @@ const billingController = {
             await logBusinessAudit(req.user.id, 'INVOICE_CREATE', `Created invoice ${invNum} for client ${client_name} (amount: ₹${numTotal})`, 'SUCCESS');
 
             // Sync to GSTR-1
-            if (invoice_type === 'GST' || numTax > 0) {
+            try {
                 await gstHelper.syncInvoiceToGstr1(result.lastInsertRowid, req.user.id);
+            } catch (gstrErr) {
+                console.error('[GSTR-1 SYNC WARNING] Error syncing invoice to GSTR-1:', gstrErr.message);
             }
 
             // Real-time integration to CLIKS Customer Application (safely wrapped to avoid 500 errors)
@@ -364,8 +366,10 @@ const billingController = {
             await logBusinessAudit(req.user.id, 'INVOICE_UPDATE', `Updated invoice ID ${id} for client ${client_name} (amount: ₹${numTotal})`, 'INFO');
 
             // Sync to GSTR-1
-            if (invoice_type === 'GST' || numTax > 0) {
+            try {
                 await gstHelper.syncInvoiceToGstr1(id, req.user.id);
+            } catch (gstrErr) {
+                console.error('[GSTR-1 SYNC WARNING] Error syncing invoice update to GSTR-1:', gstrErr.message);
             }
 
             return sendSuccess(res, updatedInvoice, 'Invoice updated successfully');

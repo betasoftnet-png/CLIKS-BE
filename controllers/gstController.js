@@ -80,7 +80,7 @@ const initGstTableAndColumns = async () => {
         }
 
         // Broad synchronization of all sales invoices to ensure GSTR-1 is always up to date
-        const sales = await db.prepare("SELECT id, user_id FROM business_invoices WHERE (invoice_type = 'GST' OR invoice_type = 'Export' OR tax_amount > 0) AND invoice_number IS NOT NULL").all();
+        const sales = await db.prepare("SELECT id, user_id FROM business_invoices WHERE invoice_number IS NOT NULL AND invoice_number != ''").all();
         for (const inv of sales) {
             await gstHelper.syncInvoiceToGstr1(inv.id, inv.user_id);
         }
