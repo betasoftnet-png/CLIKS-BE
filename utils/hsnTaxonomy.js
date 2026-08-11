@@ -1,51 +1,62 @@
 /**
- * CLIKS Business ERP — HSN/SAC Taxonomy & Domain Search Intent Engine
+ * CLIKS Business ERP — Precision HSN/SAC Taxonomy & Domain Search Intent Engine
  * 
  * Maps user search queries, brand names, product terms, and multilingual terms
- * to target HSN/SAC code families, description keywords, and classification types.
+ * to exact target HSN/SAC code families, description keywords, and classification types.
  */
 
-// ── Normalize User Search Query ────────────────────────────────────────────────
+const MODIFIER_WORDS = new Set([
+    'pro', 'max', 'plus', 'mini', 'lite', 'ultra', 'series', 'model',
+    'v1', 'v2', 'v3', 'v4', 'v5', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
+    '11', '12', '13', '14', '15', '16', '5g', '4g', '3g', '2g',
+    'm1', 'm2', 'm3', 'm4', 'm5', 'gen', 'generation', 'edition', 'super', 'prime',
+    'duo', 'air', 'fold', 'flip', 'touch', 'smart', 'star',
+    'for', 'and', 'the', 'with', 'in', 'of', 'a', 'an', 'by', 'to', 'on'
+]);
+
 function normalizeQuery(rawQuery) {
     if (!rawQuery) return '';
     let q = String(rawQuery).toLowerCase().trim();
-    // Replace punctuation and hyphens with single spaces safely
     q = q.replace(/[-_.,/\\()$&@#*+!?:;]/g, ' ');
-    // Collapse multiple consecutive spaces
     q = q.replace(/\s+/g, ' ').trim();
     return q;
 }
 
-// ── Domain Taxonomy Definitions ───────────────────────────────────────────────
+function cleanSearchTerms(normalizedQuery) {
+    if (!normalizedQuery) return [];
+    const words = normalizedQuery.split(' ').filter(Boolean);
+    return words.filter(w => !MODIFIER_WORDS.has(w) && w.length >= 2);
+}
+
 const DOMAIN_TAXONOMY = [
-    // 1. Mobile Phones & Wireless Accessories
+    // 1. Mobile Phones & Wireless Handsets
     {
         domain: 'mobile_phone',
         synonyms: [
-            'iphone', 'apple iphone', 'apple', 'samsung', 'samsung mobile', 'samsung galaxy',
-            'oneplus', 'oneplus phone', 'oneplus mobile', 'vivo', 'vivo mobile', 'oppo', 'oppo mobile',
-            'redmi', 'redmi phone', 'realme', 'realme phone', 'xiaomi', 'pixel', 'nokia', 'motorola',
-            'cellphone', 'cell phone', 'mobile', 'smartphone', 'mobile phone', 'telephone', 'phone',
-            'cellular', 'handset'
+            'iphone', 'apple iphone', 'samsung mobile', 'samsung galaxy', 'samsung', 'oneplus phone', 'oneplus mobile',
+            'vivo mobile', 'oppo mobile', 'redmi phone', 'redmi', 'realme phone', 'realme', 'xiaomi',
+            'pixel', 'nokia', 'motorola', 'cellphone', 'cell phone', 'mobile phone', 'mobile',
+            'smartphone', 'telephone', 'phone', 'cellular', 'handset'
         ],
         hsnPrefixes: ['8517', '851711', '851712', '851718'],
-        keywords: ['cellular', 'telephone', 'wireless network', 'phone', 'push button'],
+        keywords: ['cellular', 'telephone', 'wireless network', 'phone'],
         type: 'goods'
     },
+    // 2. Mobile Accessories & Chargers
     {
         domain: 'mobile_accessories',
-        synonyms: ['charger', 'mobile charger', 'power bank', 'data cable', 'usb cable', 'screen guard', 'mobile cover'],
-        hsnPrefixes: ['8504', '8544', '3926', '850440'],
-        keywords: ['chargers', 'static converters', 'insulated wire', 'cables', 'plastics']
+        synonyms: ['mobile charger', 'charger', 'power bank', 'data cable', 'usb cable', 'screen guard'],
+        hsnPrefixes: ['8504', '850440', '8544'],
+        keywords: ['chargers', 'static converters', 'insulated wire', 'cables']
     },
 
-    // 2. Laptops, Computers & Tech
+    // 3. Laptops, Computers & Notebooks
     {
         domain: 'computer_laptop',
         synonyms: [
-            'macbook', 'macbook pro', 'macbook air', 'laptop', 'notebook', 'dell', 'dell laptop', 'dell inspiron',
-            'hp', 'hp laptop', 'hp pavilion', 'lenovo', 'lenovo laptop', 'lenovo thinkpad', 'acer', 'acer laptop',
-            'asus', 'asus laptop', 'computer', 'pc', 'desktop', 'desktop computer', 'personal computer',
+            'macbook', 'macbook pro', 'macbook air', 'macbook pro 5', 'macbook pro m1', 'macbook pro m2', 'macbook pro m3',
+            'laptop', 'notebook', 'dell laptop', 'dell inspiron', 'hp laptop', 'hp pavilion', 'lenovo laptop',
+            'lenovo thinkpad', 'acer laptop', 'asus laptop', 'computer', 'pc', 'desktop computer', 'personal computer',
             'ipad', 'tablet', 'chromebook'
         ],
         hsnPrefixes: ['8471', '847130', '84713010', '847141', '847150'],
@@ -54,26 +65,28 @@ const DOMAIN_TAXONOMY = [
     },
     {
         domain: 'computer_peripherals',
-        synonyms: ['monitor', 'display', 'keyboard', 'mouse', 'printer', 'scanner', 'hard disk', 'ssd', 'ram', 'memory card', 'pendrive', 'usb drive'],
+        synonyms: ['monitor', 'computer display', 'keyboard', 'mouse', 'printer', 'scanner', 'hard disk', 'ssd', 'ram', 'memory card', 'pendrive', 'usb drive'],
         hsnPrefixes: ['847160', '847170', '8473', '8523'],
         keywords: ['input or output units', 'storage units', 'printing', 'media']
     },
 
-    // 3. Groceries & Supermarket Staples
+    // 4. Groceries: Rice
     {
         domain: 'rice',
-        synonyms: ['rice', 'chawal', 'arisi', 'paddy', 'basmati', 'biryani rice', 'raw rice', 'boiled rice'],
+        synonyms: ['rice', 'basmati rice', 'basmati', 'chawal', 'arisi', 'paddy', 'biryani rice', 'raw rice', 'boiled rice'],
         hsnPrefixes: ['1006', '100610', '100620', '100630', '1102'],
         keywords: ['rice', 'husked', 'paddy', 'basmati'],
         type: 'goods'
     },
+    // 5. Groceries: Wheat & Flour
     {
         domain: 'wheat',
-        synonyms: ['wheat', 'gehun', 'godhumai', 'atta', 'wheat flour', 'maida', 'sooji', 'rawa'],
+        synonyms: ['wheat', 'atta', 'gehun', 'godhumai', 'wheat flour', 'maida', 'sooji', 'rawa'],
         hsnPrefixes: ['1001', '100111', '100119', '1101', '110100'],
         keywords: ['wheat', 'meslin', 'flour'],
         type: 'goods'
     },
+    // 6. Groceries: Barley
     {
         domain: 'barley',
         synonyms: ['barley', 'jau'],
@@ -81,6 +94,7 @@ const DOMAIN_TAXONOMY = [
         keywords: ['barley'],
         type: 'goods'
     },
+    // 7. Sugar & Salt
     {
         domain: 'sugar',
         synonyms: ['sugar', 'cheeni', 'sakkarai', 'jaggery', 'gud', 'sugar cane'],
@@ -138,21 +152,41 @@ const DOMAIN_TAXONOMY = [
         type: 'goods'
     },
 
-    // 4. Vegetable & Fresh Produce Shop
+    // 8. Vegetables: Precision Categories
     {
-        domain: 'vegetables',
+        domain: 'tomato',
+        synonyms: ['tomato', 'tomatoes', 'tamatar', 'thakkali'],
+        hsnPrefixes: ['0702', '070200'],
+        keywords: ['tomatoes'],
+        type: 'goods'
+    },
+    {
+        domain: 'potato',
+        synonyms: ['potato', 'potatoes', 'aalu', 'urulaikizhangu'],
+        hsnPrefixes: ['0701', '070110', '070190'],
+        keywords: ['potatoes'],
+        type: 'goods'
+    },
+    {
+        domain: 'onion',
+        synonyms: ['onion', 'onions', 'pyaaz', 'vengayam', 'shallots', 'garlic'],
+        hsnPrefixes: ['0703', '070310', '070320'],
+        keywords: ['onions', 'shallots', 'garlic'],
+        type: 'goods'
+    },
+    {
+        domain: 'other_vegetables',
         synonyms: [
-            'tomato', 'tamatar', 'thakkali', 'potato', 'aalu', 'urulaikizhangu', 'onion', 'pyaaz', 'vengayam',
             'carrot', 'cabbage', 'cauliflower', 'brinjal', 'eggplant', 'lady finger', 'bhindi', 'okra',
             'green chilli', 'chilli', 'spinach', 'palak', 'beans', 'peas', 'muttar', 'drumstick', 'pumpkin',
             'vegetables', 'veggies', 'sabzi'
         ],
-        hsnPrefixes: ['0701', '0702', '0703', '0704', '0705', '0706', '0708', '0709', '0710'],
-        keywords: ['vegetable', 'tomatoes', 'potatoes', 'onions', 'cabbages', 'carrots', 'leguminous', 'capsicum'],
+        hsnPrefixes: ['0704', '0705', '0706', '0708', '0709', '0710'],
+        keywords: ['vegetable', 'cabbages', 'carrots', 'leguminous', 'capsicum'],
         type: 'goods'
     },
 
-    // 5. Electrical Goods
+    // 9. Electrical Goods
     {
         domain: 'electrical_lighting',
         synonyms: ['led bulb', 'led light', 'tube light', 'light bulb', 'lamp', 'bulb', 'lighting'],
@@ -172,26 +206,43 @@ const DOMAIN_TAXONOMY = [
     },
     {
         domain: 'electrical_fans',
-        synonyms: ['fan', 'ceiling fan', 'table fan', 'exhaust fan'],
+        synonyms: ['electric fan', 'fan', 'ceiling fan', 'table fan', 'exhaust fan'],
         hsnPrefixes: ['8414', '841451'],
-        keywords: ['fans', 'table', 'floor', 'wall', 'window', 'ceiling'],
+        keywords: ['fans', 'ceiling fan', 'table fan'],
         type: 'goods'
     },
 
-    // 6. Consumer Electronics & Appliances
+    // 10. Consumer Electronics: Precision Categories
     {
-        domain: 'appliances_tv',
-        synonyms: [
-            'television', 'tv', 'led tv', 'smart tv', 'refrigerator', 'fridge', 'washing machine', 'washer',
-            'microwave oven', 'oven', 'air conditioner', 'ac', 'speaker', 'headphones', 'earphones', 'soundbar',
-            'camera', 'dslr', 'electronic equipment'
-        ],
-        hsnPrefixes: ['8528', '852872', '8418', '8450', '8516', '8415', '8518', '8525'],
-        keywords: ['reception apparatus for television', 'monitors', 'refrigerators', 'washing machines', 'microwave ovens', 'air conditioning', 'loudspeakers'],
+        domain: 'television',
+        synonyms: ['tv', 'led tv', 'smart tv', 'television', 'monitors'],
+        hsnPrefixes: ['8528', '852872', '852852'],
+        keywords: ['reception apparatus for television', 'monitors'],
+        type: 'goods'
+    },
+    {
+        domain: 'refrigerator',
+        synonyms: ['refrigerator', 'fridge', 'freezer'],
+        hsnPrefixes: ['8418', '841810', '841821'],
+        keywords: ['refrigerators', 'freezers'],
+        type: 'goods'
+    },
+    {
+        domain: 'washing_machine',
+        synonyms: ['washing machine', 'washer'],
+        hsnPrefixes: ['8450', '845011', '845012'],
+        keywords: ['washing machines'],
+        type: 'goods'
+    },
+    {
+        domain: 'other_electronics',
+        synonyms: ['microwave oven', 'oven', 'air conditioner', 'speaker', 'headphones', 'earphones', 'soundbar', 'camera', 'dslr', 'electronic equipment'],
+        hsnPrefixes: ['8516', '8415', '8518', '8525'],
+        keywords: ['microwave ovens', 'air conditioning', 'loudspeakers'],
         type: 'goods'
     },
 
-    // 7. Clothing & Apparel
+    // 11. Clothing & Apparel
     {
         domain: 'clothing_apparel',
         synonyms: [
@@ -203,7 +254,7 @@ const DOMAIN_TAXONOMY = [
         type: 'goods'
     },
 
-    // 8. Footwear
+    // 12. Footwear
     {
         domain: 'footwear',
         synonyms: ['shoes', 'shoe', 'sports shoes', 'sandals', 'slippers', 'leather shoes', 'chappal', 'footwear', 'boots', 'sneakers'],
@@ -212,7 +263,7 @@ const DOMAIN_TAXONOMY = [
         type: 'goods'
     },
 
-    // 9. Hardware & Building Materials
+    // 13. Hardware & Building Materials
     {
         domain: 'hardware_building',
         synonyms: [
@@ -224,16 +275,23 @@ const DOMAIN_TAXONOMY = [
         type: 'goods'
     },
 
-    // 10. Furniture
+    // 14. Furniture: Precision Categories
     {
-        domain: 'furniture',
-        synonyms: ['table', 'chair', 'office chair', 'sofa', 'bed', 'cupboard', 'wooden furniture', 'furniture', 'desk'],
-        hsnPrefixes: ['9401', '9403'],
-        keywords: ['seats', 'other furniture', 'wooden furniture', 'metal furniture'],
+        domain: 'chairs_furniture',
+        synonyms: ['hotel chair', 'chair', 'office chair', 'seats', 'sofa'],
+        hsnPrefixes: ['9401', '940161', '940171', '940180'],
+        keywords: ['seats', 'chairs'],
+        type: 'goods'
+    },
+    {
+        domain: 'tables_furniture',
+        synonyms: ['restaurant table', 'table', 'desk', 'wooden furniture', 'furniture', 'cupboard', 'bed'],
+        hsnPrefixes: ['9403', '940330', '940360', '940310'],
+        keywords: ['other furniture', 'wooden furniture', 'tables'],
         type: 'goods'
     },
 
-    // 11. Stationery & Office Supplies
+    // 15. Stationery & Office Supplies
     {
         domain: 'stationery',
         synonyms: ['notebook', 'register', 'book', 'pen', 'pencil', 'eraser', 'marker', 'paper', 'printer paper', 'files', 'folder', 'envelope', 'stationery'],
@@ -242,19 +300,22 @@ const DOMAIN_TAXONOMY = [
         type: 'goods'
     },
 
-    // 12. Automobile & Spare Parts
+    // 16. Automobile, Vehicles & Spare Parts
     {
-        domain: 'automobile_parts',
+        domain: 'automobile_vehicles',
         synonyms: [
+            'bmw', 'bmw car', 'bmw vehicle', 'bmw x5', 'bmw 3 series', 'toyota car', 'toyota',
+            'hyundai', 'tata car', 'tata', 'mahindra', 'maruti', 'maruti suzuki', 'car',
+            'automobile', 'motor car', 'vehicle', 'motor vehicle', 'bike', 'motorcycle', 'scooter',
             'engine oil', 'oil filter', 'air filter', 'lubricant', 'brake pad', 'clutch plate',
             'tyre', 'tire', 'battery', 'headlight', 'auto parts', 'spare parts', 'automobile parts'
         ],
-        hsnPrefixes: ['2710', '8708', '4011', '8507', '8421', '8512'],
-        keywords: ['parts and accessories of motor vehicles', 'pneumatic tyres', 'electric accumulators', 'filters', 'lubricating'],
+        hsnPrefixes: ['8703', '8708', '8711', '8704', '2710', '4011', '8507', '8421', '8512'],
+        keywords: ['motor cars', 'motor vehicles', 'parts and accessories of motor vehicles', 'pneumatic tyres'],
         type: 'goods'
     },
 
-    // 13. Pharmacy & Medical Supplies
+    // 17. Pharmacy & Medical Supplies
     {
         domain: 'pharmacy_medical',
         synonyms: ['medicine', 'pharma', 'tablet', 'capsule', 'syrup', 'antibiotic', 'drug', 'pharmaceutical', 'mask', 'bandage', 'syringe', 'medical equipment'],
@@ -263,7 +324,7 @@ const DOMAIN_TAXONOMY = [
         type: 'goods'
     },
 
-    // 14. Meat, Poultry & Fish (Hotels / Kitchens)
+    // 18. Meat, Poultry & Fish
     {
         domain: 'meat_poultry_fish',
         synonyms: ['chicken', 'mutton', 'meat', 'fish', 'prawns', 'egg', 'eggs'],
@@ -272,74 +333,124 @@ const DOMAIN_TAXONOMY = [
         type: 'goods'
     },
 
-    // 15. Hotel, Restaurant & Catering Services (SAC)
+    // 19. Hotel, Restaurant & Catering Services (SAC)
     {
         domain: 'restaurant_hotel_services',
         synonyms: [
             'restaurant service', 'food service', 'catering service', 'hotel accommodation',
-            'room service', 'banquet service', 'hotel', 'restaurant', 'catering', 'accommodation service'
+            'room service', 'banquet service', 'catering service', 'accommodation service'
         ],
         hsnPrefixes: ['9963', '996331', '996311', '996332', '996333'],
-        keywords: ['services', 'restaurant', 'catering', 'accommodation', 'hotel'],
+        keywords: ['services', 'restaurant', 'catering', 'accommodation'],
         type: 'services'
     }
 ];
 
-// ── Resolve Search Intent & Intent Matcher ────────────────────────────────────
 function resolveSearchIntent(rawQuery) {
     const normalized = normalizeQuery(rawQuery);
     if (!normalized) {
         return {
             normalized,
             isNumeric: false,
+            primaryPrefixes: [],
             mappedPrefixes: [],
             mappedKeywords: [],
-            classificationType: 'all'
+            cleanTerms: []
         };
     }
 
     const isNumeric = /^\d+$/.test(normalized);
+    const cleanTerms = cleanSearchTerms(normalized);
+
+    if (isNumeric) {
+        return {
+            normalized,
+            isNumeric: true,
+            primaryPrefixes: [],
+            mappedPrefixes: [],
+            mappedKeywords: [],
+            cleanTerms: []
+        };
+    }
+
+    const words = normalized.split(' ').filter(Boolean);
+    const matchedDomains = [];
+
+    for (const item of DOMAIN_TAXONOMY) {
+        let bestScore = 0;
+        for (const syn of item.synonyms) {
+            const normSyn = normalizeQuery(syn);
+            if (!normSyn) continue;
+            
+            // Exact query match -> highest score 100
+            if (normalized === normSyn) {
+                bestScore = Math.max(bestScore, 100);
+            }
+            // Full phrase inclusion -> score 80 + length
+            else if (normalized.includes(normSyn)) {
+                bestScore = Math.max(bestScore, 80 + normSyn.length);
+            }
+            // Word level match
+            else {
+                for (const w of words) {
+                    if (MODIFIER_WORDS.has(w)) continue;
+                    if (w === normSyn) {
+                        bestScore = Math.max(bestScore, 50 + normSyn.length);
+                    } else if (w.length >= 4 && normSyn.length >= 4 && (w.startsWith(normSyn) || normSyn.startsWith(w))) {
+                        bestScore = Math.max(bestScore, 30 + Math.min(w.length, normSyn.length));
+                    }
+                }
+            }
+        }
+
+        if (bestScore > 0) {
+            matchedDomains.push({
+                domain: item.domain,
+                score: bestScore,
+                hsnPrefixes: item.hsnPrefixes,
+                keywords: item.keywords
+            });
+        }
+    }
+
+    // Sort matched domains by match score descending
+    matchedDomains.sort((a, b) => b.score - a.score);
+
+    const primaryPrefixes = [];
     const mappedPrefixes = [];
     const mappedKeywords = [];
-    let classificationType = 'all';
 
-    if (!isNumeric) {
-        const words = normalized.split(' ');
-        for (const item of DOMAIN_TAXONOMY) {
-            const isMatch = item.synonyms.some(syn => {
-                const normSyn = normalizeQuery(syn);
-                if (normalized === normSyn || normalized.includes(normSyn)) {
-                    return true;
-                }
-                // Word-level matching for multi-word queries or exact word matches
-                return words.some(w => w.length >= 3 && (normSyn === w || normSyn.includes(w)));
-            });
-
-            if (isMatch) {
-                if (item.type) {
-                    classificationType = item.type;
-                }
-                for (const p of item.hsnPrefixes) {
-                    if (!mappedPrefixes.includes(p)) mappedPrefixes.push(p);
-                }
-                for (const k of item.keywords) {
-                    if (!mappedKeywords.includes(k)) mappedKeywords.push(k);
-                }
+    for (let i = 0; i < matchedDomains.length; i++) {
+        const dom = matchedDomains[i];
+        for (const p of dom.hsnPrefixes) {
+            if (i === 0 && !primaryPrefixes.includes(p)) {
+                primaryPrefixes.push(p);
+            }
+            if (!mappedPrefixes.includes(p)) {
+                mappedPrefixes.push(p);
+            }
+        }
+        for (const k of dom.keywords) {
+            if (!mappedKeywords.includes(k)) {
+                mappedKeywords.push(k);
             }
         }
     }
 
     return {
         normalized,
-        isNumeric,
+        isNumeric: false,
+        cleanTerms,
+        primaryPrefixes,
         mappedPrefixes,
-        mappedKeywords,
-        classificationType
+        mappedKeywords
     };
 }
 
 module.exports = {
     normalizeQuery,
+    cleanSearchTerms,
     resolveSearchIntent,
-    DOMAIN_TAXONOMY
+    DOMAIN_TAXONOMY,
+    MODIFIER_WORDS
 };
