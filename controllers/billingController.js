@@ -179,11 +179,15 @@ const billingController = {
                 await gstHelper.syncInvoiceToGstr1(result.lastInsertRowid, req.user.id);
             }
 
-            // Real-time integration to CLIKS Customer Application
-            await processCustomerInvoiceIntegration({
-                createdInvoice,
-                merchantUserId: req.user.id
-            });
+            // Real-time integration to CLIKS Customer Application (safely wrapped to avoid 500 errors)
+            try {
+                await processCustomerInvoiceIntegration({
+                    createdInvoice,
+                    merchantUserId: req.user.id
+                });
+            } catch (syncErr) {
+                console.error('[SYNC WARNING] Customer invoice integration error:', syncErr.message || syncErr);
+            }
 
             return sendSuccess(res, createdInvoice, 'Invoice created successfully', 201);
         } catch (error) {

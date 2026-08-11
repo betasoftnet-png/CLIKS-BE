@@ -1,3 +1,4 @@
+const db = require('../db/connection');
 let tableEnsured = false;
 
 /**
