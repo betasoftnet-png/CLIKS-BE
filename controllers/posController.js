@@ -27,6 +27,14 @@ const posController = {
         const numDiscount = parseFloat(discount_amount) || 0;
         const numRoundOff = parseFloat(round_off) || 0;
 
+        const loyaltyPointsEarned = parseFloat(req.body.loyalty_points_earned || req.body.loyaltyPointsEarned || 0) || 0;
+        const customerId = req.body.customer_id || null;
+
+        // Ensure column exists
+        try {
+            await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_points_earned REAL DEFAULT 0').run();
+        } catch (e) {}
+
         try {
             // 1. Insert into business_invoices
             const result = await db.prepare(`
@@ -34,16 +42,39 @@ const posController = {
                     user_id, invoice_number, client_name, client_email,
                     amount, tax_amount, total_amount, paid_amount, due_amount,
                     discount_amount, round_off, status, due_date, payment_mode,
-                    invoice_type, items, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    invoice_type, items, loyalty_points_earned, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run([
                 userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null,
                 numAmount, numTax, numTotal, numPaid, numDue,
                 numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
-                'POS', JSON.stringify(items), now, now
+                'POS', JSON.stringify(items), loyaltyPointsEarned, now, now
             ]);
 
             const invoiceId = result.lastInsertRowid || result.id;
+
+            // 1.5 Atomically update Customer Loyalty Points in database upon successful payment
+            if (loyaltyPointsEarned > 0) {
+                if (customerId) {
+                    await db.prepare(`
+                        UPDATE business_customers 
+                        SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
+                        WHERE id = ? AND user_id = ?
+                    `).run([loyaltyPointsEarned, now, customerId, userId]);
+                } else if (client_email) {
+                    await db.prepare(`
+                        UPDATE business_customers 
+                        SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
+                        WHERE LOWER(email) = ? AND user_id = ?
+                    `).run([loyaltyPointsEarned, now, String(client_email).toLowerCase().trim(), userId]);
+                } else if (req.body.client_phone) {
+                    await db.prepare(`
+                        UPDATE business_customers 
+                        SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
+                        WHERE (phone = ? OR phone_number = ?) AND user_id = ?
+                    `).run([loyaltyPointsEarned, now, req.body.client_phone, req.body.client_phone, userId]);
+                }
+            }
 
             // 2. Update stock in correct inventory/products table for each item
             for (const item of items) {
