@@ -101,6 +101,24 @@ const customerCrmController = {
         } = req.body;
         if (!name) return sendError(res, 'Name is required', 400);
 
+        // Phone validation: exactly 10 digits
+        const rawPhone = (phone_number || phone || '').toString().trim();
+        if (!rawPhone || !/^\d{10}$/.test(rawPhone)) {
+            return sendError(res, 'Phone number must be exactly 10 digits.', 400);
+        }
+
+        // Email validation: optional, but if entered must end with @bnxmail.com
+        const rawEmail = (email || '').toString().trim().toLowerCase();
+        if (rawEmail.length > 0 && (!rawEmail.endsWith('@bnxmail.com') || !/^[^\s@]+@bnxmail\.com$/.test(rawEmail))) {
+            return sendError(res, 'Email must use the @bnxmail.com domain.', 400);
+        }
+
+        // GSTIN validation: optional, but if entered must be exactly 15 chars
+        const rawGstin = (gstin || '').toString().trim().toUpperCase();
+        if (rawGstin.length > 0 && (rawGstin.length !== 15 || !/^[0-9A-Z]{15}$/.test(rawGstin))) {
+            return sendError(res, 'GSTIN must be exactly 15 characters.', 400);
+        }
+
         try {
             const now = new Date().toISOString();
             const result = await db.prepare(`

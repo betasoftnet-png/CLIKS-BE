@@ -114,15 +114,33 @@ const crmController = {
                 return sendError(res, 'Customer name is required', 400);
             }
 
+            // Phone validation: exactly 10 digits
+            const rawPhone = (body.phone_number || body.phone || body.mobile || body.contact || '').toString().trim();
+            if (!rawPhone || !/^\d{10}$/.test(rawPhone)) {
+                return sendError(res, 'Phone number must be exactly 10 digits.', 400);
+            }
+
+            // Email validation: optional, but if entered must end with @bnxmail.com
+            const rawEmail = (body.email || '').toString().trim().toLowerCase();
+            if (rawEmail.length > 0 && (!rawEmail.endsWith('@bnxmail.com') || !/^[^\s@]+@bnxmail\.com$/.test(rawEmail))) {
+                return sendError(res, 'Email must use the @bnxmail.com domain.', 400);
+            }
+
+            // GSTIN validation: optional, but if entered must be exactly 15 chars
+            const rawGstin = (body.gstin || '').toString().trim().toUpperCase();
+            if (rawGstin.length > 0 && (rawGstin.length !== 15 || !/^[0-9A-Z]{15}$/.test(rawGstin))) {
+                return sendError(res, 'GSTIN must be exactly 15 characters.', 400);
+            }
+
             const company = body.company || body.business_name || null;
             const business_name = body.business_name || company || null;
             const contact_person = body.contact_person || name || null;
-            const gstin = body.gstin || null;
+            const gstin = rawGstin || null;
             const panVal = body.pan_number || body.pan || null;
             const pan = panVal;
             const pan_number = panVal;
-            const email = body.email || null;
-            const phoneVal = body.phone_number || body.phone || body.mobile || body.contact || null;
+            const email = rawEmail || null;
+            const phoneVal = rawPhone || null;
             const phone = phoneVal;
             const phone_number = phoneVal;
             const alternate_phone = body.alternate_phone || null;
