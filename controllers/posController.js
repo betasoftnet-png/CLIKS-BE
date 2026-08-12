@@ -37,42 +37,71 @@ const posController = {
 
         try {
             // 1. Insert into business_invoices
-            const result = await db.prepare(`
-                INSERT INTO business_invoices (
-                    user_id, invoice_number, client_name, client_email,
-                    amount, tax_amount, total_amount, paid_amount, due_amount,
-                    discount_amount, round_off, status, due_date, payment_mode,
-                    invoice_type, items, loyalty_points_earned, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run([
-                userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null,
-                numAmount, numTax, numTotal, numPaid, numDue,
-                numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
-                'POS', JSON.stringify(items), loyaltyPointsEarned, now, now
-            ]);
-
-            const invoiceId = result.lastInsertRowid || result.id;
+            let invoiceId;
+            try {
+                const result = await db.prepare(`
+                    INSERT INTO business_invoices (
+                        user_id, invoice_number, client_name, client_email,
+                        amount, tax_amount, total_amount, paid_amount, due_amount,
+                        discount_amount, round_off, status, due_date, payment_mode,
+                        invoice_type, items, loyalty_points_earned, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run([
+                    userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null,
+                    numAmount, numTax, numTotal, numPaid, numDue,
+                    numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
+                    'POS', JSON.stringify(items), loyaltyPointsEarned, now, now
+                ]);
+                invoiceId = result.lastInsertRowid || result.id;
+            } catch (errIns) {
+                // Fallback insert if column is missing on legacy table
+                const result = await db.prepare(`
+                    INSERT INTO business_invoices (
+                        user_id, invoice_number, client_name, client_email,
+                        amount, tax_amount, total_amount, paid_amount, due_amount,
+                        discount_amount, round_off, status, due_date, payment_mode,
+                        invoice_type, items, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run([
+                    userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null,
+                    numAmount, numTax, numTotal, numPaid, numDue,
+                    numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
+                    'POS', JSON.stringify(items), now, now
+                ]);
+                invoiceId = result.lastInsertRowid || result.id;
+            }
 
             // 1.5 Atomically update Customer Loyalty Points in database upon successful payment
             if (loyaltyPointsEarned > 0) {
-                if (customerId) {
-                    await db.prepare(`
-                        UPDATE business_customers 
-                        SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
-                        WHERE id = ? AND user_id = ?
-                    `).run([loyaltyPointsEarned, now, customerId, userId]);
-                } else if (client_email) {
-                    await db.prepare(`
-                        UPDATE business_customers 
-                        SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
-                        WHERE LOWER(email) = ? AND user_id = ?
-                    `).run([loyaltyPointsEarned, now, String(client_email).toLowerCase().trim(), userId]);
-                } else if (req.body.client_phone) {
-                    await db.prepare(`
-                        UPDATE business_customers 
-                        SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
-                        WHERE (phone = ? OR phone_number = ?) AND user_id = ?
-                    `).run([loyaltyPointsEarned, now, req.body.client_phone, req.body.client_phone, userId]);
+                try {
+                    let updatedCount = 0;
+                    if (customerId) {
+                        const res = await db.prepare(`
+                            UPDATE business_customers 
+                            SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
+                            WHERE id = ? AND user_id = ?
+                        `).run([loyaltyPointsEarned, now, customerId, userId]);
+                        updatedCount = res?.changes || 0;
+                    }
+
+                    if (!updatedCount && client_email) {
+                        const res = await db.prepare(`
+                            UPDATE business_customers 
+                            SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
+                            WHERE LOWER(email) = ? AND user_id = ?
+                        `).run([loyaltyPointsEarned, now, String(client_email).toLowerCase().trim(), userId]);
+                        updatedCount = res?.changes || 0;
+                    }
+
+                    if (!updatedCount && client_name && client_name !== 'Walk-in Customer') {
+                        await db.prepare(`
+                            UPDATE business_customers 
+                            SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
+                            WHERE LOWER(name) = ? AND user_id = ?
+                        `).run([loyaltyPointsEarned, now, String(client_name).toLowerCase().trim(), userId]);
+                    }
+                } catch (errLoyalty) {
+                    console.error('[POS Controller] Error updating customer loyalty points:', errLoyalty);
                 }
             }
 
@@ -83,8 +112,7 @@ const posController = {
 
                 const sellQty = parseFloat(item.quantity) || 1;
 
-                if (item.source === 'products') {
-                    // Deduct from Central Catalog Products table (business_products)
+                try {
                     const prodItem = await db.prepare('SELECT quantity FROM business_products WHERE id = ? AND user_id = ?')
                         .get([itemId, userId]);
 
@@ -98,33 +126,38 @@ const posController = {
                             SET quantity = ?, stock_status = ?, updated_at = ? 
                             WHERE id = ? AND user_id = ?
                         `).run([newQty, newStatus, now, itemId, userId]);
-                    }
-                } else {
-                    // Deduct from Legacy Inventory table
-                    const invItem = await db.prepare('SELECT quantity FROM inventory WHERE id = ? AND user_id = ?')
-                        .get([itemId, userId]);
+                    } else {
+                        const invItem = await db.prepare('SELECT quantity FROM inventory WHERE id = ? AND user_id = ?')
+                            .get([itemId, userId]);
 
-                    if (invItem) {
-                        const currentQty = parseFloat(invItem.quantity) || 0;
-                        const newQty = Math.max(0, currentQty - sellQty);
-                        const newStatus = newQty === 0 ? 'Out of Stock' : (newQty < 10 ? 'Low Stock' : 'In Stock');
+                        if (invItem) {
+                            const currentQty = parseFloat(invItem.quantity) || 0;
+                            const newQty = Math.max(0, currentQty - sellQty);
+                            const newStatus = newQty === 0 ? 'Out of Stock' : (newQty < 10 ? 'Low Stock' : 'In Stock');
 
-                        await db.prepare('UPDATE inventory SET quantity = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
-                            .run([newQty, newStatus, now, itemId, userId]);
+                            await db.prepare('UPDATE inventory SET quantity = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+                                .run([newQty, newStatus, now, itemId, userId]);
+                        }
                     }
+                } catch (errStock) {
+                    console.error('[POS Controller] Error updating stock for item:', itemId, errStock);
                 }
             }
 
-            const createdInvoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(invoiceId);
+            let createdInvoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(invoiceId);
             if (createdInvoice && createdInvoice.items) {
                 try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) { }
             }
 
             // Real-time integration to CLIKS Customer Application
-            await processCustomerInvoiceIntegration({
-                createdInvoice,
-                merchantUserId: userId
-            });
+            try {
+                await processCustomerInvoiceIntegration({
+                    createdInvoice,
+                    merchantUserId: userId
+                });
+            } catch (syncErr) {
+                console.error('[POS Controller] Sync notice:', syncErr);
+            }
 
             return sendSuccess(res, createdInvoice, 'POS checkout completed successfully', 201);
         } catch (error) {
