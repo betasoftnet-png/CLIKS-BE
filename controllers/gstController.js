@@ -375,20 +375,24 @@ const gstController = {
             const itemsJson = items ? (typeof items === 'string' ? items : JSON.stringify(items)) : null;
             const createdAt = invoice_date || new Date().toISOString();
 
+            const clientName = req.body.client_name || req.body.customer_name || delivery_location || 'General Customer';
+
             // 3. Database Insertion
             const result = await db.prepare(`
                 INSERT INTO gst_invoices (
-                    user_id, invoice_number, transporter_name, vehicle_number, 
+                    user_id, invoice_number, client_name, customer_name, transporter_name, vehicle_number, 
                     transport_distance, dispatch_location, delivery_location, 
                     status, eway_bill_number, is_eway_bill, is_reconciliation, 
                     transport_mode, transporter_gstin, 
                     goods_product_name, goods_hsn_code, goods_quantity, goods_unit,
                     taxable_value, gst_percentage, amount, items,
                     created_at, updated_at, reference_invoice
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Generated', ?, 'true', 'false', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Generated', ?, 'true', 'false', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id,
                 invoice_number,
+                clientName,
+                clientName,
                 transporter_name,
                 vehicle_number || null,
                 dist,
@@ -481,12 +485,12 @@ const gstController = {
                 // Insert new record
                 const result = await db.prepare(`
                     INSERT INTO gst_invoices (
-                        user_id, vendor_gstin, vendor_name, amount, taxable_value, total_tax,
+                        user_id, vendor_gstin, vendor_name, client_name, customer_name, amount, taxable_value, total_tax,
                         cgst_amount, sgst_amount, igst_amount, eligible_itc,
                         invoice_match_status, is_reconciliation, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'true', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'true', ?, ?)
                 `).run(
-                    req.user.id, vendor_gstin, vendor_name, amt, taxable, tax,
+                    req.user.id, vendor_gstin, vendor_name, vendor_name || 'Vendor', vendor_name || 'Vendor', amt, taxable, tax,
                     cgst, sgst, igst, tax, match_status || 'matched', now, now
                 );
                 return sendSuccess(res, { id: result.lastInsertRowid }, 'Reconciliation entry added');
