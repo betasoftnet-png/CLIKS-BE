@@ -2189,6 +2189,8 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE business_invoices ADD COLUMN tax_type TEXT',
       'ALTER TABLE business_invoices ADD COLUMN sendToCustomerHistory INTEGER DEFAULT 1',
       'ALTER TABLE business_invoices ADD COLUMN sendPurchaseHistoryToCustomer INTEGER DEFAULT 1',
+      'ALTER TABLE business_products ADD COLUMN unit TEXT DEFAULT \'PCS\'',
+      'ALTER TABLE inventory ADD COLUMN unit TEXT DEFAULT \'PCS\'',
       'ALTER TABLE warehouses ADD COLUMN code TEXT',
       'ALTER TABLE warehouses ADD COLUMN type TEXT',
       'ALTER TABLE warehouses ADD COLUMN status TEXT DEFAULT \'active\'',

@@ -113,13 +113,14 @@ const posController = {
                 const sellQty = parseFloat(item.quantity) || 1;
 
                 try {
-                    const prodItem = await db.prepare('SELECT quantity FROM business_products WHERE id = ? AND user_id = ?')
+                    const prodItem = await db.prepare('SELECT quantity, low_stock_threshold FROM business_products WHERE id = ? AND user_id = ?')
                         .get([itemId, userId]);
 
                     if (prodItem) {
                         const currentQty = parseFloat(prodItem.quantity) || 0;
+                        const lowThreshold = parseFloat(prodItem.low_stock_threshold) || 5;
                         const newQty = Math.max(0, currentQty - sellQty);
-                        const newStatus = newQty <= 0 ? 'Out of Stock' : 'In Stock';
+                        const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty <= lowThreshold ? 'Low Stock' : 'In Stock');
 
                         await db.prepare(`
                             UPDATE business_products 
@@ -133,7 +134,7 @@ const posController = {
                         if (invItem) {
                             const currentQty = parseFloat(invItem.quantity) || 0;
                             const newQty = Math.max(0, currentQty - sellQty);
-                            const newStatus = newQty === 0 ? 'Out of Stock' : (newQty < 10 ? 'Low Stock' : 'In Stock');
+                            const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < 10 ? 'Low Stock' : 'In Stock');
 
                             await db.prepare('UPDATE inventory SET quantity = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
                                 .run([newQty, newStatus, now, itemId, userId]);

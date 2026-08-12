@@ -4,20 +4,25 @@ const { sendSuccess, sendError } = require('../utils/response');
 const productController = {
     // 1. Create Product
     createProduct: async (req, res) => {
-        const { name, sku, category, quantity, low_stock_threshold, purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, hsn_code, hsn_sac, hsn } = req.body;
+        const { name, sku, category, unit, quantity, low_stock_threshold, purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, hsn_code, hsn_sac, hsn } = req.body;
         if (!name) return sendError(res, 'Product name is required', 400);
         const resolvedHsn = hsn_code || hsn_sac || hsn || null;
+
+        // Ensure unit column exists
+        try {
+            await db.prepare("ALTER TABLE business_products ADD COLUMN unit TEXT DEFAULT 'PCS'").run();
+        } catch (e) {}
 
         try {
             const now = new Date().toISOString();
             const result = await db.prepare(`
                 INSERT INTO business_products (
-                    user_id, name, sku, category, status, stock_status, quantity, low_stock_threshold,
+                    user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
                     purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
                     tax_percentage, warehouse_id, hsn_code, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                req.user.id, name, sku || null, category || null, quantity || 0, low_stock_threshold || 5,
+                req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                 purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                 batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || 'Main Godown',
                 resolvedHsn, now, now
@@ -94,6 +99,7 @@ const productController = {
             const name = body.name !== undefined && body.name !== null ? body.name : product.name;
             const sku = body.sku !== undefined ? body.sku : product.sku;
             const category = body.category !== undefined ? body.category : product.category;
+            const unit = body.unit !== undefined ? body.unit : (product.unit || 'PCS');
             const status = body.status !== undefined ? body.status : product.status;
             const low_stock_threshold = body.low_stock_threshold !== undefined ? body.low_stock_threshold : product.low_stock_threshold;
             const purchase_price = body.purchase_price !== undefined ? body.purchase_price : product.purchase_price;
@@ -108,13 +114,13 @@ const productController = {
 
             await db.prepare(`
                 UPDATE business_products SET
-                    name = ?, sku = ?, category = ?, status = ?, stock_status = ?, quantity = ?,
+                    name = ?, sku = ?, category = ?, unit = ?, status = ?, stock_status = ?, quantity = ?,
                     low_stock_threshold = ?, purchase_price = ?, selling_price = ?, barcode = ?,
                     serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?,
                     warehouse_id = ?, hsn_code = ?, updated_at = ?
                 WHERE id = ?
             `).run(
-                name, sku || null, category || null, status || 'active', newStockStatus,
+                name, sku || null, category || null, unit, status || 'active', newStockStatus,
                 newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
                 barcode || null, serial_number || null, batch_number || null, expiry_date || null,
                 tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, new Date().toISOString(), id
