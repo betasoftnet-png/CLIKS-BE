@@ -83,11 +83,28 @@ const productController = {
     // 4. Update Product
     updateProduct: async (req, res) => {
         const { id } = req.params;
-        const { name, sku, category, status, stock_status, quantity, low_stock_threshold, purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, hsn_code, hsn_sac, hsn } = req.body;
-        const resolvedHsn = hsn_code || hsn_sac || hsn || null;
+        const body = req.body || {};
         try {
-            const product = await db.prepare('SELECT id FROM business_products WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            const product = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (!product) return sendError(res, 'Product not found', 404);
+
+            const newQuantity = body.quantity !== undefined ? parseFloat(body.quantity) : (body.stock !== undefined ? parseFloat(body.stock) : (parseFloat(product.quantity) || 0));
+            const newStockStatus = body.stock_status || (newQuantity <= 0 ? 'Out of Stock' : 'In Stock');
+
+            const name = body.name !== undefined && body.name !== null ? body.name : product.name;
+            const sku = body.sku !== undefined ? body.sku : product.sku;
+            const category = body.category !== undefined ? body.category : product.category;
+            const status = body.status !== undefined ? body.status : product.status;
+            const low_stock_threshold = body.low_stock_threshold !== undefined ? body.low_stock_threshold : product.low_stock_threshold;
+            const purchase_price = body.purchase_price !== undefined ? body.purchase_price : product.purchase_price;
+            const selling_price = body.selling_price !== undefined ? body.selling_price : product.selling_price;
+            const barcode = body.barcode !== undefined ? body.barcode : product.barcode;
+            const serial_number = body.serial_number !== undefined ? body.serial_number : product.serial_number;
+            const batch_number = body.batch_number !== undefined ? body.batch_number : product.batch_number;
+            const expiry_date = body.expiry_date !== undefined ? body.expiry_date : product.expiry_date;
+            const tax_percentage = body.tax_percentage !== undefined ? body.tax_percentage : product.tax_percentage;
+            const warehouse_id = body.warehouse_id !== undefined ? body.warehouse_id : product.warehouse_id;
+            const resolvedHsn = body.hsn_code || body.hsn_sac || body.hsn || product.hsn_code || null;
 
             await db.prepare(`
                 UPDATE business_products SET
@@ -97,8 +114,8 @@ const productController = {
                     warehouse_id = ?, hsn_code = ?, updated_at = ?
                 WHERE id = ?
             `).run(
-                name, sku || null, category || null, status || 'active', stock_status || 'In Stock',
-                quantity || 0, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
+                name, sku || null, category || null, status || 'active', newStockStatus,
+                newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
                 barcode || null, serial_number || null, batch_number || null, expiry_date || null,
                 tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, new Date().toISOString(), id
             );
@@ -106,6 +123,7 @@ const productController = {
             const updated = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(id);
             return sendSuccess(res, updated, 'Product updated successfully');
         } catch (error) {
+            console.error('[Product Controller] Update product error:', error);
             return sendError(res, 'Failed to update product', 500);
         }
     },

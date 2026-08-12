@@ -1870,7 +1870,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
   if (dbType === 'postgres') {
     sql = sql.replace(/INTEGER PRIMARY KEY AUTOINCREMENT/g, 'SERIAL PRIMARY KEY');
     sql = sql.replace(/REAL/g, 'NUMERIC');
-    
+
     try {
       const statements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
       for (const stmt of statements) {
@@ -2145,7 +2145,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
   } else {
     // SQLite execution
     db.raw.exec(sql);
-    
+
     const alterQueries = [
       'ALTER TABLE users ADD COLUMN role TEXT DEFAULT \'user\'',
       'ALTER TABLE users ADD COLUMN refresh_token TEXT',
@@ -2463,7 +2463,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
           paid_at TEXT
         );
       `);
-    } catch(e) {
+    } catch (e) {
       console.warn('⚠️ Could not create CA Billing tables (Postgres):', e.message);
     }
   }

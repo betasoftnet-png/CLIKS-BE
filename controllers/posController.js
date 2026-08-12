@@ -33,7 +33,7 @@ const posController = {
         // Ensure column exists
         try {
             await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_points_earned REAL DEFAULT 0').run();
-        } catch (e) {}
+        } catch (e) { }
 
         try {
             // 1. Insert into business_invoices
@@ -87,7 +87,7 @@ const posController = {
                     // Deduct from Central Catalog Products table (business_products)
                     const prodItem = await db.prepare('SELECT quantity FROM business_products WHERE id = ? AND user_id = ?')
                         .get([itemId, userId]);
-                    
+
                     if (prodItem) {
                         const currentQty = parseFloat(prodItem.quantity) || 0;
                         const newQty = Math.max(0, currentQty - sellQty);
@@ -103,12 +103,12 @@ const posController = {
                     // Deduct from Legacy Inventory table
                     const invItem = await db.prepare('SELECT quantity FROM inventory WHERE id = ? AND user_id = ?')
                         .get([itemId, userId]);
-                    
+
                     if (invItem) {
                         const currentQty = parseFloat(invItem.quantity) || 0;
                         const newQty = Math.max(0, currentQty - sellQty);
                         const newStatus = newQty === 0 ? 'Out of Stock' : (newQty < 10 ? 'Low Stock' : 'In Stock');
-                        
+
                         await db.prepare('UPDATE inventory SET quantity = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
                             .run([newQty, newStatus, now, itemId, userId]);
                     }
@@ -117,7 +117,7 @@ const posController = {
 
             const createdInvoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(invoiceId);
             if (createdInvoice && createdInvoice.items) {
-                try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) {}
+                try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) { }
             }
 
             // Real-time integration to CLIKS Customer Application
@@ -143,7 +143,7 @@ const posController = {
                 FROM business_invoices 
                 WHERE user_id = ? AND invoice_type = 'POS' AND created_at LIKE ?
             `).all([userId, `${today}%`]);
-            
+
             let total_orders = 0;
             let total_sales = 0;
             let cash_sales = 0;

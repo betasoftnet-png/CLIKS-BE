@@ -33,10 +33,22 @@ exports.addInventoryItem = async (req, res) => {
 
 exports.updateInventoryItem = async (req, res) => {
     const { id } = req.params;
-    const { name, sku, category, quantity, price, supplier, status } = req.body;
+    const body = req.body || {};
     try {
         const userId = req.user.id;
+        const item = await db.prepare('SELECT * FROM inventory WHERE id = ? AND user_id = ?').get(id, userId);
+        if (!item) {
+            return res.status(404).json({ success: false, message: 'Item not found' });
+        }
         const now = new Date().toISOString();
+        const name = body.name !== undefined && body.name !== null ? body.name : item.name;
+        const sku = body.sku !== undefined ? body.sku : item.sku;
+        const category = body.category !== undefined ? body.category : item.category;
+        const quantity = body.quantity !== undefined ? parseFloat(body.quantity) : (body.stock !== undefined ? parseFloat(body.stock) : item.quantity);
+        const price = body.price !== undefined ? parseFloat(body.price) : item.price;
+        const supplier = body.supplier !== undefined ? body.supplier : item.supplier;
+        const status = body.status !== undefined ? body.status : (quantity <= 0 ? 'Out of Stock' : (quantity < 10 ? 'Low Stock' : 'In Stock'));
+
         await db.prepare(
             `UPDATE inventory SET name = ?, sku = ?, category = ?, quantity = ?, price = ?, supplier = ?, status = ?, updated_at = ?
              WHERE id = ? AND user_id = ?`
