@@ -90,6 +90,22 @@ const productController = {
         const { id } = req.params;
         const body = req.body || {};
         try {
+            // Self-healing DB check for columns
+            const alters = [
+                "ALTER TABLE business_products ADD COLUMN unit TEXT DEFAULT 'PCS'",
+                "ALTER TABLE business_products ADD COLUMN hsn_code TEXT",
+                "ALTER TABLE business_products ADD COLUMN low_stock_threshold REAL DEFAULT 5",
+                "ALTER TABLE business_products ADD COLUMN barcode TEXT",
+                "ALTER TABLE business_products ADD COLUMN serial_number TEXT",
+                "ALTER TABLE business_products ADD COLUMN batch_number TEXT",
+                "ALTER TABLE business_products ADD COLUMN expiry_date TEXT",
+                "ALTER TABLE business_products ADD COLUMN tax_percentage REAL DEFAULT 18",
+                "ALTER TABLE business_products ADD COLUMN warehouse_id TEXT"
+            ];
+            for (const sql of alters) {
+                try { await db.prepare(sql).run(); } catch (e) {}
+            }
+
             const product = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (!product) return sendError(res, 'Product not found', 404);
 
@@ -103,7 +119,7 @@ const productController = {
             const status = body.status !== undefined ? body.status : product.status;
             const low_stock_threshold = body.low_stock_threshold !== undefined ? body.low_stock_threshold : product.low_stock_threshold;
             const purchase_price = body.purchase_price !== undefined ? body.purchase_price : product.purchase_price;
-            const selling_price = body.selling_price !== undefined ? body.selling_price : product.selling_price;
+            const selling_price = body.selling_price !== undefined ? body.selling_price : (body.price !== undefined ? body.price : product.selling_price);
             const barcode = body.barcode !== undefined ? body.barcode : product.barcode;
             const serial_number = body.serial_number !== undefined ? body.serial_number : product.serial_number;
             const batch_number = body.batch_number !== undefined ? body.batch_number : product.batch_number;
@@ -112,19 +128,31 @@ const productController = {
             const warehouse_id = body.warehouse_id !== undefined ? body.warehouse_id : product.warehouse_id;
             const resolvedHsn = body.hsn_code || body.hsn_sac || body.hsn || product.hsn_code || null;
 
-            await db.prepare(`
-                UPDATE business_products SET
-                    name = ?, sku = ?, category = ?, unit = ?, status = ?, stock_status = ?, quantity = ?,
-                    low_stock_threshold = ?, purchase_price = ?, selling_price = ?, barcode = ?,
-                    serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?,
-                    warehouse_id = ?, hsn_code = ?, updated_at = ?
-                WHERE id = ?
-            `).run(
-                name, sku || null, category || null, unit, status || 'active', newStockStatus,
-                newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
-                barcode || null, serial_number || null, batch_number || null, expiry_date || null,
-                tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, new Date().toISOString(), id
-            );
+            try {
+                await db.prepare(`
+                    UPDATE business_products SET
+                        name = ?, sku = ?, category = ?, unit = ?, status = ?, stock_status = ?, quantity = ?,
+                        low_stock_threshold = ?, purchase_price = ?, selling_price = ?, barcode = ?,
+                        serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?,
+                        warehouse_id = ?, hsn_code = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                `).run(
+                    name, sku || null, category || null, unit, status || 'active', newStockStatus,
+                    newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
+                    barcode || null, serial_number || null, batch_number || null, expiry_date || null,
+                    tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, new Date().toISOString(), id, req.user.id
+                );
+            } catch (sqlErr) {
+                await db.prepare(`
+                    UPDATE business_products SET
+                        name = ?, sku = ?, category = ?, status = ?, stock_status = ?, quantity = ?,
+                        selling_price = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                `).run(
+                    name, sku || null, category || null, status || 'active', newStockStatus,
+                    newQuantity, selling_price || 0, new Date().toISOString(), id, req.user.id
+                );
+            }
 
             const updated = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(id);
             return sendSuccess(res, updated, 'Product updated successfully');
