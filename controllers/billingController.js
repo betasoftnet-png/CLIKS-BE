@@ -63,7 +63,7 @@ const billingController = {
                 params.push(`%${search}%`, `%${search}%`);
             }
 
-            query += ` ORDER BY due_date DESC, id DESC`;
+            query += ` ORDER BY COALESCE(created_at, updated_at) DESC, id DESC`;
 
             const invoices = await db.prepare(query).all(params);
 
