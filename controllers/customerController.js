@@ -2,6 +2,7 @@ const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { logAuditEvent } = require('../utils/auditLogger');
 const connectionService = require('../utils/connectionService');
+const { validatePhone, validateEmail, validateGstin, validatePan } = require('../utils/globalValidator');
 
 const customerController = {
     lookupCustomerByEmail: async (req, res) => {
@@ -218,23 +219,29 @@ const customerController = {
                 return sendError(res, 'Customer name is required', 400);
             }
 
-            // Phone validation: exactly 10 digits
+            // Global Field Validations
+            const phoneErr = validatePhone(body.phone_number || body.phone || body.mobile || body.contact, true);
+            if (phoneErr) return sendError(res, phoneErr, 400);
+
+            if (body.email) {
+                const emailErr = validateEmail(body.email, false);
+                if (emailErr) return sendError(res, emailErr, 400);
+            }
+
+            if (body.gstin) {
+                const gstinErr = validateGstin(body.gstin, false);
+                if (gstinErr) return sendError(res, gstinErr, 400);
+            }
+
+            if (body.pan || body.pan_number) {
+                const panErr = validatePan(body.pan || body.pan_number, false);
+                if (panErr) return sendError(res, panErr, 400);
+            }
+
             const rawPhone = (body.phone_number || body.phone || body.mobile || body.contact || '').toString().trim();
-            if (!rawPhone || !/^\d{10}$/.test(rawPhone)) {
-                return sendError(res, 'Phone number must be exactly 10 digits.', 400);
-            }
-
-            // Email validation: optional, but if entered must end with @bnxmail.com
             const rawEmail = (body.email || '').toString().trim().toLowerCase();
-            if (rawEmail.length > 0 && (!rawEmail.endsWith('@bnxmail.com') || !/^[^\s@]+@bnxmail\.com$/.test(rawEmail))) {
-                return sendError(res, 'Email must use the @bnxmail.com domain.', 400);
-            }
-
-            // GSTIN validation: optional, but if entered must be exactly 15 chars
             const rawGstin = (body.gstin || '').toString().trim().toUpperCase();
-            if (rawGstin.length > 0 && (rawGstin.length !== 15 || !/^[0-9A-Z]{15}$/.test(rawGstin))) {
-                return sendError(res, 'GSTIN must be exactly 15 characters.', 400);
-            }
+            const rawPan = (body.pan_number || body.pan || '').toString().trim().toUpperCase();
 
             const company = body.company || body.business_name || null;
             const business_name = body.business_name || company || null;
