@@ -33,10 +33,10 @@ const supplierController = {
         const { name, email, phone, company, gstin, city, outstanding_balance, total_purchased, status } = req.body;
         if (!name) return sendError(res, 'Supplier name is required', 400);
 
-        const phoneErr = validatePhone(phone, true);
+        const phoneErr = validatePhone(phone, false);
         if (phoneErr) return sendError(res, phoneErr, 400);
 
-        const emailErr = validateEmail(email, true);
+        const emailErr = validateEmail(email, false);
         if (emailErr) return sendError(res, emailErr, 400);
 
         const gstinErr = validateGstin(gstin, false);
