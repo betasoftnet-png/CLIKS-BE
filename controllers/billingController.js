@@ -372,6 +372,16 @@ const billingController = {
                 console.error('[GSTR-1 SYNC WARNING] Error syncing invoice update to GSTR-1:', gstrErr.message);
             }
 
+            // Sync to customer application purchase history
+            try {
+                await processCustomerInvoiceIntegration({
+                    createdInvoice: updatedInvoice,
+                    merchantUserId: req.user.id
+                });
+            } catch (syncErr) {
+                console.error('[SYNC WARNING] Customer invoice integration update error:', syncErr.message || syncErr);
+            }
+
             return sendSuccess(res, updatedInvoice, 'Invoice updated successfully');
         } catch (error) {
             console.error('[Billing Controller] Error updating invoice:', error);
@@ -431,6 +441,15 @@ const billingController = {
         const { status } = req.body;
         try {
             await db.prepare('UPDATE business_invoices SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?').run(status, new Date().toISOString(), id, req.user.id);
+            const updatedInv = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(id);
+            if (updatedInv) {
+                try {
+                    await processCustomerInvoiceIntegration({
+                        createdInvoice: updatedInv,
+                        merchantUserId: req.user.id
+                    });
+                } catch (syncErr) {}
+            }
             return sendSuccess(res, { id, status }, 'Invoice status updated successfully');
         } catch (error) {
             return sendError(res, 'Failed to update status', 500);

@@ -235,6 +235,16 @@ const connectionService = {
         `).run(newStatus, website_user_id, now, now, connection_id);
 
         const updated = await db.prepare('SELECT * FROM customer_connections WHERE id = ?').get(connection_id);
+
+        if (newStatus === 'accepted') {
+            try {
+                const { syncConnectedCustomerPurchases } = require('./customerIntegration');
+                await syncConnectedCustomerPurchases(website_user_id, website_user_email);
+            } catch (syncErr) {
+                console.warn('[connectionService] Auto-sync after connection accept warning:', syncErr.message);
+            }
+        }
+
         return updated;
     }
 };

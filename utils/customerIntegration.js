@@ -68,10 +68,9 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
               )
         `).get(...(customerUser ? [merchantUserId, emailLower, customerUser.id] : [merchantUserId, emailLower]));
 
-        console.log(`[SYNC DIAGNOSTIC] invoice_number=${invoiceNumber}, business_id=${merchantUserId}, customer_email=${emailLower}, connection_status=${connRecord ? connRecord.status : 'UNCONNECTED'}`);
-
-        if (!connRecord || String(connRecord.status).toLowerCase() !== 'accepted') {
-            console.log(`[SYNC NOTICE] Connection status is ${connRecord ? connRecord.status : 'UNCONNECTED'} (not accepted) for customer ${emailLower} with merchant ${merchantUserId}. Invoice #${invoiceNumber} synchronization skipped.`);
+        const statusLower = connRecord ? String(connRecord.status).toLowerCase() : '';
+        if (!connRecord || (statusLower !== 'accepted' && statusLower !== 'connected')) {
+            console.log(`[SYNC NOTICE] Connection status is ${connRecord ? connRecord.status : 'UNCONNECTED'} (not accepted or connected) for customer ${emailLower} with merchant ${merchantUserId}. Invoice #${invoiceNumber} synchronization skipped.`);
             return;
         }
 
@@ -484,6 +483,68 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
     }
 }
 
+/**
+ * On-demand sync of all connected customer purchases across all connected store instances.
+ */
+async function syncConnectedCustomerPurchases(userId, userEmail) {
+    if (!userId && !userEmail) return;
+    const emailLower = userEmail ? String(userEmail).trim().toLowerCase() : '';
+
+    try {
+        // Find all connected business IDs for this customer from customer_connections table
+        const connections = await db.prepare(`
+            SELECT DISTINCT business_id, business_customer_id, customer_email 
+            FROM customer_connections 
+            WHERE (website_user_id = ? ${emailLower ? 'OR LOWER(customer_email) = ?' : ''})
+              AND (LOWER(status) = 'accepted' OR LOWER(status) = 'connected')
+        `).all(...(emailLower ? [userId, emailLower] : [userId]));
+
+        if (!connections || connections.length === 0) return;
+
+        for (const conn of connections) {
+            const merchantUserId = conn.business_id;
+            const bCustId = conn.business_customer_id;
+            const connEmail = conn.customer_email ? String(conn.customer_email).trim().toLowerCase() : emailLower;
+
+            let custName = '';
+            if (bCustId) {
+                try {
+                    const bc = await db.prepare('SELECT name, email FROM business_customers WHERE id = ?').get(bCustId);
+                    if (bc && bc.name) custName = bc.name.trim().toLowerCase();
+                } catch (e) {}
+            }
+
+            const matchingInvoices = await db.prepare(`
+                SELECT * FROM business_invoices 
+                WHERE user_id = ? 
+                  AND (
+                      (client_email IS NOT NULL AND LOWER(client_email) = ?)
+                      ${connEmail ? 'OR (client_email IS NOT NULL AND LOWER(client_email) = ?)' : ''}
+                      ${bCustId ? 'OR (bank_account_id IS NOT NULL AND bank_account_id = ?)' : ''}
+                      ${custName ? 'OR (client_name IS NOT NULL AND LOWER(client_name) = ?)' : ''}
+                  )
+                ORDER BY id ASC
+            `).all(
+                merchantUserId,
+                emailLower,
+                ...(connEmail ? [connEmail] : []),
+                ...(bCustId ? [bCustId] : []),
+                ...(custName ? [custName] : [])
+            );
+
+            for (const inv of (matchingInvoices || [])) {
+                await processCustomerInvoiceIntegration({
+                    createdInvoice: inv,
+                    merchantUserId: inv.user_id
+                });
+            }
+        }
+    } catch (err) {
+        console.error('[SYNC ERROR] Auto-sync connected customer purchases failed:', err.message);
+    }
+}
+
 module.exports = {
-    processCustomerInvoiceIntegration
+    processCustomerInvoiceIntegration,
+    syncConnectedCustomerPurchases
 };

@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const { syncConnectedCustomerPurchases } = require('../utils/customerIntegration');
 
 const customerPurchaseController = {
     // 1. Get Purchase History for authenticated customer (with Merchant-Specific Loyalty calculations)
@@ -13,6 +14,13 @@ const customerPurchaseController = {
             const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
             const receiveDataParam = req.query.receiveData;
             const isReceiveDataYes = !receiveDataParam || String(receiveDataParam).toUpperCase() === 'YES' || String(receiveDataParam) === 'true';
+
+            // Auto-sync connected merchant store invoices for this customer
+            try {
+                await syncConnectedCustomerPurchases(userId, userEmail);
+            } catch (syncErr) {
+                console.warn('[Customer Purchase Controller] Auto-sync warning:', syncErr.message);
+            }
 
             const purchases = await db.prepare(`
                 SELECT * FROM customer_purchase_history 

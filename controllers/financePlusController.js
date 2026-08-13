@@ -1,6 +1,9 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const connectionService = require('../utils/connectionService');
+const customerPurchaseController = require('./customerPurchaseController');
+
+const getCustomerPurchases = customerPurchaseController.getPurchaseHistory;
 
 // ── Financial Goals ──────────────────────────────────────────────────────────
 const getGoals = async (req, res) => {
