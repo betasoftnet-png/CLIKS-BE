@@ -190,11 +190,19 @@ const supplierConnectionService = {
         // Search users table for matching CLIKS Website user
         const websiteUser = await db.prepare('SELECT id, email, role FROM users WHERE LOWER(email) = ?').get(emailLower);
 
-        // Check if a connection record already exists
+        // Check if a connection record already exists specifically for this business_id + supplier_id
         let existing = await db.prepare(`
             SELECT * FROM supplier_connections 
-            WHERE business_id = ? AND (supplier_id = ? OR LOWER(supplier_email) = ?)
-        `).get(business_id, supplier_id, emailLower);
+            WHERE business_id = ? AND supplier_id = ?
+        `).get(business_id, supplier_id);
+
+        if (!existing) {
+            // Check if there is an unassigned connection for this email
+            existing = await db.prepare(`
+                SELECT * FROM supplier_connections 
+                WHERE business_id = ? AND LOWER(supplier_email) = ? AND (supplier_id IS NULL OR supplier_id = 0)
+            `).get(business_id, emailLower);
+        }
 
         if (!existing) {
             // Create new PENDING connection request
@@ -206,12 +214,12 @@ const supplierConnectionService = {
             `).run(business_id, supplier_id, websiteUser ? websiteUser.id : null, emailLower, now, now, now);
 
             existing = await db.prepare('SELECT * FROM supplier_connections WHERE id = ?').get(res.lastInsertRowid);
-        } else if (websiteUser && !existing.supplier_user_id) {
+        } else {
             await db.prepare(`
                 UPDATE supplier_connections 
                 SET supplier_user_id = ?, supplier_id = ?, supplier_email = ?, updated_at = ?
                 WHERE id = ?
-            `).run(websiteUser.id, supplier_id, emailLower, now, existing.id);
+            `).run(websiteUser ? websiteUser.id : existing.supplier_user_id, supplier_id, emailLower, now, existing.id);
         }
 
         return existing;
@@ -228,8 +236,15 @@ const supplierConnectionService = {
 
         let conn = await db.prepare(`
             SELECT * FROM supplier_connections 
-            WHERE business_id = ? AND (supplier_id = ? ${emailLower ? 'OR LOWER(supplier_email) = ?' : ''})
-        `).get(...(emailLower ? [business_id, supplier_id, emailLower] : [business_id, supplier_id]));
+            WHERE business_id = ? AND supplier_id = ?
+        `).get(business_id, supplier_id);
+
+        if (!conn && emailLower) {
+            conn = await db.prepare(`
+                SELECT * FROM supplier_connections 
+                WHERE business_id = ? AND LOWER(supplier_email) = ?
+            `).get(business_id, emailLower);
+        }
 
         if (conn) {
             const st = String(conn.status).toLowerCase();
@@ -268,9 +283,9 @@ const supplierConnectionService = {
             const now = new Date().toISOString();
             for (const sup of (matchingSuppliers || [])) {
                 const connExists = await db.prepare(`
-                    SELECT id FROM supplier_connections 
-                    WHERE business_id = ? AND (supplier_id = ? OR LOWER(supplier_email) = ?)
-                `).get(sup.user_id, sup.id, emailLower);
+                    SELECT id, supplier_user_id FROM supplier_connections 
+                    WHERE business_id = ? AND supplier_id = ?
+                `).get(sup.user_id, sup.id);
 
                 if (!connExists) {
                     try {
@@ -280,6 +295,14 @@ const supplierConnectionService = {
                                 status, requested_at, created_at, updated_at
                             ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
                         `).run(sup.user_id, sup.id, website_user_id, emailLower, sup.created_at || now, now, now);
+                    } catch (e) {}
+                } else if (website_user_id && !connExists.supplier_user_id) {
+                    try {
+                        await db.prepare(`
+                            UPDATE supplier_connections 
+                            SET supplier_user_id = ?, supplier_email = ?, updated_at = ?
+                            WHERE id = ?
+                        `).run(website_user_id, emailLower, now, connExists.id);
                     } catch (e) {}
                 }
             }

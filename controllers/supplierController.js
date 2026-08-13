@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const supplierConnectionService = require('../utils/supplierConnectionService');
+const { validatePhone, validateEmail, validateGstin, validatePan } = require('../utils/globalValidator');
 
 function normalizePaymentMode(mode) {
     if (!mode) return 'Cash in Hand';
@@ -31,6 +32,15 @@ const supplierController = {
     createSupplier: async (req, res) => {
         const { name, email, phone, company, gstin, city, outstanding_balance, total_purchased, status } = req.body;
         if (!name) return sendError(res, 'Supplier name is required', 400);
+
+        const phoneErr = validatePhone(phone, true);
+        if (phoneErr) return sendError(res, phoneErr, 400);
+
+        const emailErr = validateEmail(email, true);
+        if (emailErr) return sendError(res, emailErr, 400);
+
+        const gstinErr = validateGstin(gstin, false);
+        if (gstinErr) return sendError(res, gstinErr, 400);
 
         try {
             await supplierConnectionService.ensureTable();
