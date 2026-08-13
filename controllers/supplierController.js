@@ -603,13 +603,31 @@ const supplierController = {
         const { id } = req.params;
         const { message, purchase_id, sender_type } = req.body;
         try {
+            // Resolve business_id and supplier_id from connection if called from supplier portal
+            let businessId = req.user.id;
+            let resolvedSupplierId = id;
+            const senderRole = sender_type || 'dealer';
+            try {
+                const conn = await require('../db/connection').prepare(
+                    'SELECT business_id, supplier_id FROM supplier_connections WHERE id = ? OR (supplier_id = ? AND supplier_user_id = ?)'
+                ).get(id, id, req.user.id);
+                if (conn) {
+                    businessId = conn.business_id;
+                    resolvedSupplierId = conn.supplier_id;
+                }
+            } catch(e) {}
+
+            const senderName = senderRole === 'supplier'
+                ? (req.user.business_name || req.user.username || 'Supplier')
+                : (req.user.business_name || req.user.username || 'Dealer');
+
             const created = await supplierConnectionService.sendSupplierChatMessage({
-                business_id: req.user.id,
-                supplier_id: id,
+                business_id: businessId,
+                supplier_id: resolvedSupplierId,
                 purchase_id: purchase_id ? parseInt(purchase_id) : null,
-                sender_type: sender_type || 'dealer',
+                sender_type: senderRole,
                 sender_id: req.user.id,
-                sender_name: req.user.business_name || req.user.username || 'Dealer',
+                sender_name: senderName,
                 message
             });
             return sendSuccess(res, created, 'Message sent successfully', 201);
@@ -671,9 +689,22 @@ const supplierController = {
         const supplierId = req.params.supplierId || req.params.id;
         const { purchase_id } = req.query;
         try {
+            // Resolve business_id and supplier_id from connection if called from supplier portal
+            let businessId = null;
+            let resolvedSupplierId = supplierId;
+            try {
+                const conn = await require('../db/connection').prepare(
+                    'SELECT business_id, supplier_id FROM supplier_connections WHERE id = ? OR (supplier_id = ? AND supplier_user_id = ?)'
+                ).get(supplierId, supplierId, req.user.id);
+                if (conn) {
+                    businessId = conn.business_id;
+                    resolvedSupplierId = conn.supplier_id;
+                }
+            } catch(e) {}
+
             const chats = await supplierConnectionService.getSupplierChats({
-                business_id: req.user.id,
-                supplier_id: supplierId,
+                business_id: businessId || req.user.id,
+                supplier_id: resolvedSupplierId,
                 purchase_id: purchase_id ? parseInt(purchase_id) : null
             });
             return sendSuccess(res, chats, 'Supplier chat messages loaded');

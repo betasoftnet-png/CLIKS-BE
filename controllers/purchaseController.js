@@ -987,15 +987,38 @@ const purchaseController = {
     getSupplierPortalOrders: async (req, res) => {
         try {
             const emailLower = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
-            const sups = await db.prepare('SELECT id, name FROM business_suppliers WHERE LOWER(email) = ?').all(emailLower);
-            const supNames = (sups || []).map(s => s.name.toLowerCase());
+            if (!emailLower) return sendSuccess(res, [], 'No supplier email found');
 
-            let sql = `SELECT * FROM business_purchases ORDER BY id DESC LIMIT 50`;
-            let orders = await db.prepare(sql).all();
+            // Find business_suppliers rows matching this user's email
+            const sups = await db.prepare('SELECT id, user_id, name FROM business_suppliers WHERE LOWER(email) = ?').all(emailLower);
+            if (!sups || sups.length === 0) return sendSuccess(res, [], 'No supplier records found');
 
-            if (supNames.length > 0) {
-                orders = orders.filter(o => supNames.includes(String(o.supplier_name || '').toLowerCase()));
+            // Only include orders from dealers with an accepted/connected supplier connection
+            const connectedDealerIds = [];
+            for (const sup of sups) {
+                try {
+                    const conn = await db.prepare(`
+                        SELECT business_id FROM supplier_connections 
+                        WHERE supplier_id = ? AND (LOWER(status) = 'accepted' OR LOWER(status) = 'connected')
+                    `).all(sup.id);
+                    (conn || []).forEach(c => {
+                        if (!connectedDealerIds.includes(c.business_id)) connectedDealerIds.push(c.business_id);
+                    });
+                } catch(e) {}
             }
+
+            if (connectedDealerIds.length === 0) return sendSuccess(res, [], 'No connected dealers found');
+
+            const supNames = sups.map(s => s.name.toLowerCase());
+            const placeholders = connectedDealerIds.map(() => '?').join(',');
+
+            const orders = await db.prepare(`
+                SELECT * FROM business_purchases 
+                WHERE user_id IN (${placeholders}) 
+                  AND LOWER(supplier_name) IN (${supNames.map(() => '?').join(',')})
+                  AND doc_type IN ('PO', 'BILL')
+                ORDER BY id DESC LIMIT 100
+            `).all(...connectedDealerIds, ...supNames);
 
             const enriched = await Promise.all((orders || []).map(async o => {
                 const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(o.id);
@@ -1003,12 +1026,14 @@ const purchaseController = {
                 return {
                     ...o,
                     dealer_name: dealer ? (dealer.business_name || dealer.username) : 'CLIKS Dealer',
+                    order_status: o.supplier_confirmation_status || o.status || 'PENDING',
                     items
                 };
             }));
 
             return sendSuccess(res, enriched, 'Supplier portal orders retrieved successfully');
         } catch (error) {
+            console.error('Error loading supplier portal orders:', error);
             return sendError(res, 'Failed to load supplier portal orders', 500);
         }
     }

@@ -228,12 +228,17 @@ const supplierConnectionService = {
                 supplier_id: conn.supplier_id,
                 supplier_user_id: conn.supplier_user_id,
                 dealer_business_name: businessName,
+                dealer_name: merchant ? (merchant.username || businessName) : 'CLIKS Dealer',
+                dealer_email: merchant ? merchant.email : '',
                 supplier_name: supplierName,
                 supplier_email: conn.supplier_email,
+                company: bSupplier ? bSupplier.company : '',
                 status: mappedStatus,
+                connection_status: mappedStatus,
                 raw_status: conn.status,
                 requested_at: conn.requested_at || conn.created_at,
-                responded_at: conn.responded_at
+                responded_at: conn.responded_at,
+                created_at: conn.created_at
             });
         }
 
