@@ -14,6 +14,10 @@ router.get('/search',               purchaseController.searchPurchases);
 router.get('/analytics',            purchaseController.getAnalytics);
 router.get('/dashboard-summary',    purchaseController.getDashboardSummary);
 
+// Supplier Portal Routes
+router.get('/portal/orders',                 purchaseController.getSupplierPortalOrders);
+router.post('/:id/supplier-confirm',         purchaseController.confirmSupplierPurchase);
+
 // Import / Export
 router.post('/import',              purchaseController.importPurchases);
 router.get('/export',               purchaseController.exportPurchases);

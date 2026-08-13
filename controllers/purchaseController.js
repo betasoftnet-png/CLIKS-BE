@@ -944,6 +944,73 @@ const purchaseController = {
         } catch (error) {
             return sendError(res, 'Failed to export purchases', 500);
         }
+    },
+
+    // 23. Supplier Portal Confirmation & Orders
+    confirmSupplierPurchase: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const now = new Date().toISOString();
+            const purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(id);
+            if (!purchase) return sendError(res, 'Purchase order not found', 404);
+
+            await db.prepare(`
+                UPDATE business_purchases 
+                SET status = 'CONFIRMED', supplier_confirmation_status = 'CONFIRMED', confirmed_at = ?, updated_at = ?
+                WHERE id = ?
+            `).run(now, now, id);
+
+            try {
+                await db.prepare(`UPDATE business_purchase_items SET item_status = 'CONFIRMED' WHERE purchase_id = ?`).run(id);
+            } catch(e) {}
+
+            // Send notification to dealer inside Cliks Business
+            try {
+                const notifyMsg = `Supplier ${purchase.supplier_name || 'Vendor'} has confirmed Purchase Order #${purchase.purchase_number}.`;
+                await db.prepare(`
+                    INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                    VALUES (?, ?, ?, 'purchase', 0, ?)
+                `).run(purchase.user_id, 'Purchase Order Confirmed', notifyMsg, now);
+            } catch (notifyErr) {
+                console.warn('Failed to insert notification:', notifyErr.message);
+            }
+
+            const updated = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(id);
+            const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(id);
+            return sendSuccess(res, { ...updated, items }, 'Purchase order confirmed by supplier successfully');
+        } catch (error) {
+            console.error('Error confirming purchase order:', error);
+            return sendError(res, 'Failed to confirm purchase order', 500);
+        }
+    },
+
+    getSupplierPortalOrders: async (req, res) => {
+        try {
+            const emailLower = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
+            const sups = await db.prepare('SELECT id, name FROM business_suppliers WHERE LOWER(email) = ?').all(emailLower);
+            const supNames = (sups || []).map(s => s.name.toLowerCase());
+
+            let sql = `SELECT * FROM business_purchases ORDER BY id DESC LIMIT 50`;
+            let orders = await db.prepare(sql).all();
+
+            if (supNames.length > 0) {
+                orders = orders.filter(o => supNames.includes(String(o.supplier_name || '').toLowerCase()));
+            }
+
+            const enriched = await Promise.all((orders || []).map(async o => {
+                const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(o.id);
+                const dealer = await db.prepare('SELECT username, business_name FROM users WHERE id = ?').get(o.user_id);
+                return {
+                    ...o,
+                    dealer_name: dealer ? (dealer.business_name || dealer.username) : 'CLIKS Dealer',
+                    items
+                };
+            }));
+
+            return sendSuccess(res, enriched, 'Supplier portal orders retrieved successfully');
+        } catch (error) {
+            return sendError(res, 'Failed to load supplier portal orders', 500);
+        }
     }
 };
 

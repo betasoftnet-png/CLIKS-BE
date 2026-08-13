@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const supplierConnectionService = require('../utils/supplierConnectionService');
 
 function normalizePaymentMode(mode) {
     if (!mode) return 'Cash in Hand';
@@ -28,38 +29,48 @@ function normalizePaymentMode(mode) {
 const supplierController = {
     // 1. Create Supplier
     createSupplier: async (req, res) => {
-        const { name, email, phone, company, gstin, city, outstanding_balance, total_purchased } = req.body;
+        const { name, email, phone, company, gstin, city, outstanding_balance, total_purchased, status } = req.body;
         if (!name) return sendError(res, 'Supplier name is required', 400);
 
         try {
             const now = new Date().toISOString();
+            const initialStatus = status || 'PENDING';
             const result = await db.prepare(`
                 INSERT INTO business_suppliers (
                     user_id, name, email, phone, company, gstin, status, city, outstanding_balance, total_purchased, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                req.user.id, name, email || null, phone || null, company || null, gstin || null, city || null,
+                req.user.id, name, email || null, phone || null, company || null, gstin || null, initialStatus, city || null,
                 outstanding_balance || 0, total_purchased || 0, now, now
             );
 
             const created = await db.prepare('SELECT * FROM business_suppliers WHERE id = ?').get(result.lastInsertRowid);
-            return sendSuccess(res, created, 'Supplier created successfully', 201);
+            
+            // Sync connection request for website supplier portal
+            await supplierConnectionService.syncSupplierConnectionOnCreateOrUpdate({
+                business_id: req.user.id,
+                supplier_id: created.id,
+                supplier_email: created.email
+            });
+
+            const connStatus = await supplierConnectionService.getSupplierConnectionStatus(req.user.id, created.id, created.email);
+            return sendSuccess(res, { ...created, status: connStatus, connection_status: connStatus }, 'Supplier registered successfully with status PENDING', 201);
         } catch (error) {
             console.error('[Supplier Controller] Error creating supplier:', error);
             return sendError(res, 'Failed to create supplier', 500);
         }
     },
 
-    // 2. Get Suppliers with optional Filtering
+    // 2. Get Suppliers with optional Filtering & Connection Status
     getSuppliers: async (req, res) => {
         const { search, status, city } = req.query;
         try {
             let query = `SELECT * FROM business_suppliers WHERE user_id = ?`;
             const params = [req.user.id];
 
-            if (status) {
-                query += ` AND status = ?`;
-                params.push(status);
+            if (status && status !== 'All') {
+                query += ` AND (LOWER(status) = LOWER(?) OR status = ?)`;
+                params.push(status, status);
             }
             if (city) {
                 query += ` AND city LIKE ?`;
@@ -72,7 +83,18 @@ const supplierController = {
 
             query += ` ORDER BY name ASC`;
             const suppliers = await db.prepare(query).all(...params);
-            return sendSuccess(res, suppliers, 'Suppliers retrieved successfully');
+
+            const enriched = await Promise.all((suppliers || []).map(async s => {
+                const connStatus = await supplierConnectionService.getSupplierConnectionStatus(req.user.id, s.id, s.email);
+                const displaySt = (s.status === 'CONNECTED' || s.status === 'ACCEPTED') ? 'CONNECTED' : (connStatus || s.status || 'PENDING');
+                return {
+                    ...s,
+                    status: displaySt,
+                    connection_status: displaySt
+                };
+            }));
+
+            return sendSuccess(res, enriched, 'Suppliers retrieved successfully');
         } catch (error) {
             console.error('[Supplier Controller] Error fetching suppliers:', error);
             return sendError(res, 'Failed to retrieve suppliers', 500);
@@ -558,6 +580,67 @@ const supplierController = {
             return sendSuccess(res, summary, 'Dashboard summary loaded successfully');
         } catch (error) {
             return sendError(res, 'Failed to load dashboard summary', 500);
+        }
+    },
+
+    // 19. Dealer <-> Supplier Chat
+    getChats: async (req, res) => {
+        const { id } = req.params;
+        const { purchase_id } = req.query;
+        try {
+            const chats = await supplierConnectionService.getSupplierChats({
+                business_id: req.user.id,
+                supplier_id: id,
+                purchase_id: purchase_id ? parseInt(purchase_id) : null
+            });
+            return sendSuccess(res, chats, 'Supplier chat messages loaded');
+        } catch (error) {
+            return sendError(res, error.message || 'Failed to load chat messages', 500);
+        }
+    },
+
+    sendChatMessage: async (req, res) => {
+        const { id } = req.params;
+        const { message, purchase_id, sender_type } = req.body;
+        try {
+            const created = await supplierConnectionService.sendSupplierChatMessage({
+                business_id: req.user.id,
+                supplier_id: id,
+                purchase_id: purchase_id ? parseInt(purchase_id) : null,
+                sender_type: sender_type || 'dealer',
+                sender_id: req.user.id,
+                sender_name: req.user.business_name || req.user.username || 'Dealer',
+                message
+            });
+            return sendSuccess(res, created, 'Message sent successfully', 201);
+        } catch (error) {
+            return sendError(res, error.message || 'Failed to send chat message', 400);
+        }
+    },
+
+    // 20. Website Supplier Portal Integration
+    getPortalIntegrations: async (req, res) => {
+        try {
+            const integrations = await supplierConnectionService.getWebsiteSupplierIntegrations(req.user.id, req.user.email);
+            return sendSuccess(res, integrations, 'Supplier connection integrations retrieved');
+        } catch (error) {
+            return sendError(res, error.message || 'Failed to retrieve supplier integrations', 500);
+        }
+    },
+
+    respondPortalIntegration: async (req, res) => {
+        const { id } = req.params;
+        const { action } = req.body;
+        try {
+            const updated = await supplierConnectionService.respondToSupplierIntegrationRequest({
+                website_user_id: req.user.id,
+                website_user_email: req.user.email,
+                connection_id: id,
+                action
+            });
+            return sendSuccess(res, updated, `Supplier connection ${action}ed successfully`);
+        } catch (error) {
+            return sendError(res, error.message || 'Failed to respond to supplier connection', 400);
         }
     }
 };

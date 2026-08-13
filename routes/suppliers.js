@@ -12,6 +12,10 @@ router.get('/reports/payment',       supplierController.getPaymentsReport);
 router.post('/import',               supplierController.importSuppliers);
 router.get('/export',                supplierController.exportSuppliers);
 
+// Website Supplier Portal Integrations
+router.get('/portal/integrations',                 supplierController.getPortalIntegrations);
+router.post('/portal/integrations/:id/respond',    supplierController.respondPortalIntegration);
+
 // Search, Outstanding & Dashboard
 router.get('/search',                supplierController.searchSuppliers);
 router.get('/outstanding/list',      supplierController.getOutstandingList);
@@ -23,6 +27,10 @@ router.get('/',                      supplierController.getSuppliers);
 router.get('/:id',                   supplierController.getSupplierById);
 router.put('/:id',                   supplierController.updateSupplier);
 router.delete('/:id',                supplierController.deleteSupplier);
+
+// Dealer <-> Supplier Chat
+router.get('/:id/chats',             supplierController.getChats);
+router.post('/:id/chats',            supplierController.sendChatMessage);
 
 // Sub resources
 router.get('/:id/ledger',            supplierController.getLedger);
