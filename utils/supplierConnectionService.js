@@ -10,11 +10,12 @@ const supplierConnectionService = {
      */
     ensureTable: async () => {
         if (tableEnsured) return;
+        
+        // 1. Supplier Connections table
         try {
-            // 1. Supplier Connections table
             await db.prepare(`
                 CREATE TABLE IF NOT EXISTS supplier_connections (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id INTEGER PRIMARY KEY,
                     business_id INTEGER NOT NULL,
                     supplier_id INTEGER NOT NULL,
                     supplier_user_id INTEGER,
@@ -26,11 +27,15 @@ const supplierConnectionService = {
                     updated_at TEXT
                 )
             `).run();
+        } catch (e) {
+            console.warn('[Supplier Connection Service] supplier_connections table creation:', e.message);
+        }
 
-            // 2. Dealer <-> Supplier Chat table
+        // 2. Dealer <-> Supplier Chat table
+        try {
             await db.prepare(`
                 CREATE TABLE IF NOT EXISTS supplier_chats (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id INTEGER PRIMARY KEY,
                     purchase_id INTEGER,
                     supplier_id INTEGER NOT NULL,
                     business_id INTEGER NOT NULL,
@@ -41,22 +46,22 @@ const supplierConnectionService = {
                     created_at TEXT NOT NULL
                 )
             `).run();
-
-            // 3. Ensure business_suppliers has status column
-            try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}
-
-            // 4. Ensure business_purchases has supplier confirmation fields
-            try { await db.prepare("ALTER TABLE business_purchases ADD COLUMN supplier_confirmation_status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}
-            try { await db.prepare("ALTER TABLE business_purchases ADD COLUMN confirmed_at TEXT").run(); } catch(e) {}
-
-            // 5. Ensure business_purchase_items has item_status and unit fields
-            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN item_status TEXT DEFAULT 'CONFIRMED'").run(); } catch(e) {}
-            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN unit TEXT DEFAULT 'PCS'").run(); } catch(e) {}
-
-            tableEnsured = true;
         } catch (e) {
-            console.error('[Supplier Connection Service] Schema init warning:', e.message);
+            console.warn('[Supplier Connection Service] supplier_chats table creation:', e.message);
         }
+
+        // 3. Ensure business_suppliers has status column
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}
+
+        // 4. Ensure business_purchases has supplier confirmation fields
+        try { await db.prepare("ALTER TABLE business_purchases ADD COLUMN supplier_confirmation_status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_purchases ADD COLUMN confirmed_at TEXT").run(); } catch(e) {}
+
+        // 5. Ensure business_purchase_items has item_status and unit fields
+        try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN item_status TEXT DEFAULT 'CONFIRMED'").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN unit TEXT DEFAULT 'PCS'").run(); } catch(e) {}
+
+        tableEnsured = true;
     },
 
     /**

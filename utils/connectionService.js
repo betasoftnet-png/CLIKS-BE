@@ -13,7 +13,7 @@ const connectionService = {
         try {
             await db.prepare(`
                 CREATE TABLE IF NOT EXISTS customer_connections (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id INTEGER PRIMARY KEY,
                     business_id INTEGER NOT NULL,
                     business_customer_id INTEGER NOT NULL,
                     website_user_id INTEGER,

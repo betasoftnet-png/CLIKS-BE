@@ -25,6 +25,10 @@ if (dbType === 'postgres') {
     // Replace SQLite date('now') with PostgreSQL CURRENT_DATE
     pgSql = pgSql.replace(/date\('now'\)/gi, "CURRENT_DATE");
 
+    // Replace SQLite AUTOINCREMENT with SERIAL for PostgreSQL
+    pgSql = pgSql.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, "SERIAL PRIMARY KEY");
+    pgSql = pgSql.replace(/AUTOINCREMENT/gi, "");
+
     let i = 1;
     // Replace '?' with '$1', '$2', etc. (handling cases with or without surrounding text safely)
     pgSql = pgSql.replace(/\?/g, () => `$${i++}`);
