@@ -1,7 +1,32 @@
 const db = require('../db/connection');
 
+const ensureInventoryTable = async () => {
+    try {
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS inventory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                sku TEXT,
+                category TEXT,
+                unit TEXT DEFAULT 'PCS',
+                quantity REAL DEFAULT 0,
+                price REAL DEFAULT 0,
+                supplier TEXT,
+                status TEXT DEFAULT 'In Stock',
+                created_at TEXT,
+                updated_at TEXT
+            )
+        `).run();
+    } catch (e) {}
+    try {
+        await db.prepare("ALTER TABLE inventory ADD COLUMN unit TEXT DEFAULT 'PCS'").run();
+    } catch (e) {}
+};
+
 exports.getInventory = async (req, res) => {
     try {
+        await ensureInventoryTable();
         const userId = req.user.id;
         const items = await db.prepare('SELECT * FROM inventory WHERE user_id = ? ORDER BY created_at DESC').all(userId);
         res.json({ success: true, data: items });

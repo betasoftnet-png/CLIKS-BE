@@ -2780,6 +2780,52 @@ CREATE TABLE IF NOT EXISTS money_trackers (
     console.warn("⚠️ Error initializing supplier tables migration:", supErr.message);
   }
 
+  // ── Inventory & Stock Table Migrations ─────────────────────────────────────
+  try {
+    const idType = dbType === 'postgres' ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS inventory (
+        id ${idType},
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        sku TEXT,
+        category TEXT,
+        unit TEXT DEFAULT 'PCS',
+        quantity REAL DEFAULT 0,
+        price REAL DEFAULT 0,
+        supplier TEXT,
+        status TEXT DEFAULT 'In Stock',
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS stock (
+        id ${idType},
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        sub_name TEXT,
+        sku TEXT,
+        category TEXT,
+        unit TEXT DEFAULT 'PCS',
+        unit_price REAL DEFAULT 0,
+        cost_price REAL DEFAULT 0,
+        quantity REAL DEFAULT 0,
+        low_stock_threshold INTEGER DEFAULT 5,
+        location TEXT,
+        warehouse TEXT,
+        supplier TEXT,
+        supplier_name TEXT,
+        notes TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `).run();
+  } catch (invErr) {
+    console.warn("⚠️ Error initializing inventory and stock tables migration:", invErr.message);
+  }
+
   console.log('✅ Migrations applied');
 }
 

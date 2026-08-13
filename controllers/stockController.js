@@ -21,8 +21,36 @@ function enrichRow(row) {
   };
 }
 
+const ensureStockTable = async () => {
+  try {
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS stock (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        sub_name TEXT,
+        sku TEXT,
+        category TEXT,
+        unit TEXT DEFAULT 'PCS',
+        unit_price REAL DEFAULT 0,
+        cost_price REAL DEFAULT 0,
+        quantity REAL DEFAULT 0,
+        low_stock_threshold INTEGER DEFAULT 5,
+        location TEXT,
+        warehouse TEXT,
+        supplier TEXT,
+        supplier_name TEXT,
+        notes TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `).run();
+  } catch (e) {}
+};
+
 // ── GET /stats — Aggregate inventory statistics ────────────────────────────
 const getStockStats = async (req, res) => {
+  await ensureStockTable();
   const stats = await db.prepare(`
     SELECT
       COUNT(*)                                                              AS totalItems,
@@ -51,6 +79,7 @@ const getStockStats = async (req, res) => {
 
 // ── GET / ─────────────────────────────────────────────────────────────────────
 const getStocks = async (req, res) => {
+  await ensureStockTable();
   const { category, location, status, page, limit, sort = 'created_at', order = 'desc', search } = req.query;
   let query = 'SELECT * FROM stock WHERE user_id = ?';
   const params = [req.user.id];
