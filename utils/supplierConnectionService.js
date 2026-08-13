@@ -72,6 +72,11 @@ const supplierConnectionService = {
         } catch(e) {}
 
         try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN bank_account_number TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN ifsc_code TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN upi_id TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN documents TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN reminder_schedule TEXT").run(); } catch(e) {}
 
         // 4. Ensure business_purchases has supplier confirmation fields
         try { await db.prepare("ALTER TABLE business_purchases ADD COLUMN supplier_confirmation_status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}

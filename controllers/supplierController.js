@@ -30,7 +30,7 @@ function normalizePaymentMode(mode) {
 const supplierController = {
     // 1. Create Supplier
     createSupplier: async (req, res) => {
-        const { name, email, phone, company, gstin, city, outstanding_balance, total_purchased, status } = req.body;
+        const { name, email, phone, company, gstin, city, outstanding_balance, total_purchased, status, bank_account_number, ifsc_code, upi_id, documents, reminder_schedule } = req.body;
         if (!name) return sendError(res, 'Supplier name is required', 400);
 
         const phoneErr = validatePhone(phone, false);
@@ -46,13 +46,18 @@ const supplierController = {
             await supplierConnectionService.ensureTable();
             const now = new Date().toISOString();
             const initialStatus = status || 'PENDING';
+            const docsStr = typeof documents === 'object' ? JSON.stringify(documents) : (documents || '[]');
+            const remStr = typeof reminder_schedule === 'object' ? JSON.stringify(reminder_schedule) : (reminder_schedule || null);
+
             const result = await db.prepare(`
                 INSERT INTO business_suppliers (
-                    user_id, name, email, phone, company, gstin, status, city, outstanding_balance, total_purchased, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    user_id, name, email, phone, company, gstin, status, city, outstanding_balance, total_purchased,
+                    bank_account_number, ifsc_code, upi_id, documents, reminder_schedule, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, name, email || null, phone || null, company || null, gstin || null, initialStatus, city || null,
-                outstanding_balance || 0, total_purchased || 0, now, now
+                outstanding_balance || 0, total_purchased || 0,
+                bank_account_number || null, ifsc_code || null, upi_id || null, docsStr, remStr, now, now
             );
 
             const created = await db.prepare('SELECT * FROM business_suppliers WHERE id = ?').get(result.lastInsertRowid);
@@ -93,7 +98,7 @@ const supplierController = {
                 params.push(`%${search}%`, `%${search}%`, `%${search}%`);
             }
 
-            query += ` ORDER BY name ASC`;
+            query += ` ORDER BY created_at DESC, id DESC`;
             const suppliers = await db.prepare(query).all(...params);
 
             const enriched = await Promise.all((suppliers || []).map(async s => {
@@ -128,24 +133,33 @@ const supplierController = {
     // 4. Update Supplier
     updateSupplier: async (req, res) => {
         const { id } = req.params;
-        const { name, email, phone, company, gstin, status, city, outstanding_balance, total_purchased } = req.body;
+        const { name, email, phone, company, gstin, status, city, outstanding_balance, total_purchased, bank_account_number, ifsc_code, upi_id, documents, reminder_schedule } = req.body;
         try {
             const supplier = await db.prepare('SELECT id FROM business_suppliers WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (!supplier) return sendError(res, 'Supplier not found', 404);
 
+            const docsStr = typeof documents === 'object' ? JSON.stringify(documents) : (documents !== undefined ? documents : null);
+            const remStr = typeof reminder_schedule === 'object' ? JSON.stringify(reminder_schedule) : (reminder_schedule !== undefined ? reminder_schedule : null);
+
             await db.prepare(`
                 UPDATE business_suppliers SET
                     name = ?, email = ?, phone = ?, company = ?, gstin = ?, status = ?, city = ?,
-                    outstanding_balance = ?, total_purchased = ?, updated_at = ?
+                    outstanding_balance = ?, total_purchased = ?,
+                    bank_account_number = ?, ifsc_code = ?, upi_id = ?,
+                    documents = COALESCE(?, documents), reminder_schedule = COALESCE(?, reminder_schedule),
+                    updated_at = ?
                 WHERE id = ?
             `).run(
                 name, email || null, phone || null, company || null, gstin || null, status || 'active', city || null,
-                outstanding_balance || 0, total_purchased || 0, new Date().toISOString(), id
+                outstanding_balance || 0, total_purchased || 0,
+                bank_account_number || null, ifsc_code || null, upi_id || null,
+                docsStr, remStr, new Date().toISOString(), id
             );
 
             const updated = await db.prepare('SELECT * FROM business_suppliers WHERE id = ?').get(id);
             return sendSuccess(res, updated, 'Supplier updated successfully');
         } catch (error) {
+            console.error('[Supplier Controller] Update error:', error);
             return sendError(res, 'Failed to update supplier', 500);
         }
     },
