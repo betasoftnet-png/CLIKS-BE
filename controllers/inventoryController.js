@@ -12,18 +12,31 @@ exports.getInventory = async (req, res) => {
 };
 
 exports.addInventoryItem = async (req, res) => {
-    const { name, sku, category, quantity, price, supplier, status } = req.body;
+    const { name, sku, category, unit, quantity, price, supplier, status } = req.body;
     try {
         const userId = req.user.id;
         const now = new Date().toISOString();
-        const result = await db.prepare(
-            `INSERT INTO inventory (user_id, name, sku, category, quantity, price, supplier, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run([userId, name, sku, category, quantity || 0, price || 0, supplier, status || 'In Stock', now, now]);
+        try {
+            await db.prepare("ALTER TABLE inventory ADD COLUMN unit TEXT DEFAULT 'PCS'").run();
+        } catch (e) {}
+
+        const itemUnit = unit || 'PCS';
+        let result;
+        try {
+            result = await db.prepare(
+                `INSERT INTO inventory (user_id, name, sku, category, unit, quantity, price, supplier, status, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).run([userId, name, sku, category, itemUnit, quantity || 0, price || 0, supplier, status || 'In Stock', now, now]);
+        } catch (e) {
+            result = await db.prepare(
+                `INSERT INTO inventory (user_id, name, sku, category, quantity, price, supplier, status, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).run([userId, name, sku, category, quantity || 0, price || 0, supplier, status || 'In Stock', now, now]);
+        }
         
         res.status(201).json({ 
             success: true, 
-            data: { id: result.lastInsertRowid || result.id || result[0]?.id, name, sku, category, quantity, price, supplier, status } 
+            data: { id: result.lastInsertRowid || result.id || result[0]?.id, name, sku, category, unit: itemUnit, quantity, price, supplier, status } 
         });
     } catch (error) {
         console.error('Error adding inventory item:', error);
