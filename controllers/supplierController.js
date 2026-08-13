@@ -33,6 +33,7 @@ const supplierController = {
         if (!name) return sendError(res, 'Supplier name is required', 400);
 
         try {
+            await supplierConnectionService.ensureTable();
             const now = new Date().toISOString();
             const initialStatus = status || 'PENDING';
             const result = await db.prepare(`
@@ -65,6 +66,7 @@ const supplierController = {
     getSuppliers: async (req, res) => {
         const { search, status, city } = req.query;
         try {
+            await supplierConnectionService.ensureTable();
             let query = `SELECT * FROM business_suppliers WHERE user_id = ?`;
             const params = [req.user.id];
 

@@ -77,9 +77,92 @@ const supplierConnectionService = {
         try { await db.prepare("ALTER TABLE business_purchases ADD COLUMN supplier_confirmation_status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE business_purchases ADD COLUMN confirmed_at TEXT").run(); } catch(e) {}
 
-        // 5. Ensure business_purchase_items has item_status and unit fields
-        try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN item_status TEXT DEFAULT 'CONFIRMED'").run(); } catch(e) {}
-        try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN unit TEXT DEFAULT 'PCS'").run(); } catch(e) {}
+        // 6. Ensure sub-resource tables exist
+        try {
+            await db.prepare(`
+                CREATE TABLE IF NOT EXISTS supplier_ledger (
+                    id INTEGER PRIMARY KEY,
+                    supplier_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    description TEXT,
+                    amount REAL DEFAULT 0,
+                    type TEXT,
+                    created_at TEXT
+                )
+            `).run();
+        } catch(e) {}
+
+        try {
+            await db.prepare(`
+                CREATE TABLE IF NOT EXISTS supplier_payments (
+                    id INTEGER PRIMARY KEY,
+                    supplier_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    amount REAL DEFAULT 0,
+                    payment_method TEXT,
+                    reference_number TEXT,
+                    created_at TEXT
+                )
+            `).run();
+        } catch(e) {}
+
+        try {
+            await db.prepare(`
+                CREATE TABLE IF NOT EXISTS supplier_addresses (
+                    id INTEGER PRIMARY KEY,
+                    supplier_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    address_line1 TEXT,
+                    address_line2 TEXT,
+                    city TEXT,
+                    state TEXT,
+                    postal_code TEXT,
+                    country TEXT DEFAULT 'India',
+                    created_at TEXT
+                )
+            `).run();
+        } catch(e) {}
+
+        try {
+            await db.prepare(`
+                CREATE TABLE IF NOT EXISTS supplier_contacts (
+                    id INTEGER PRIMARY KEY,
+                    supplier_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    contact_name TEXT,
+                    email TEXT,
+                    phone TEXT,
+                    designation TEXT,
+                    created_at TEXT
+                )
+            `).run();
+        } catch(e) {}
+
+        try {
+            await db.prepare(`
+                CREATE TABLE IF NOT EXISTS supplier_notes (
+                    id INTEGER PRIMARY KEY,
+                    supplier_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    note TEXT,
+                    created_at TEXT
+                )
+            `).run();
+        } catch(e) {}
+
+        try {
+            await db.prepare(`
+                CREATE TABLE IF NOT EXISTS supplier_documents (
+                    id INTEGER PRIMARY KEY,
+                    supplier_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    file_name TEXT,
+                    file_url TEXT,
+                    file_size TEXT,
+                    created_at TEXT
+                )
+            `).run();
+        } catch(e) {}
 
         tableEnsured = true;
     },

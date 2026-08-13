@@ -2773,6 +2773,13 @@ CREATE TABLE IF NOT EXISTS money_trackers (
     console.warn("⚠️ Error initializing HSN master migrations:", hsnErr.message);
   }
 
+  try {
+    const supplierConnectionService = require('../utils/supplierConnectionService');
+    await supplierConnectionService.ensureTable();
+  } catch (supErr) {
+    console.warn("⚠️ Error initializing supplier tables migration:", supErr.message);
+  }
+
   console.log('✅ Migrations applied');
 }
 
