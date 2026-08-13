@@ -50,7 +50,27 @@ const supplierConnectionService = {
             console.warn('[Supplier Connection Service] supplier_chats table creation:', e.message);
         }
 
-        // 3. Ensure business_suppliers has status column
+        // 3. Ensure business_suppliers table exists
+        try {
+            await db.prepare(`
+                CREATE TABLE IF NOT EXISTS business_suppliers (
+                    id INTEGER PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    email TEXT,
+                    phone TEXT,
+                    company TEXT,
+                    gstin TEXT,
+                    status TEXT DEFAULT 'PENDING',
+                    city TEXT,
+                    outstanding_balance REAL DEFAULT 0,
+                    total_purchased REAL DEFAULT 0,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+            `).run();
+        } catch(e) {}
+
         try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}
 
         // 4. Ensure business_purchases has supplier confirmation fields

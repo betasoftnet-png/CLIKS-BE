@@ -53,15 +53,18 @@ if (dbType === 'postgres') {
       const pgSql = convertQuery(sql);
       return {
         get: async (...params) => {
-          const res = await pool.query(pgSql, params.flat());
+          const cleanParams = params.flat().map(p => p === undefined ? null : p);
+          const res = await pool.query(pgSql, cleanParams);
           return res.rows[0];
         },
         all: async (...params) => {
-          const res = await pool.query(pgSql, params.flat());
+          const cleanParams = params.flat().map(p => p === undefined ? null : p);
+          const res = await pool.query(pgSql, cleanParams);
           return res.rows;
         },
         run: async (...params) => {
-          const res = await pool.query(pgSql, params.flat());
+          const cleanParams = params.flat().map(p => p === undefined ? null : p);
+          const res = await pool.query(pgSql, cleanParams);
           return {
             lastInsertRowid: res.rows.length ? res.rows[0].id : null,
             changes: res.rowCount
@@ -104,9 +107,18 @@ if (dbType === 'postgres') {
     prepare: (sql) => {
       const stmt = sqliteDb.prepare(sql);
       return {
-        get: async (...params) => stmt.get(...params.flat()),
-        all: async (...params) => stmt.all(...params.flat()),
-        run: async (...params) => stmt.run(...params.flat())
+        get: async (...params) => {
+          const cleanParams = params.flat().map(p => p === undefined ? null : p);
+          return stmt.get(...cleanParams);
+        },
+        all: async (...params) => {
+          const cleanParams = params.flat().map(p => p === undefined ? null : p);
+          return stmt.all(...cleanParams);
+        },
+        run: async (...params) => {
+          const cleanParams = params.flat().map(p => p === undefined ? null : p);
+          return stmt.run(...cleanParams);
+        }
       };
     },
     transaction: (fn) => {
