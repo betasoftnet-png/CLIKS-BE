@@ -27,23 +27,51 @@ const posController = {
         const numDiscount = parseFloat(discount_amount) || 0;
         const numRoundOff = parseFloat(round_off) || 0;
 
+        const existingLoyaltyPoints = parseFloat(req.body.existing_loyalty_points || req.body.existingLoyaltyPoints || 0) || 0;
         const loyaltyPointsEarned = parseFloat(req.body.loyalty_points_earned || req.body.loyaltyPointsEarned || 0) || 0;
         const loyaltyPointsRedeemed = parseFloat(req.body.loyalty_points_redeemed || req.body.loyaltyPointsRedeemed || 0) || 0;
+        const loyaltyDiscountAmount = parseFloat(req.body.loyalty_discount_amount || req.body.loyaltyDiscount || req.body.loyalty_discount || loyaltyPointsRedeemed || 0) || 0;
+        const remainingLoyaltyPoints = req.body.remaining_loyalty_points !== undefined 
+            ? parseFloat(req.body.remaining_loyalty_points) 
+            : (req.body.final_loyalty_points !== undefined 
+                ? parseFloat(req.body.final_loyalty_points) 
+                : Math.max(0, existingLoyaltyPoints - loyaltyPointsRedeemed + loyaltyPointsEarned));
+        
         const netPointsChange = loyaltyPointsEarned - loyaltyPointsRedeemed;
         const customerId = req.body.customer_id || null;
 
         // Ensure columns exist
-        try {
-            await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_points_earned REAL DEFAULT 0').run();
-        } catch (e) { }
-        try {
-            await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_points_redeemed REAL DEFAULT 0').run();
-        } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN customer_id INTEGER').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN existing_loyalty_points REAL DEFAULT 0').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_points_earned REAL DEFAULT 0').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_points_redeemed REAL DEFAULT 0').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_discount_amount REAL DEFAULT 0').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN remaining_loyalty_points REAL DEFAULT 0').run(); } catch (e) { }
 
         try {
             // 1. Insert into business_invoices
             let invoiceId;
             try {
+                const result = await db.prepare(`
+                    INSERT INTO business_invoices (
+                        user_id, invoice_number, client_name, client_email, customer_id,
+                        amount, tax_amount, total_amount, paid_amount, due_amount,
+                        discount_amount, round_off, status, due_date, payment_mode,
+                        invoice_type, items, existing_loyalty_points, loyalty_points_earned, 
+                        loyalty_points_redeemed, loyalty_discount_amount, remaining_loyalty_points, 
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run([
+                    userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null, customerId,
+                    numAmount, numTax, numTotal, numPaid, numDue,
+                    numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
+                    'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned, 
+                    loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints, 
+                    now, now
+                ]);
+                invoiceId = result.lastInsertRowid || result.id;
+            } catch (errIns) {
+                // Fallback insert if columns missing on legacy table
                 const result = await db.prepare(`
                     INSERT INTO business_invoices (
                         user_id, invoice_number, client_name, client_email,
@@ -56,22 +84,6 @@ const posController = {
                     numAmount, numTax, numTotal, numPaid, numDue,
                     numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
                     'POS', JSON.stringify(items), loyaltyPointsEarned, loyaltyPointsRedeemed, now, now
-                ]);
-                invoiceId = result.lastInsertRowid || result.id;
-            } catch (errIns) {
-                // Fallback insert if column is missing on legacy table
-                const result = await db.prepare(`
-                    INSERT INTO business_invoices (
-                        user_id, invoice_number, client_name, client_email,
-                        amount, tax_amount, total_amount, paid_amount, due_amount,
-                        discount_amount, round_off, status, due_date, payment_mode,
-                        invoice_type, items, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `).run([
-                    userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null,
-                    numAmount, numTax, numTotal, numPaid, numDue,
-                    numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
-                    'POS', JSON.stringify(items), now, now
                 ]);
                 invoiceId = result.lastInsertRowid || result.id;
             }
@@ -155,10 +167,12 @@ const posController = {
                 if (createdInvoice.items) {
                     try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) { }
                 }
-                createdInvoice.existing_loyalty_points = req.body.existing_loyalty_points !== undefined ? req.body.existing_loyalty_points : 0;
-                createdInvoice.loyalty_points_earned = loyaltyPointsEarned;
-                createdInvoice.loyalty_points_redeemed = loyaltyPointsRedeemed;
-                createdInvoice.final_loyalty_points = req.body.final_loyalty_points !== undefined ? req.body.final_loyalty_points : Math.max(0, (createdInvoice.existing_loyalty_points - loyaltyPointsRedeemed + loyaltyPointsEarned));
+                createdInvoice.existing_loyalty_points = createdInvoice.existing_loyalty_points !== undefined && createdInvoice.existing_loyalty_points !== null ? parseFloat(createdInvoice.existing_loyalty_points) : existingLoyaltyPoints;
+                createdInvoice.loyalty_points_earned = createdInvoice.loyalty_points_earned !== undefined && createdInvoice.loyalty_points_earned !== null ? parseFloat(createdInvoice.loyalty_points_earned) : loyaltyPointsEarned;
+                createdInvoice.loyalty_points_redeemed = createdInvoice.loyalty_points_redeemed !== undefined && createdInvoice.loyalty_points_redeemed !== null ? parseFloat(createdInvoice.loyalty_points_redeemed) : loyaltyPointsRedeemed;
+                createdInvoice.loyalty_discount_amount = createdInvoice.loyalty_discount_amount !== undefined && createdInvoice.loyalty_discount_amount !== null ? parseFloat(createdInvoice.loyalty_discount_amount) : loyaltyDiscountAmount;
+                createdInvoice.remaining_loyalty_points = createdInvoice.remaining_loyalty_points !== undefined && createdInvoice.remaining_loyalty_points !== null ? parseFloat(createdInvoice.remaining_loyalty_points) : remainingLoyaltyPoints;
+                createdInvoice.final_loyalty_points = createdInvoice.remaining_loyalty_points;
             }
 
             // Real-time integration to CLIKS Customer Application
