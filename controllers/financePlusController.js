@@ -1,9 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const connectionService = require('../utils/connectionService');
-const customerPurchaseController = require('./customerPurchaseController');
-
-const getCustomerPurchases = customerPurchaseController.getPurchaseHistory;
 
 // ── Financial Goals ──────────────────────────────────────────────────────────
 const getGoals = async (req, res) => {
@@ -400,6 +397,13 @@ const getCustomerPurchases = async (req, res) => {
 
   const userId = req.user.id;
   const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
+
+  try {
+    const { syncConnectedCustomerPurchases } = require('../utils/customerIntegration');
+    await syncConnectedCustomerPurchases(userId, userEmail);
+  } catch (syncErr) {
+    console.warn('[financePlusController] Auto-sync warning:', syncErr.message);
+  }
 
   const purchases = await db.prepare(`
     SELECT * FROM customer_purchase_history 
