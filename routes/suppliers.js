@@ -13,6 +13,13 @@ router.post('/import',               supplierController.importSuppliers);
 router.get('/export',                supplierController.exportSuppliers);
 
 // Website Supplier Portal Integrations
+router.get('/portal/connection-requests',              supplierController.getConnectionRequests);
+router.post('/portal/connection-requests/:id/respond', supplierController.respondConnectionRequest);
+router.get('/portal/purchase-requests',                 supplierController.getPurchaseRequests);
+router.get('/portal/purchase-requests/:id',             supplierController.getPurchaseRequestById);
+router.post('/portal/purchase-requests/:id/confirm',    supplierController.confirmPurchaseOrder);
+router.get('/portal/chat/:supplierId',                  supplierController.getChatMessages);
+router.post('/portal/chat/:supplierId',                 supplierController.sendChatMessage);
 router.get('/portal/integrations',                 supplierController.getPortalIntegrations);
 router.post('/portal/integrations/:id/respond',    supplierController.respondPortalIntegration);
 
