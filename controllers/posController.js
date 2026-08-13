@@ -28,11 +28,16 @@ const posController = {
         const numRoundOff = parseFloat(round_off) || 0;
 
         const loyaltyPointsEarned = parseFloat(req.body.loyalty_points_earned || req.body.loyaltyPointsEarned || 0) || 0;
+        const loyaltyPointsRedeemed = parseFloat(req.body.loyalty_points_redeemed || req.body.loyaltyPointsRedeemed || 0) || 0;
+        const netPointsChange = loyaltyPointsEarned - loyaltyPointsRedeemed;
         const customerId = req.body.customer_id || null;
 
-        // Ensure column exists
+        // Ensure columns exist
         try {
             await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_points_earned REAL DEFAULT 0').run();
+        } catch (e) { }
+        try {
+            await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_points_redeemed REAL DEFAULT 0').run();
         } catch (e) { }
 
         try {
@@ -44,13 +49,13 @@ const posController = {
                         user_id, invoice_number, client_name, client_email,
                         amount, tax_amount, total_amount, paid_amount, due_amount,
                         discount_amount, round_off, status, due_date, payment_mode,
-                        invoice_type, items, loyalty_points_earned, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        invoice_type, items, loyalty_points_earned, loyalty_points_redeemed, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run([
                     userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null,
                     numAmount, numTax, numTotal, numPaid, numDue,
                     numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
-                    'POS', JSON.stringify(items), loyaltyPointsEarned, now, now
+                    'POS', JSON.stringify(items), loyaltyPointsEarned, loyaltyPointsRedeemed, now, now
                 ]);
                 invoiceId = result.lastInsertRowid || result.id;
             } catch (errIns) {
@@ -72,33 +77,33 @@ const posController = {
             }
 
             // 1.5 Atomically update Customer Loyalty Points in database upon successful payment
-            if (loyaltyPointsEarned > 0) {
+            if (loyaltyPointsEarned > 0 || loyaltyPointsRedeemed > 0) {
                 try {
                     let updatedCount = 0;
                     if (customerId) {
                         const res = await db.prepare(`
                             UPDATE business_customers 
-                            SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
+                            SET loyalty_points = MAX(0, COALESCE(loyalty_points, 0) + ?), updated_at = ? 
                             WHERE id = ? AND user_id = ?
-                        `).run([loyaltyPointsEarned, now, customerId, userId]);
+                        `).run([netPointsChange, now, customerId, userId]);
                         updatedCount = res?.changes || 0;
                     }
 
                     if (!updatedCount && client_email) {
                         const res = await db.prepare(`
                             UPDATE business_customers 
-                            SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
+                            SET loyalty_points = MAX(0, COALESCE(loyalty_points, 0) + ?), updated_at = ? 
                             WHERE LOWER(email) = ? AND user_id = ?
-                        `).run([loyaltyPointsEarned, now, String(client_email).toLowerCase().trim(), userId]);
+                        `).run([netPointsChange, now, String(client_email).toLowerCase().trim(), userId]);
                         updatedCount = res?.changes || 0;
                     }
 
                     if (!updatedCount && client_name && client_name !== 'Walk-in Customer') {
                         await db.prepare(`
                             UPDATE business_customers 
-                            SET loyalty_points = COALESCE(loyalty_points, 0) + ?, updated_at = ? 
+                            SET loyalty_points = MAX(0, COALESCE(loyalty_points, 0) + ?), updated_at = ? 
                             WHERE LOWER(name) = ? AND user_id = ?
-                        `).run([loyaltyPointsEarned, now, String(client_name).toLowerCase().trim(), userId]);
+                        `).run([netPointsChange, now, String(client_name).toLowerCase().trim(), userId]);
                     }
                 } catch (errLoyalty) {
                     console.error('[POS Controller] Error updating customer loyalty points:', errLoyalty);
@@ -146,8 +151,14 @@ const posController = {
             }
 
             let createdInvoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(invoiceId);
-            if (createdInvoice && createdInvoice.items) {
-                try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) { }
+            if (createdInvoice) {
+                if (createdInvoice.items) {
+                    try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) { }
+                }
+                createdInvoice.existing_loyalty_points = req.body.existing_loyalty_points !== undefined ? req.body.existing_loyalty_points : 0;
+                createdInvoice.loyalty_points_earned = loyaltyPointsEarned;
+                createdInvoice.loyalty_points_redeemed = loyaltyPointsRedeemed;
+                createdInvoice.final_loyalty_points = req.body.final_loyalty_points !== undefined ? req.body.final_loyalty_points : Math.max(0, (createdInvoice.existing_loyalty_points - loyaltyPointsRedeemed + loyaltyPointsEarned));
             }
 
             // Real-time integration to CLIKS Customer Application
