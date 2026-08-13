@@ -266,8 +266,13 @@ const supplierConnectionService = {
     getSupplierChats: async ({ business_id, supplier_id, purchase_id }) => {
         await supplierConnectionService.ensureTable();
 
-        let sql = `SELECT * FROM supplier_chats WHERE business_id = ? AND supplier_id = ?`;
-        const params = [business_id, supplier_id];
+        let sql = `SELECT * FROM supplier_chats WHERE supplier_id = ?`;
+        const params = [supplier_id];
+
+        if (business_id) {
+            sql += ` AND business_id = ?`;
+            params.push(business_id);
+        }
 
         if (purchase_id) {
             sql += ` AND (purchase_id = ? OR purchase_id IS NULL)`;
@@ -288,12 +293,18 @@ const supplierConnectionService = {
             throw new Error('Message content cannot be empty');
         }
 
+        let targetBusinessId = business_id;
+        if (!targetBusinessId && supplier_id) {
+            const bSup = await db.prepare('SELECT user_id FROM business_suppliers WHERE id = ?').get(supplier_id);
+            if (bSup) targetBusinessId = bSup.user_id;
+        }
+
         const now = new Date().toISOString();
         const res = await db.prepare(`
             INSERT INTO supplier_chats (
                 purchase_id, supplier_id, business_id, sender_type, sender_id, sender_name, message, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(purchase_id || null, supplier_id, business_id, sender_type || 'dealer', sender_id, sender_name || 'User', message.trim(), now);
+        `).run(purchase_id || null, supplier_id, targetBusinessId || 0, sender_type || 'supplier', sender_id, sender_name || 'User', message.trim(), now);
 
         return await db.prepare('SELECT * FROM supplier_chats WHERE id = ?').get(res.lastInsertRowid);
     }

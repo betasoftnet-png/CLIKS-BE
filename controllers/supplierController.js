@@ -628,6 +628,10 @@ const supplierController = {
         }
     },
 
+    getConnectionRequests: async (req, res) => {
+        return supplierController.getPortalIntegrations(req, res);
+    },
+
     respondPortalIntegration: async (req, res) => {
         const { id } = req.params;
         const { action } = req.body;
@@ -641,6 +645,40 @@ const supplierController = {
             return sendSuccess(res, updated, `Supplier connection ${action}ed successfully`);
         } catch (error) {
             return sendError(res, error.message || 'Failed to respond to supplier connection', 400);
+        }
+    },
+
+    respondConnectionRequest: async (req, res) => {
+        return supplierController.respondPortalIntegration(req, res);
+    },
+
+    getPurchaseRequests: async (req, res) => {
+        const purchaseController = require('./purchaseController');
+        return purchaseController.getSupplierPortalOrders(req, res);
+    },
+
+    getPurchaseRequestById: async (req, res) => {
+        const purchaseController = require('./purchaseController');
+        return purchaseController.getPurchaseById(req, res);
+    },
+
+    confirmPurchaseOrder: async (req, res) => {
+        const purchaseController = require('./purchaseController');
+        return purchaseController.confirmSupplierPurchase(req, res);
+    },
+
+    getChatMessages: async (req, res) => {
+        const supplierId = req.params.supplierId || req.params.id;
+        const { purchase_id } = req.query;
+        try {
+            const chats = await supplierConnectionService.getSupplierChats({
+                business_id: req.user.id,
+                supplier_id: supplierId,
+                purchase_id: purchase_id ? parseInt(purchase_id) : null
+            });
+            return sendSuccess(res, chats, 'Supplier chat messages loaded');
+        } catch (error) {
+            return sendError(res, error.message || 'Failed to load chat messages', 500);
         }
     }
 };

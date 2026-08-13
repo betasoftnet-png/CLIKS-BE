@@ -500,7 +500,6 @@ const getInvoiceDetails = async (req, res) => {
           userEmail = user?.email ? user.email.toLowerCase().trim() : '';
       }
 
-<<<<<<< HEAD
       let purchaseRecord = await db.prepare(`
           SELECT *, net_amount, total_amount
           FROM customer_purchase_history
