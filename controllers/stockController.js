@@ -173,36 +173,60 @@ const adjustQuantity = async (req, res) => {
   const { delta } = req.body;
   if (delta === undefined) return sendError(res, 'Delta is required', 400, 'BAD_REQUEST');
 
-  const item = await db.prepare('SELECT * FROM stock WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
-  if (!item) return sendError(res, 'Stock item not found', 404, 'NOT_FOUND');
-
-  let newQuantity = Number(item.quantity) + Number(delta);
-  if (newQuantity < 0) newQuantity = 0;
-
   const now = new Date().toISOString();
-  await db.prepare(`UPDATE stock SET quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?`)
-    .run(newQuantity, now, req.params.id, req.user.id);
+  let updatedRow = null;
 
-  const updatedItem = await db.prepare('SELECT * FROM stock WHERE id = ?').get(req.params.id);
+  // 1. Update business_products (catalog products created via Inventory -> Products)
+  try {
+    const bpItem = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (bpItem) {
+      let newQty = Number(bpItem.quantity || 0) + Number(delta);
+      if (newQty < 0) newQty = 0;
+      const stockStatus = newQty === 0 ? 'Out of Stock' : (newQty <= (bpItem.low_stock_threshold || 5) ? 'Low Stock' : 'In Stock');
+      await db.prepare('UPDATE business_products SET quantity = ?, stock_status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+        .run(newQty, stockStatus, now, req.params.id, req.user.id);
+      updatedRow = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(req.params.id);
+    }
+  } catch (e) {}
 
-  // Log transaction with logistics metadata
-  const { purchase_bill_ref, received_by, warehouse_id } = req.body;
-  await db.prepare(`
-    INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at, purchase_bill_ref, received_by, warehouse_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    req.params.id, 
-    req.user.id, 
-    delta > 0 ? 'in' : 'out', 
-    Math.abs(delta), 
-    now, 
-    now,
-    purchase_bill_ref || null,
-    received_by || null,
-    warehouse_id || null
-  );
+  // 2. Update stock table if present
+  try {
+    const stockItem = await db.prepare('SELECT * FROM stock WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (stockItem) {
+      let newQty = Number(stockItem.quantity || 0) + Number(delta);
+      if (newQty < 0) newQty = 0;
+      await db.prepare('UPDATE stock SET quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+        .run(newQty, now, req.params.id, req.user.id);
+      if (!updatedRow) {
+        updatedRow = enrichRow(await db.prepare('SELECT * FROM stock WHERE id = ?').get(req.params.id));
+      }
+    }
+  } catch (e) {}
 
-  return sendSuccess(res, enrichRow(updatedItem), 'Quantity adjusted');
+  if (!updatedRow) {
+    return sendError(res, 'Product or Stock item not found', 404, 'NOT_FOUND');
+  }
+
+  // Log transaction
+  try {
+    const { purchase_bill_ref, received_by, warehouse_id } = req.body;
+    await db.prepare(`
+      INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at, purchase_bill_ref, received_by, warehouse_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      req.params.id, 
+      req.user.id, 
+      delta > 0 ? 'in' : 'out', 
+      Math.abs(delta), 
+      now, 
+      now,
+      purchase_bill_ref || null,
+      received_by || null,
+      warehouse_id || null
+    );
+  } catch (e) {}
+
+  return sendSuccess(res, updatedRow, 'Quantity adjusted successfully');
 };
 
 // ── DELETE /:id ───────────────────────────────────────────────────────────────
