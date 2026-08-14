@@ -44,8 +44,11 @@ const ssoLogin = async (req, res) => {
 
   const { email, name: _name, accountType } = bnxProfile;
 
-  // Enforce Business Account for Business App
-  if (appType === 'BUSINESS' && accountType !== 'BUSINESS') {
+  // Enforce Business Account strictly for cliksbusiness.com domain
+  const origin = req.get('origin') || req.get('referer') || '';
+  const isBusinessDomain = origin.includes('cliksbusiness.com');
+  
+  if (isBusinessDomain && accountType !== 'BUSINESS') {
     throw new AppError('Access denied. This application requires a BNX Business account.', 403, 'FORBIDDEN');
   }
   // If the user's name is multiple words, extract a username if missing
