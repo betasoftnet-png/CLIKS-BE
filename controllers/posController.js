@@ -53,50 +53,43 @@ const posController = {
             const sellQty = parseFloat(item.quantity) || 0;
             const itemId = item.id;
             const itemName = item.name || item.description || '';
+            const cleanName = itemName.toLowerCase().trim();
 
-            let currentQty = null;
+            let maxQty = null;
 
             if (itemId) {
                 if (item.source === 'products') {
                     const prod = await db.prepare('SELECT quantity FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
-                    if (prod) currentQty = parseFloat(prod.quantity) || 0;
+                    if (prod) maxQty = parseFloat(prod.quantity) || 0;
                 } else if (item.source === 'inventory') {
                     const inv = await db.prepare('SELECT quantity FROM inventory WHERE id = ? AND user_id = ?').get([itemId, userId]);
-                    if (inv) currentQty = parseFloat(inv.quantity) || 0;
-                }
-
-                if (currentQty === null) {
-                    const prod = await db.prepare('SELECT quantity FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
-                    if (prod) currentQty = parseFloat(prod.quantity) || 0;
-                }
-                if (currentQty === null) {
-                    const inv = await db.prepare('SELECT quantity FROM inventory WHERE id = ? AND user_id = ?').get([itemId, userId]);
-                    if (inv) currentQty = parseFloat(inv.quantity) || 0;
-                }
-                if (currentQty === null) {
+                    if (inv) maxQty = parseFloat(inv.quantity) || 0;
+                } else if (item.source === 'stock') {
                     const stk = await db.prepare('SELECT quantity FROM stock WHERE id = ? AND user_id = ?').get([itemId, userId]);
-                    if (stk) currentQty = parseFloat(stk.quantity) || 0;
+                    if (stk) maxQty = parseFloat(stk.quantity) || 0;
                 }
             }
 
-            if (currentQty === null && itemName) {
-                const cleanName = itemName.toLowerCase().trim();
+            if (maxQty === null && itemId) {
+                const prod = await db.prepare('SELECT quantity FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                if (prod) maxQty = parseFloat(prod.quantity) || 0;
+                const inv = await db.prepare('SELECT quantity FROM inventory WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                if (inv && (maxQty === null || parseFloat(inv.quantity) > maxQty)) maxQty = parseFloat(inv.quantity) || 0;
+                const stk = await db.prepare('SELECT quantity FROM stock WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                if (stk && (maxQty === null || parseFloat(stk.quantity) > maxQty)) maxQty = parseFloat(stk.quantity) || 0;
+            }
+
+            if (maxQty === null && cleanName) {
                 const prod = await db.prepare('SELECT quantity FROM business_products WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
-                if (prod) {
-                    currentQty = parseFloat(prod.quantity) || 0;
-                } else {
-                    const inv = await db.prepare('SELECT quantity FROM inventory WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
-                    if (inv) {
-                        currentQty = parseFloat(inv.quantity) || 0;
-                    } else {
-                        const stk = await db.prepare('SELECT quantity FROM stock WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
-                        if (stk) currentQty = parseFloat(stk.quantity) || 0;
-                    }
-                }
+                if (prod) maxQty = parseFloat(prod.quantity) || 0;
+                const inv = await db.prepare('SELECT quantity FROM inventory WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
+                if (inv && (maxQty === null || parseFloat(inv.quantity) > maxQty)) maxQty = parseFloat(inv.quantity) || 0;
+                const stk = await db.prepare('SELECT quantity FROM stock WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
+                if (stk && (maxQty === null || parseFloat(stk.quantity) > maxQty)) maxQty = parseFloat(stk.quantity) || 0;
             }
 
-            if (currentQty !== null && sellQty > currentQty) {
-                return sendError(res, `Cannot complete checkout. Requested quantity (${sellQty}) for "${itemName}" exceeds available stock (${currentQty}).`, 400);
+            if (maxQty !== null && sellQty > maxQty) {
+                return sendError(res, `Cannot complete checkout. Requested quantity (${sellQty}) for "${itemName}" exceeds available stock (${maxQty}).`, 400);
             }
         }
 
@@ -174,107 +167,82 @@ const posController = {
                 }
             }
 
-            // 2. Update stock in correct inventory/products/stock table for each item
+            // 2. Comprehensive multi-table stock deduction for each sold item
             for (const item of items) {
                 const itemId = item.id;
                 const itemName = item.name || item.description || '';
+                const cleanName = itemName.toLowerCase().trim();
                 const sellQty = parseFloat(item.quantity) || 1;
 
                 try {
-                    let updatedInProducts = false;
-                    let updatedInInventory = false;
-
-                    // 2a. Check and update business_products
-                    if (itemId && (item.source === 'products' || !item.source)) {
-                        const prodItem = await db.prepare('SELECT id, quantity, low_stock_threshold FROM business_products WHERE id = ? AND user_id = ?')
-                            .get([itemId, userId]);
-
-                        if (prodItem) {
-                            const currentQty = parseFloat(prodItem.quantity) || 0;
-                            const lowThreshold = parseFloat(prodItem.low_stock_threshold) || 5;
-                            const newQty = Math.max(0, currentQty - sellQty);
-                            const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty <= lowThreshold ? 'Low Stock' : 'In Stock');
-
-                            await db.prepare(`
-                                UPDATE business_products 
-                                SET quantity = ?, stock_status = ?, updated_at = ? 
-                                WHERE id = ? AND user_id = ?
-                            `).run([newQty, newStatus, now, prodItem.id, userId]);
-                            updatedInProducts = true;
-                        }
+                    // 2a. Update business_products (Inventory -> Products)
+                    let prodItem = null;
+                    if (itemId && item.source === 'products') {
+                        prodItem = await db.prepare('SELECT id, quantity, low_stock_threshold FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                    }
+                    if (!prodItem && itemId) {
+                        prodItem = await db.prepare('SELECT id, quantity, low_stock_threshold FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                    }
+                    if (!prodItem && cleanName) {
+                        prodItem = await db.prepare('SELECT id, quantity, low_stock_threshold FROM business_products WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
                     }
 
-                    if (!updatedInProducts && itemName) {
-                        const prodByName = await db.prepare('SELECT id, quantity, low_stock_threshold FROM business_products WHERE LOWER(name) = ? AND user_id = ?')
-                            .get([itemName.toLowerCase().trim(), userId]);
-                        if (prodByName) {
-                            const currentQty = parseFloat(prodByName.quantity) || 0;
-                            const lowThreshold = parseFloat(prodByName.low_stock_threshold) || 5;
-                            const newQty = Math.max(0, currentQty - sellQty);
-                            const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty <= lowThreshold ? 'Low Stock' : 'In Stock');
+                    if (prodItem) {
+                        const currentQty = parseFloat(prodItem.quantity) || 0;
+                        const lowThreshold = parseFloat(prodItem.low_stock_threshold) || 5;
+                        const newQty = Math.max(0, currentQty - sellQty);
+                        const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty <= lowThreshold ? 'Low Stock' : 'In Stock');
 
-                            await db.prepare(`
-                                UPDATE business_products 
-                                SET quantity = ?, stock_status = ?, updated_at = ? 
-                                WHERE id = ? AND user_id = ?
-                            `).run([newQty, newStatus, now, prodByName.id, userId]);
-                            updatedInProducts = true;
-                        }
+                        await db.prepare(`
+                            UPDATE business_products 
+                            SET quantity = ?, stock_status = ?, updated_at = ? 
+                            WHERE id = ? AND user_id = ?
+                        `).run([newQty, newStatus, now, prodItem.id, userId]);
                     }
 
-                    // 2b. Check and update inventory table
-                    if (itemId && (item.source === 'inventory' || !item.source || !updatedInProducts)) {
-                        const invItem = await db.prepare('SELECT id, quantity FROM inventory WHERE id = ? AND user_id = ?')
-                            .get([itemId, userId]);
-
-                        if (invItem) {
-                            const currentQty = parseFloat(invItem.quantity) || 0;
-                            const newQty = Math.max(0, currentQty - sellQty);
-                            const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < 10 ? 'Low Stock' : 'In Stock');
-
-                            await db.prepare('UPDATE inventory SET quantity = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
-                                .run([newQty, newStatus, now, invItem.id, userId]);
-                            updatedInInventory = true;
-                        }
+                    // 2b. Update inventory table (Inventory -> Items)
+                    let invItem = null;
+                    if (itemId && item.source === 'inventory') {
+                        invItem = await db.prepare('SELECT id, quantity FROM inventory WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                    }
+                    if (!invItem && itemId) {
+                        invItem = await db.prepare('SELECT id, quantity FROM inventory WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                    }
+                    if (!invItem && cleanName) {
+                        invItem = await db.prepare('SELECT id, quantity FROM inventory WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
                     }
 
-                    if (!updatedInInventory && itemName) {
-                        const invByName = await db.prepare('SELECT id, quantity FROM inventory WHERE LOWER(name) = ? AND user_id = ?')
-                            .get([itemName.toLowerCase().trim(), userId]);
-                        if (invByName) {
-                            const currentQty = parseFloat(invByName.quantity) || 0;
-                            const newQty = Math.max(0, currentQty - sellQty);
-                            const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < 10 ? 'Low Stock' : 'In Stock');
+                    if (invItem) {
+                        const currentQty = parseFloat(invItem.quantity) || 0;
+                        const newQty = Math.max(0, currentQty - sellQty);
+                        const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < 10 ? 'Low Stock' : 'In Stock');
 
-                            await db.prepare('UPDATE inventory SET quantity = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
-                                .run([newQty, newStatus, now, invByName.id, userId]);
-                            updatedInInventory = true;
-                        }
+                        await db.prepare('UPDATE inventory SET quantity = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+                            .run([newQty, newStatus, now, invItem.id, userId]);
                     }
 
-                    // 2c. Check and update stock table (Inventory -> Stock registry)
-                    try {
-                        let stockItem = null;
-                        if (itemId) {
-                            stockItem = await db.prepare('SELECT id, quantity FROM stock WHERE id = ? AND user_id = ?').get([itemId, userId]);
-                        }
-                        if (!stockItem && itemName) {
-                            stockItem = await db.prepare('SELECT id, quantity FROM stock WHERE LOWER(name) = ? AND user_id = ?').get([itemName.toLowerCase().trim(), userId]);
-                        }
+                    // 2c. Update stock table (Inventory -> Stock registry)
+                    let stockItem = null;
+                    if (itemId && item.source === 'stock') {
+                        stockItem = await db.prepare('SELECT id, quantity FROM stock WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                    }
+                    if (!stockItem && itemId) {
+                        stockItem = await db.prepare('SELECT id, quantity FROM stock WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                    }
+                    if (!stockItem && cleanName) {
+                        stockItem = await db.prepare('SELECT id, quantity FROM stock WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
+                    }
 
-                        if (stockItem) {
-                            const currentQty = parseFloat(stockItem.quantity) || 0;
-                            const newQty = Math.max(0, currentQty - sellQty);
-                            await db.prepare('UPDATE stock SET quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?')
-                                .run([newQty, now, stockItem.id, userId]);
+                    if (stockItem) {
+                        const currentQty = parseFloat(stockItem.quantity) || 0;
+                        const newQty = Math.max(0, currentQty - sellQty);
+                        await db.prepare('UPDATE stock SET quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+                            .run([newQty, now, stockItem.id, userId]);
 
-                            await db.prepare(`
-                                INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at)
-                                VALUES (?, ?, 'out', ?, ?, ?)
-                            `).run([stockItem.id, userId, sellQty, now, now]);
-                        }
-                    } catch (errStkTable) {
-                        console.error('[POS Controller] Error updating stock table:', errStkTable);
+                        await db.prepare(`
+                            INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at)
+                            VALUES (?, ?, 'out', ?, ?, ?)
+                        `).run([stockItem.id, userId, sellQty, now, now]);
                     }
                 } catch (errStock) {
                     console.error('[POS Controller] Error updating stock for item:', itemId, errStock);
