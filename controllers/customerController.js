@@ -14,7 +14,20 @@ const customerController = {
 
             const emailLower = String(email).trim().toLowerCase();
 
-            // 1. Search users table for registered CLIKS customer user account
+            // 1. Search merchant's business_customers table FIRST for merchant context
+            const crmCust = await db.prepare('SELECT id, name, email, loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, req.user.id);
+
+            if (crmCust) {
+                return sendSuccess(res, {
+                    exists: true,
+                    user_id: crmCust.id,
+                    email: crmCust.email,
+                    customer_name: crmCust.name,
+                    loyalty_points: parseFloat(crmCust.loyalty_points || 0) || 0
+                });
+            }
+
+            // 2. Search users table for registered CLIKS customer user account as fallback
             const user = await db.prepare('SELECT id, email, username, loyalty_points FROM users WHERE LOWER(email) = ?').get(emailLower);
 
             if (user) {
@@ -27,20 +40,7 @@ const customerController = {
                     user_id: user.id,
                     email: user.email,
                     customer_name: user.username,
-                    loyalty_points: pts
-                });
-            }
-
-            // 2. Search merchant's business_customers table as fallback
-            const crmCust = await db.prepare('SELECT id, name, email, loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, req.user.id);
-
-            if (crmCust) {
-                return sendSuccess(res, {
-                    exists: true,
-                    user_id: crmCust.id,
-                    email: crmCust.email,
-                    customer_name: crmCust.name,
-                    loyalty_points: crmCust.loyalty_points || 0
+                    loyalty_points: parseFloat(pts || 0) || 0
                 });
             }
 
@@ -137,9 +137,12 @@ const customerController = {
 
                 const connStatus = connMapByCustId.get(c.id) || (emailLower ? connMapByEmail.get(emailLower) : null) || 'UNCONNECTED';
                 const totalSales = (emailLower ? salesByEmail.get(emailLower) : 0) || (nameLower ? salesByName.get(nameLower) : 0) || 0;
+                const loyaltyPts = parseFloat(c.loyalty_points || 0) || 0;
 
                 return {
                     ...c,
+                    loyalty_points: loyaltyPts,
+                    points: loyaltyPts,
                     phone: phoneVal,
                     phone_number: phoneVal,
                     pan: panVal,

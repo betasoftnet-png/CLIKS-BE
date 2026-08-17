@@ -139,15 +139,18 @@ const posController = {
             }
 
             // 1.5 Atomically update Customer Loyalty Points in database upon successful payment
+            let freshLoyaltyBalance = remainingLoyaltyPoints;
             if (loyaltyPointsEarned > 0 || loyaltyPointsRedeemed > 0) {
                 try {
                     let updatedCount = 0;
-                    if (customerId) {
+                    const parsedCustId = customerId ? parseInt(customerId) : null;
+
+                    if (parsedCustId && !isNaN(parsedCustId)) {
                         const res = await db.prepare(`
                             UPDATE business_customers 
                             SET loyalty_points = MAX(0, COALESCE(loyalty_points, 0) + ?), updated_at = ? 
                             WHERE id = ? AND user_id = ?
-                        `).run([netPointsChange, now, customerId, userId]);
+                        `).run([netPointsChange, now, parsedCustId, userId]);
                         updatedCount = res?.changes || 0;
                     }
 
@@ -166,6 +169,22 @@ const posController = {
                             SET loyalty_points = MAX(0, COALESCE(loyalty_points, 0) + ?), updated_at = ? 
                             WHERE LOWER(name) = ? AND user_id = ?
                         `).run([netPointsChange, now, String(client_name).toLowerCase().trim(), userId]);
+                    }
+
+                    // Fetch fresh persisted loyalty_points balance directly from business_customers table
+                    let updatedCustRow = null;
+                    if (parsedCustId && !isNaN(parsedCustId)) {
+                        updatedCustRow = await db.prepare('SELECT id, loyalty_points FROM business_customers WHERE id = ? AND user_id = ?').get(parsedCustId, userId);
+                    }
+                    if (!updatedCustRow && client_email) {
+                        updatedCustRow = await db.prepare('SELECT id, loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(String(client_email).toLowerCase().trim(), userId);
+                    }
+                    if (!updatedCustRow && client_name && client_name !== 'Walk-in Customer') {
+                        updatedCustRow = await db.prepare('SELECT id, loyalty_points FROM business_customers WHERE LOWER(name) = ? AND user_id = ?').get(String(client_name).toLowerCase().trim(), userId);
+                    }
+
+                    if (updatedCustRow && updatedCustRow.loyalty_points !== undefined && updatedCustRow.loyalty_points !== null) {
+                        freshLoyaltyBalance = parseFloat(updatedCustRow.loyalty_points) || 0;
                     }
                 } catch (errLoyalty) {
                     console.error('[POS Controller] Error updating customer loyalty points:', errLoyalty);
@@ -263,8 +282,9 @@ const posController = {
                 createdInvoice.loyalty_points_earned = createdInvoice.loyalty_points_earned !== undefined && createdInvoice.loyalty_points_earned !== null ? parseFloat(createdInvoice.loyalty_points_earned) : loyaltyPointsEarned;
                 createdInvoice.loyalty_points_redeemed = createdInvoice.loyalty_points_redeemed !== undefined && createdInvoice.loyalty_points_redeemed !== null ? parseFloat(createdInvoice.loyalty_points_redeemed) : loyaltyPointsRedeemed;
                 createdInvoice.loyalty_discount_amount = createdInvoice.loyalty_discount_amount !== undefined && createdInvoice.loyalty_discount_amount !== null ? parseFloat(createdInvoice.loyalty_discount_amount) : loyaltyDiscountAmount;
-                createdInvoice.remaining_loyalty_points = createdInvoice.remaining_loyalty_points !== undefined && createdInvoice.remaining_loyalty_points !== null ? parseFloat(createdInvoice.remaining_loyalty_points) : remainingLoyaltyPoints;
-                createdInvoice.final_loyalty_points = createdInvoice.remaining_loyalty_points;
+                createdInvoice.remaining_loyalty_points = freshLoyaltyBalance;
+                createdInvoice.final_loyalty_points = freshLoyaltyBalance;
+                createdInvoice.updated_customer_loyalty_points = freshLoyaltyBalance;
             }
 
             // Real-time integration to CLIKS Customer Application
