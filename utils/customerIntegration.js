@@ -414,16 +414,23 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
             } catch (e) {}
 
             try {
-                const curCrm = await db.prepare('SELECT loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, merchantUserId);
+                const targetCustId = createdInvoice.customer_id || (connRecord ? connRecord.business_customer_id : null);
+                let curCrm = null;
+                if (targetCustId) {
+                    curCrm = await db.prepare('SELECT id, loyalty_points FROM business_customers WHERE id = ? AND user_id = ?').get(targetCustId, merchantUserId);
+                }
+                if (!curCrm && emailLower) {
+                    curCrm = await db.prepare('SELECT id, loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, merchantUserId);
+                }
                 if (curCrm) {
-                    const updatedCrmPts = Math.max(0, (curCrm.loyalty_points || 0) + netPointsChange);
+                    const updatedCrmPts = Math.max(0, (parseFloat(curCrm.loyalty_points) || 0) + netPointsChange);
                     await db.prepare(`
                         UPDATE business_customers 
                         SET loyalty_points = ?,
                             total_spent = COALESCE(total_spent, 0) + ?,
                             updated_at = ?
-                        WHERE LOWER(email) = ? AND user_id = ?
-                    `).run(updatedCrmPts, numTotal, now, emailLower, merchantUserId);
+                        WHERE id = ?
+                    `).run(updatedCrmPts, numTotal, now, curCrm.id);
                 }
             } catch (e) {}
 
