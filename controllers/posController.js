@@ -40,7 +40,7 @@ const posController = {
         const netPointsChange = loyaltyPointsEarned - loyaltyPointsRedeemed;
         const customerId = req.body.customer_id || null;
 
-        // Ensure columns exist
+        try { await db.prepare('ALTER TABLE business_customers ADD COLUMN loyalty_points REAL DEFAULT 0').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN customer_id INTEGER').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN existing_loyalty_points REAL DEFAULT 0').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_points_earned REAL DEFAULT 0').run(); } catch (e) { }
