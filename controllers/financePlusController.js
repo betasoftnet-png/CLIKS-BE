@@ -478,18 +478,42 @@ const respondIntegration = async (req, res) => {
 };
 
 const getLoyaltyStats = async (req, res) => {
-  const wallet = await db.prepare('SELECT * FROM customer_loyalty_wallets WHERE user_id = ?').get(req.user.id);
-  if (!wallet) {
+  const userId = req.user ? req.user.id : null;
+  const userEmail = req.user && req.user.email ? String(req.user.email).trim().toLowerCase() : '';
+
+  if (!userId) {
+    return sendSuccess(res, { available_points: 0, lifetime_earned: 0, total_redeemed: 0 });
+  }
+
+  const wallet = await db.prepare('SELECT * FROM customer_loyalty_wallets WHERE user_id = ?').get(userId);
+  if (wallet) {
     return sendSuccess(res, {
-      available_points: 0,
-      lifetime_earned: 0,
-      total_redeemed: 0
+      available_points: wallet.points_balance || 0,
+      lifetime_earned: wallet.total_earned || 0,
+      total_redeemed: wallet.total_redeemed || 0
     });
   }
+
+  const totals = await db.prepare(`
+    SELECT 
+      COALESCE(SUM(points_earned), 0) as total_earned,
+      COALESCE(SUM(points_redeemed), 0) as total_redeemed,
+      COALESCE(SUM(net_points_added), 0) as net_points
+    FROM customer_purchase_history
+    WHERE customer_user_id = ? ${userEmail ? 'OR LOWER(customer_email) = ?' : ''}
+  `).get(...(userEmail ? [userId, userEmail] : [userId]));
+
+  const userObj = await db.prepare('SELECT loyalty_points FROM users WHERE id = ?').get(userId);
+  const userPts = userObj ? userObj.loyalty_points : 0;
+
+  const earned = totals ? totals.total_earned : 0;
+  const redeemed = totals ? totals.total_redeemed : 0;
+  const available = Math.max(0, userPts || (totals ? totals.net_points : 0) || (earned - redeemed));
+
   return sendSuccess(res, {
-    available_points: wallet.points_balance,
-    lifetime_earned: wallet.total_earned,
-    total_redeemed: wallet.total_redeemed
+    available_points: available,
+    lifetime_earned: earned,
+    total_redeemed: redeemed
   });
 };
 

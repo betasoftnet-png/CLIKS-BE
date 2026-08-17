@@ -20,62 +20,69 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
     console.log(`[SYNC LOG] Invoice Saved: #${invoiceNumber} (ID: ${invoiceId})`);
 
     try {
-        // 1. Resolve Customer Email
+        // 1. Resolve Customer Email & Customer ID
         let clientEmail = createdInvoice.client_email ? String(createdInvoice.client_email).trim() : null;
+        let customerId = createdInvoice.customer_id || null;
 
-        if (!clientEmail || clientEmail.length === 0) {
-            // Attempt email lookup from business_customers table by customer_id or client_name
+        if (!clientEmail || !customerId) {
             const custRow = await db.prepare(`
-                SELECT email, name FROM business_customers 
+                SELECT id, email, name FROM business_customers 
                 WHERE user_id = ? 
                   AND (
                       (id IS NOT NULL AND id = ?)
-                      OR (name IS NOT NULL AND LOWER(name) = LOWER(?))
+                      OR (email IS NOT NULL AND LOWER(TRIM(email)) = LOWER(TRIM(?)))
+                      OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))
                   )
-                  AND email IS NOT NULL AND email != ''
                 ORDER BY id DESC LIMIT 1
-            `).get(merchantUserId, createdInvoice.customer_id || 0, clientName);
+            `).get(merchantUserId, customerId || 0, clientEmail || '', clientName || '');
 
-            if (custRow && custRow.email) {
-                clientEmail = String(custRow.email).trim();
-                // Backfill email in business_invoices table
-                try {
-                    await db.prepare('UPDATE business_invoices SET client_email = ? WHERE id = ?').run(clientEmail, invoiceId);
-                    createdInvoice.client_email = clientEmail;
-                } catch (e) {}
+            if (custRow) {
+                if (custRow.id && !customerId) customerId = custRow.id;
+                if (custRow.email && !clientEmail) {
+                    clientEmail = String(custRow.email).trim();
+                    try {
+                        await db.prepare('UPDATE business_invoices SET client_email = ?, customer_id = ? WHERE id = ?').run(clientEmail, customerId, invoiceId);
+                        createdInvoice.client_email = clientEmail;
+                        createdInvoice.customer_id = customerId;
+                    } catch (e) {}
+                }
             }
         }
 
-        if (!clientEmail) {
-            console.log(`[SYNC NOTICE] No customer email could be resolved for invoice #${invoiceNumber}. Synchronization skipped.`);
+        if (!clientEmail && !customerId) {
+            console.log(`[SYNC NOTICE] No customer email or ID could be resolved for invoice #${invoiceNumber}. Synchronization skipped.`);
             return;
         }
 
-        const emailLower = clientEmail.toLowerCase().trim();
+        const emailLower = clientEmail ? clientEmail.toLowerCase().trim() : '';
 
-        // Match customer user using normalized email
-        let customerUser = await db.prepare(
-            'SELECT * FROM users WHERE LOWER(email) = ?'
-        ).get(emailLower);
-
-        // 2. Customer-Business Connection Check: Must belong to business_id AND match normalized email OR website_user_id, with status = 'accepted'
-        const connRecord = await db.prepare(`
-            SELECT status FROM customer_connections 
-            WHERE business_id = ? 
-              AND (
-                  LOWER(customer_email) = ?
-                  ${customerUser ? 'OR website_user_id = ?' : ''}
-              )
-        `).get(...(customerUser ? [merchantUserId, emailLower, customerUser.id] : [merchantUserId, emailLower]));
+        // 2. Customer-Business Connection Check: Must match customer_id OR customer_email / website_user_id with status = 'accepted'/'connected'
+        let connRecord = await db.prepare(`
+            SELECT * FROM customer_connections
+            WHERE business_id = ? AND (
+                (business_customer_id IS NOT NULL AND business_customer_id = ?)
+                ${emailLower ? 'OR (customer_email IS NOT NULL AND LOWER(TRIM(customer_email)) = ?)' : ''}
+            )
+        `).get(...(emailLower ? [merchantUserId, customerId || 0, emailLower] : [merchantUserId, customerId || 0]));
 
         const statusLower = connRecord ? String(connRecord.status).toLowerCase() : '';
         if (!connRecord || (statusLower !== 'accepted' && statusLower !== 'connected')) {
-            console.log(`[SYNC NOTICE] Connection status is ${connRecord ? connRecord.status : 'UNCONNECTED'} (not accepted or connected) for customer ${emailLower} with merchant ${merchantUserId}. Invoice #${invoiceNumber} synchronization skipped.`);
+            console.log(`[SYNC NOTICE] Connection status is ${connRecord ? connRecord.status : 'UNCONNECTED'} (not accepted or connected) for customer with merchant ${merchantUserId}. Invoice #${invoiceNumber} synchronization skipped.`);
             return;
         }
 
+        // Match website customer user account
+        let customerUser = null;
+        if (connRecord.website_user_id) {
+            customerUser = await db.prepare('SELECT * FROM users WHERE id = ?').get(connRecord.website_user_id);
+        }
+
+        if (!customerUser && emailLower) {
+            customerUser = await db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(emailLower);
+        }
+
         // If no matching CLIKS user account exists, auto-create customer user record so purchase history, loyalty, merchant card, and invoice sync immediately
-        if (!customerUser) {
+        if (!customerUser && emailLower) {
             console.log(`[SYNC LOG] Auto-registering new customer user for ${emailLower}...`);
             const defaultName = clientName || emailLower.split('@')[0];
             try {
@@ -91,9 +98,18 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
         }
 
         if (!customerUser) {
-            console.error(`[SYNC ERROR] Synchronization Failed: Customer user could not be found or created for ${emailLower}.`);
+            console.error(`[SYNC ERROR] Synchronization Failed: Customer user could not be found or created.`);
             return;
         }
+
+        // Ensure connection record is updated with website_user_id and customer_id
+        try {
+            await db.prepare(`
+                UPDATE customer_connections 
+                SET website_user_id = ?, business_customer_id = ?
+                WHERE id = ?
+            `).run(customerUser.id, customerId || connRecord.business_customer_id, connRecord.id);
+        } catch (e) {}
 
         console.log(`[SYNC LOG] Customer Found: ${customerUser.email} (ID: ${customerUser.id})`);
 

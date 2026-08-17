@@ -201,10 +201,14 @@ const supplierConnectionService = {
             `).get(emailLower, emailLower, usernamePrefix);
         }
         if (!websiteUser && phoneClean) {
-            websiteUser = await db.prepare(`
-                SELECT id, email, username, role FROM users 
-                WHERE phone = ? OR phone LIKE ?
-            `).get(phoneClean, `%${phoneClean}%`);
+            try {
+                websiteUser = await db.prepare(`
+                    SELECT id, email, username, role FROM users 
+                    WHERE phone = ? OR phone LIKE ?
+                `).get(phoneClean, `%${phoneClean}%`);
+            } catch (e) {
+                // Ignore if phone column does not exist on users table
+            }
         }
 
         // Check if a connection record already exists for this business_id + supplier_id

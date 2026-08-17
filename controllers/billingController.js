@@ -94,7 +94,8 @@ const billingController = {
             invoice_number, client_name, client_email, client_gstin, billing_address, shipping_address,
             amount, tax_amount, total_amount, paid_amount, due_amount, bank_account_id,
             discount_amount, round_off, status, due_date, payment_mode, invoice_type, tax_type,
-            sendPurchaseHistoryToCustomer, sendToCustomerHistory, items
+            sendPurchaseHistoryToCustomer, sendToCustomerHistory, items,
+            customer_id, client_id, business_customer_id
         } = req.body;
 
         if (!client_name) return sendError(res, 'Client name is required', 400);
@@ -115,35 +116,35 @@ const billingController = {
         try {
             const now = new Date().toISOString();
             const invNum = invoice_number || `INV-${Date.now().toString().slice(-6)}`;
-                console.log('========== CREATE INVOICE DEBUG ==========');
 
-            console.log('REQ.USER:', req.user);
+            let resolvedCustomerId = customer_id || client_id || business_customer_id || null;
+            if (!resolvedCustomerId && (client_email || client_name)) {
+                try {
+                    const custRow = await db.prepare(`
+                        SELECT id FROM business_customers 
+                        WHERE user_id = ? 
+                          AND (
+                              (email IS NOT NULL AND LOWER(TRIM(email)) = LOWER(TRIM(?)))
+                              OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))
+                          )
+                        ORDER BY id DESC LIMIT 1
+                    `).get(req.user.id, client_email || '', client_name || '');
+                    if (custRow && custRow.id) {
+                        resolvedCustomerId = custRow.id;
+                    }
+                } catch (e) {}
+            }
 
-            console.log('REQ.BODY:', req.body);
-
-            console.log('ITEMS:', items);
-            console.log('ITEMS TYPE:', typeof items);
-
-            console.log('FINAL VALUES:', {
-                numAmount,
-                numTax,
-                numTotal,
-                numPaid,
-                numDue,
-                numDiscount,
-                numRoundOff,
-                sendToCustVal
-            });
             const result = await db.prepare(`
                 INSERT INTO business_invoices (
-                    user_id, invoice_number, client_name, client_email, client_gstin,
+                    user_id, customer_id, invoice_number, client_name, client_email, client_gstin,
                     billing_address, shipping_address, amount, tax_amount, total_amount,
                     paid_amount, due_amount, bank_account_id, discount_amount, round_off,
                     status, due_date, payment_mode, invoice_type, tax_type, sendToCustomerHistory, sendPurchaseHistoryToCustomer, items,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                req.user.id, invNum, client_name, client_email || null, client_gstin || null,
+                req.user.id, resolvedCustomerId, invNum, client_name, client_email || null, client_gstin || null,
                 billing_address || null, shipping_address || null, numAmount, numTax, numTotal,
                 numPaid, numDue, bank_account_id || null, numDiscount, numRoundOff,
                 status || 'Draft', due_date, payment_mode || 'Cash', invoice_type || 'GST', tax_type || 'Exclusive', sendToCustVal, sendToCustVal,
