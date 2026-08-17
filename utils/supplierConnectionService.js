@@ -82,7 +82,7 @@ const supplierConnectionService = {
         try { await db.prepare("ALTER TABLE business_purchases ADD COLUMN supplier_confirmation_status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE business_purchases ADD COLUMN confirmed_at TEXT").run(); } catch(e) {}
 
-        // 6. Ensure sub-resource tables exist
+        // 5. Ensure sub-resource tables exist
         try {
             await db.prepare(`
                 CREATE TABLE IF NOT EXISTS supplier_ledger (
@@ -174,39 +174,50 @@ const supplierConnectionService = {
 
     /**
      * Called when a Dealer adds or updates a Supplier in CLIKS Business.
-     * Matches supplier email against CLIKS Website users table.
-     * If a website user exists or on creation, creates or maintains a connection request with PENDING status.
+     * Matches supplier email/username/phone against CLIKS Website users table.
+     * Creates or maintains a persistent connection request with PENDING status.
      */
-    syncSupplierConnectionOnCreateOrUpdate: async ({ business_id, supplier_id, supplier_email }) => {
+    syncSupplierConnectionOnCreateOrUpdate: async ({ business_id, supplier_id, supplier_email, phone }) => {
         await supplierConnectionService.ensureTable();
         if (!business_id || !supplier_id) return null;
 
         const emailLower = supplier_email ? String(supplier_email).trim().toLowerCase() : '';
+        const phoneClean = phone ? String(phone).replace(/\D/g, '') : '';
+        const usernamePrefix = emailLower.includes('@') ? emailLower.split('@')[0] : emailLower;
         const now = new Date().toISOString();
 
-        // Ensure business_suppliers status is PENDING initially if not explicitly ACCEPTED/CONNECTED
+        // Ensure business_suppliers status is PENDING initially if not explicitly ACCEPTED/CONNECTED/REJECTED
         const currentSup = await db.prepare('SELECT * FROM business_suppliers WHERE id = ?').get(supplier_id);
         if (currentSup && (!currentSup.status || currentSup.status.toLowerCase() === 'active' || currentSup.status.toLowerCase() === 'pending')) {
             await db.prepare("UPDATE business_suppliers SET status = 'PENDING', updated_at = ? WHERE id = ?").run(now, supplier_id);
         }
 
-        if (!emailLower) return null;
+        // Search users table for matching CLIKS Website user by email, username, or phone
+        let websiteUser = null;
+        if (emailLower) {
+            websiteUser = await db.prepare(`
+                SELECT id, email, username, role FROM users 
+                WHERE LOWER(email) = ? OR LOWER(username) = ? OR LOWER(username) = ?
+            `).get(emailLower, emailLower, usernamePrefix);
+        }
+        if (!websiteUser && phoneClean) {
+            websiteUser = await db.prepare(`
+                SELECT id, email, username, role FROM users 
+                WHERE phone = ? OR phone LIKE ?
+            `).get(phoneClean, `%${phoneClean}%`);
+        }
 
-        // Search users table for matching CLIKS Website user
-        const websiteUser = await db.prepare('SELECT id, email, role FROM users WHERE LOWER(email) = ?').get(emailLower);
-
-        // Check if a connection record already exists specifically for this business_id + supplier_id
+        // Check if a connection record already exists for this business_id + supplier_id
         let existing = await db.prepare(`
             SELECT * FROM supplier_connections 
             WHERE business_id = ? AND supplier_id = ?
         `).get(business_id, supplier_id);
 
-        if (!existing) {
-            // Check if there is an unassigned connection for this email
+        if (!existing && emailLower) {
             existing = await db.prepare(`
                 SELECT * FROM supplier_connections 
-                WHERE business_id = ? AND LOWER(supplier_email) = ? AND (supplier_id IS NULL OR supplier_id = 0)
-            `).get(business_id, emailLower);
+                WHERE business_id = ? AND (LOWER(supplier_email) = ? OR LOWER(supplier_email) = ?) AND (supplier_id IS NULL OR supplier_id = 0)
+            `).get(business_id, emailLower, usernamePrefix);
         }
 
         if (!existing) {
@@ -216,7 +227,7 @@ const supplierConnectionService = {
                     business_id, supplier_id, supplier_user_id, supplier_email,
                     status, requested_at, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
-            `).run(business_id, supplier_id, websiteUser ? websiteUser.id : null, emailLower, now, now, now);
+            `).run(business_id, supplier_id, websiteUser ? websiteUser.id : null, emailLower || `${supplier_id}@supplier.cliks`, now, now, now);
 
             existing = await db.prepare('SELECT * FROM supplier_connections WHERE id = ?').get(res.lastInsertRowid);
         } else {
@@ -224,7 +235,7 @@ const supplierConnectionService = {
                 UPDATE supplier_connections 
                 SET supplier_user_id = ?, supplier_id = ?, supplier_email = ?, updated_at = ?
                 WHERE id = ?
-            `).run(websiteUser ? websiteUser.id : existing.supplier_user_id, supplier_id, emailLower, now, existing.id);
+            `).run(websiteUser ? websiteUser.id : existing.supplier_user_id, supplier_id, emailLower || existing.supplier_email, now, existing.id);
         }
 
         return existing;
@@ -232,12 +243,13 @@ const supplierConnectionService = {
 
     /**
      * Get connection status for a Supplier in CLIKS Business.
-     * Returns 'CONNECTED', 'PENDING', or 'UNCONNECTED'.
+     * Returns 'CONNECTED', 'PENDING', or 'REJECTED'.
      */
     getSupplierConnectionStatus: async (business_id, supplier_id, supplier_email) => {
         await supplierConnectionService.ensureTable();
 
         const emailLower = supplier_email ? String(supplier_email).trim().toLowerCase() : '';
+        const usernamePrefix = emailLower.includes('@') ? emailLower.split('@')[0] : emailLower;
 
         let conn = await db.prepare(`
             SELECT * FROM supplier_connections 
@@ -247,15 +259,15 @@ const supplierConnectionService = {
         if (!conn && emailLower) {
             conn = await db.prepare(`
                 SELECT * FROM supplier_connections 
-                WHERE business_id = ? AND LOWER(supplier_email) = ?
-            `).get(business_id, emailLower);
+                WHERE business_id = ? AND (LOWER(supplier_email) = ? OR LOWER(supplier_email) = ?)
+            `).get(business_id, emailLower, usernamePrefix);
         }
 
         if (conn) {
             const st = String(conn.status).toLowerCase();
             if (st === 'accepted' || st === 'connected') return 'CONNECTED';
+            if (st === 'rejected') return 'REJECTED';
             if (st === 'pending') return 'PENDING';
-            if (st === 'rejected') return 'UNCONNECTED';
         }
 
         // Fallback: check business_suppliers table status column directly
@@ -263,8 +275,8 @@ const supplierConnectionService = {
         if (sup && sup.status) {
             const st = String(sup.status).toUpperCase();
             if (st === 'ACCEPTED' || st === 'CONNECTED') return 'CONNECTED';
+            if (st === 'REJECTED' || st === 'UNCONNECTED') return 'REJECTED';
             if (st === 'PENDING') return 'PENDING';
-            if (st === 'REJECTED' || st === 'UNCONNECTED') return 'UNCONNECTED';
         }
 
         return 'PENDING';
@@ -276,14 +288,42 @@ const supplierConnectionService = {
     getWebsiteSupplierIntegrations: async (website_user_id, website_user_email) => {
         await supplierConnectionService.ensureTable();
 
-        const emailLower = website_user_email ? String(website_user_email).trim().toLowerCase() : '';
+        let userEmail = website_user_email ? String(website_user_email).trim().toLowerCase() : '';
+        let userName = '';
+        let userPhone = '';
 
-        // Auto-link any existing business_suppliers matching emailLower
-        if (emailLower) {
+        // Resolve user identity details from DB
+        if (website_user_id) {
+            try {
+                const u = await db.prepare('SELECT id, email, username FROM users WHERE id = ?').get(website_user_id);
+                if (u) {
+                    if (u.email && !userEmail) userEmail = String(u.email).trim().toLowerCase();
+                    if (u.username) userName = String(u.username).trim().toLowerCase();
+                }
+            } catch(e) {}
+        }
+
+        const usernamePrefix = userEmail.includes('@') ? userEmail.split('@')[0] : (userName.includes('@') ? userName.split('@')[0] : userName);
+
+        // Auto-link any existing business_suppliers matching userEmail, userName, or userPhone
+        if (userEmail || userName || userPhone) {
+            const queryParams = [userEmail || '___none___', userName || '___none___'];
+            let sqlFilter = `WHERE (LOWER(TRIM(email)) = ? OR LOWER(TRIM(email)) = ?`;
+
+            if (usernamePrefix) {
+                sqlFilter += ` OR LOWER(TRIM(email)) LIKE ?`;
+                queryParams.push(`${usernamePrefix}@%`);
+            }
+            if (userPhone) {
+                sqlFilter += ` OR phone = ? OR phone LIKE ?`;
+                queryParams.push(userPhone, `%${userPhone}%`);
+            }
+            sqlFilter += `)`;
+
             const matchingSuppliers = await db.prepare(`
-                SELECT id, user_id, name, email, created_at FROM business_suppliers 
-                WHERE LOWER(email) = ?
-            `).all(emailLower);
+                SELECT id, user_id, name, email, phone, created_at FROM business_suppliers 
+                ${sqlFilter}
+            `).all(...queryParams);
 
             const now = new Date().toISOString();
             for (const sup of (matchingSuppliers || [])) {
@@ -299,7 +339,7 @@ const supplierConnectionService = {
                                 business_id, supplier_id, supplier_user_id, supplier_email,
                                 status, requested_at, created_at, updated_at
                             ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
-                        `).run(sup.user_id, sup.id, website_user_id, emailLower, sup.created_at || now, now, now);
+                        `).run(sup.user_id, sup.id, website_user_id, sup.email || userEmail, sup.created_at || now, now, now);
                     } catch (e) {}
                 } else if (website_user_id && !connExists.supplier_user_id) {
                     try {
@@ -307,30 +347,52 @@ const supplierConnectionService = {
                             UPDATE supplier_connections 
                             SET supplier_user_id = ?, supplier_email = ?, updated_at = ?
                             WHERE id = ?
-                        `).run(website_user_id, emailLower, now, connExists.id);
+                        `).run(website_user_id, sup.email || userEmail, now, connExists.id);
                     } catch (e) {}
                 }
             }
         }
 
+        // Fetch supplier connection requests
+        const connParams = [website_user_id];
+        let connFilter = `WHERE supplier_user_id = ?`;
+
+        if (userEmail) {
+            connFilter += ` OR LOWER(TRIM(supplier_email)) = ?`;
+            connParams.push(userEmail);
+        }
+        if (userName) {
+            connFilter += ` OR LOWER(TRIM(supplier_email)) = ?`;
+            connParams.push(userName);
+        }
+        if (usernamePrefix) {
+            connFilter += ` OR LOWER(TRIM(supplier_email)) LIKE ?`;
+            connParams.push(`${usernamePrefix}@%`);
+        }
+
         const connections = await db.prepare(`
             SELECT * FROM supplier_connections 
-            WHERE supplier_user_id = ? ${emailLower ? 'OR LOWER(supplier_email) = ?' : ''}
+            ${connFilter}
             ORDER BY id DESC
-        `).all(...(emailLower ? [website_user_id, emailLower] : [website_user_id]));
+        `).all(...connParams);
 
         const results = [];
+        const seenConnIds = new Set();
+
         for (const conn of (connections || [])) {
+            if (seenConnIds.has(conn.id)) continue;
+            seenConnIds.add(conn.id);
+
             const merchant = await db.prepare('SELECT id, username, business_name, email FROM users WHERE id = ?').get(conn.business_id);
             const businessName = merchant ? (merchant.business_name || merchant.username || 'CLIKS Dealer Store') : 'CLIKS Business Partner';
 
-            const bSupplier = await db.prepare('SELECT id, name, email, company FROM business_suppliers WHERE id = ?').get(conn.supplier_id);
+            const bSupplier = await db.prepare('SELECT id, name, email, phone, company, gstin FROM business_suppliers WHERE id = ?').get(conn.supplier_id);
             const supplierName = bSupplier ? bSupplier.name : 'Supplier';
 
             const st = String(conn.status).toLowerCase();
             let mappedStatus = 'PENDING';
             if (st === 'accepted' || st === 'connected') mappedStatus = 'CONNECTED';
-            else if (st === 'rejected') mappedStatus = 'UNCONNECTED';
+            else if (st === 'rejected' || st === 'unconnected') mappedStatus = 'REJECTED';
             else mappedStatus = 'PENDING';
 
             results.push({
@@ -343,6 +405,8 @@ const supplierConnectionService = {
                 dealer_email: merchant ? merchant.email : '',
                 supplier_name: supplierName,
                 supplier_email: conn.supplier_email,
+                phone: bSupplier ? bSupplier.phone : '',
+                gstin: bSupplier ? bSupplier.gstin : '',
                 company: bSupplier ? bSupplier.company : '',
                 status: mappedStatus,
                 connection_status: mappedStatus,
@@ -362,8 +426,6 @@ const supplierConnectionService = {
     respondToSupplierIntegrationRequest: async ({ website_user_id, website_user_email, connection_id, action }) => {
         await supplierConnectionService.ensureTable();
 
-        const emailLower = website_user_email ? String(website_user_email).trim().toLowerCase() : '';
-
         const conn = await db.prepare('SELECT * FROM supplier_connections WHERE id = ?').get(connection_id);
         if (!conn) {
             throw new Error('Supplier connection request not found');
@@ -378,7 +440,7 @@ const supplierConnectionService = {
             mainStatus = 'CONNECTED';
         } else if (act === 'reject' || act === 'rejected') {
             newStatus = 'rejected';
-            mainStatus = 'UNCONNECTED';
+            mainStatus = 'REJECTED';
         } else {
             throw new Error('Invalid action. Must be accept or reject');
         }
@@ -390,7 +452,7 @@ const supplierConnectionService = {
             WHERE id = ?
         `).run(newStatus, website_user_id, now, now, connection_id);
 
-        // Update business_suppliers table
+        // Update business_suppliers table status
         await db.prepare(`
             UPDATE business_suppliers 
             SET status = ?, updated_at = ?
@@ -398,7 +460,7 @@ const supplierConnectionService = {
         `).run(mainStatus, now, conn.supplier_id);
 
         const updated = await db.prepare('SELECT * FROM supplier_connections WHERE id = ?').get(connection_id);
-        return { ...updated, main_status: mainStatus };
+        return { ...updated, status: mainStatus, connection_status: mainStatus };
     },
 
     /**

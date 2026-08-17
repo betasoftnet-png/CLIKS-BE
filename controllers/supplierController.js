@@ -66,7 +66,8 @@ const supplierController = {
             await supplierConnectionService.syncSupplierConnectionOnCreateOrUpdate({
                 business_id: req.user.id,
                 supplier_id: created.id,
-                supplier_email: created.email
+                supplier_email: created.email,
+                phone: created.phone
             });
 
             const connStatus = await supplierConnectionService.getSupplierConnectionStatus(req.user.id, created.id, created.email);
