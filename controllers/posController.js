@@ -347,18 +347,22 @@ const posController = {
 
     getOrders: async (req, res) => {
         const userId = req.user.id;
-        const { limit = 50, offset = 0 } = req.query;
+        const { limit = 50, offset = 0, customer_id } = req.query;
         try {
-            const orders = await db.prepare(`
-                SELECT * FROM business_invoices 
-                WHERE user_id = ? AND invoice_type = 'POS' 
-                ORDER BY created_at DESC 
-                LIMIT ? OFFSET ?
-            `).all([userId, parseInt(limit), parseInt(offset)]);
+            let query = `SELECT * FROM business_invoices WHERE user_id = ? AND invoice_type = 'POS'`;
+            const params = [userId];
+            if (customer_id) {
+                query += ` AND (customer_id = ? OR customer_id = CAST(? AS TEXT))`;
+                params.push(customer_id, customer_id);
+            }
+            query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+            params.push(parseInt(limit), parseInt(offset));
+
+            const orders = await db.prepare(query).all(params);
 
             const formattedOrders = orders.map(order => {
                 try {
-                    order.items = JSON.parse(order.items);
+                    order.items = typeof order.items === 'string' ? JSON.parse(order.items) : (order.items || []);
                 } catch (e) {
                     order.items = [];
                 }
