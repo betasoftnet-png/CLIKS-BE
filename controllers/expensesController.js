@@ -511,27 +511,32 @@ const expensesController = {
             const firstFile = uploadedFiles[0] || {};
             const proof_files_json = uploadedFiles.length > 0 ? JSON.stringify(uploadedFiles) : null;
 
+            let finalReceipt = receipt || null;
+            if (Array.isArray(req.body.receipts) && req.body.receipts.length > 0) {
+                finalReceipt = req.body.receipts.filter(Boolean).join(', ') || finalReceipt;
+            }
+
             const result = await db.prepare(`
                 INSERT INTO expenses (
                     user_id, amount, employee_name, employee_code, department, travel_expense, claim_amount, reimbursement_status, is_claim, receipt, date, time, 
                     proof_file_path, proof_file_name, proof_file_type, proof_timestamp, proof_files, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending Approval', 'true', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                req.user.id, 
+                req.user.id || 1, 
                 val, 
-                employee_name, 
-                employee_code,
+                employee_name || 'Employee', 
+                empCode || 'CLK-001',
                 department || null,
-                travel_expense, 
+                travel_expense || null, 
                 val, 
-                receipt || null, 
+                finalReceipt || null, 
                 finalDate, 
                 finalTime, 
                 firstFile.path || null,
                 firstFile.name || null,
                 firstFile.type || null,
                 firstFile.timestamp || null,
-                proof_files_json,
+                proof_files_json || null,
                 now, 
                 now
             );
