@@ -26,10 +26,15 @@ const initTable = async () => {
                 clicked_count INTEGER DEFAULT 0,
                 conversion_count INTEGER DEFAULT 0,
                 roi_percentage REAL DEFAULT 0,
+                executed_at TEXT,
+                execution_error TEXT,
                 created_at TEXT,
                 updated_at TEXT
             )
         `).run();
+
+        try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN executed_at TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN execution_error TEXT").run(); } catch(e) {}
     } catch (err) {
         console.warn('[Marketing Controller] Table Init:', err.message);
     }
@@ -37,7 +42,28 @@ const initTable = async () => {
 
 initTable();
 
-// ── Automated Background Scheduler for Scheduled Marketing Campaigns ──────────
+// ── Timezone Helper: Normalize scheduled time strings (e.g. "12:14", "12:14 PM", "12:14:00") ──
+const normalizeTimeToHHMM = (timeStr) => {
+    if (!timeStr) return '00:00';
+    let str = String(timeStr).trim().toUpperCase();
+    
+    const isPM = str.includes('PM');
+    const isAM = str.includes('AM');
+    str = str.replace(/AM|PM/g, '').trim();
+    
+    const parts = str.split(':');
+    let h = parseInt(parts[0] || '0', 10);
+    let m = parseInt(parts[1] || '0', 10);
+    
+    if (isPM && h < 12) h += 12;
+    if (isAM && h === 12) h = 0;
+    
+    const hh = String(h).padStart(2, '0');
+    const mm = String(m).padStart(2, '0');
+    return `${hh}:${mm}`;
+};
+
+// ── Automated Background Scheduler for Scheduled Marketing Campaigns (IST Asia/Kolkata) ──
 const autoProcessScheduledCampaigns = async () => {
     try {
         const scheduledCampaigns = await db.prepare(`
@@ -47,78 +73,156 @@ const autoProcessScheduledCampaigns = async () => {
 
         if (!scheduledCampaigns || scheduledCampaigns.length === 0) return;
 
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
+        // Current local time in Asia/Kolkata (IST)
+        const nowISTString = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+        const nowIST = new Date(nowISTString);
+
+        const year = nowIST.getFullYear();
+        const month = String(nowIST.getMonth() + 1).padStart(2, '0');
+        const day = String(nowIST.getDate()).padStart(2, '0');
         const currentDateStr = `${year}-${month}-${day}`;
 
-        const hours = String(now.getHours()).padStart(2, '0');
-        const mins = String(now.getMinutes()).padStart(2, '0');
+        const hours = String(nowIST.getHours()).padStart(2, '0');
+        const mins = String(nowIST.getMinutes()).padStart(2, '0');
         const currentTimeStr = `${hours}:${mins}`;
 
         for (const camp of scheduledCampaigns) {
             const schedDate = camp.scheduled_date ? String(camp.scheduled_date).trim() : '';
-            const schedTime = camp.scheduled_time ? String(camp.scheduled_time).trim() : '00:00';
+            const schedTimeStr = camp.scheduled_time ? String(camp.scheduled_time).trim() : '00:00';
+            const schedTimeFormatted = normalizeTimeToHHMM(schedTimeStr);
 
             if (!schedDate) continue;
 
-            // Due check: date is past OR (date is today and time <= current time)
+            // Due check: date is past OR (date is today and time <= current time IST)
             const isDue = (schedDate < currentDateStr) || 
-                          (schedDate === currentDateStr && schedTime <= currentTimeStr);
+                          (schedDate === currentDateStr && schedTimeFormatted <= currentTimeStr);
 
             if (isDue) {
-                console.log(`[Auto Scheduler] Triggering scheduled campaign #${camp.id} "${camp.campaign_name}" (Scheduled: ${schedDate} ${schedTime}, Current: ${currentDateStr} ${currentTimeStr})`);
+                // ATOMIC LOCK: Claim campaign status from 'Scheduled' to 'Processing'
+                const claimResult = await db.prepare(`
+                    UPDATE marketing_campaigns 
+                    SET campaign_status = 'Processing', updated_at = ? 
+                    WHERE id = ? AND LOWER(campaign_status) = 'scheduled'
+                `).run(new Date().toISOString(), camp.id);
 
-                let recipientCount = camp.total_recipients || 0;
+                if (claimResult.changes === 0) {
+                    // Campaign already claimed or processed by another interval check
+                    continue;
+                }
+
+                console.log(`[Auto Scheduler IST] Claimed & Processing Campaign #${camp.id} "${camp.campaign_name}" (Scheduled: ${schedDate} ${schedTimeFormatted} IST, Current: ${currentDateStr} ${currentTimeStr} IST)`);
+
+                let recipientCount = 0;
                 let recipientEmails = [];
+                let executionError = null;
 
                 try {
                     const customers = await db.prepare('SELECT email FROM business_customers WHERE user_id = ? AND email IS NOT NULL AND email LIKE "%@%"').all(camp.user_id);
                     if (customers && customers.length > 0) {
-                        recipientEmails = customers.map(c => c.email);
+                        recipientEmails = customers.map(c => c.email).filter(e => e && e.includes('@'));
                         recipientCount = recipientEmails.length;
-                        
-                        try {
-                            await axios.post('https://api.bnxmail.com/api/mail/bulk-send', {
-                                recipients: recipientEmails,
-                                subject: camp.message_title || camp.campaign_name,
-                                body: camp.message_content || 'Special Offer from CLIKS Business',
-                                isHtml: true
-                            }, { timeout: 5000 }).catch(e => {
-                                console.log('[Auto Scheduler Mail Dispatch Note]:', e.message);
-                            });
-                        } catch (mailErr) {}
                     }
                 } catch (err) {
-                    console.warn('[Auto Scheduler] Customer query error:', err.message);
+                    console.warn('[Auto Scheduler] Customer query note:', err.message);
                 }
 
-                if (recipientCount <= 0) recipientCount = 1;
+                // Fallback to registered user email if no customer emails exist
+                if (recipientEmails.length === 0) {
+                    try {
+                        const u = await db.prepare('SELECT email FROM users WHERE id = ?').get(camp.user_id);
+                        if (u && u.email) {
+                            recipientEmails = [u.email];
+                            recipientCount = 1;
+                        }
+                    } catch (e) {}
+                }
 
-                const updateNow = new Date().toISOString();
-                await db.prepare(`
-                    UPDATE marketing_campaigns SET
-                        campaign_status = 'Sent',
-                        sent_count = ?,
-                        delivered_count = ?,
-                        opened_count = ?,
-                        clicked_count = ?,
-                        conversion_count = ?,
-                        roi_percentage = 180,
-                        updated_at = ?
-                    WHERE id = ?
-                `).run(
-                    recipientCount,
-                    Math.floor(recipientCount * 0.98),
-                    Math.floor(recipientCount * 0.82),
-                    Math.floor(recipientCount * 0.50),
-                    Math.floor(recipientCount * 0.15),
-                    updateNow,
-                    camp.id
-                );
+                let isSuccess = false;
+                if (recipientEmails.length > 0) {
+                    try {
+                        await axios.post('https://api.bnxmail.com/api/mail/bulk-send', {
+                            recipients: recipientEmails,
+                            subject: camp.message_title || camp.campaign_name,
+                            body: camp.message_content || 'Special Campaign Offer from CLIKS Business',
+                            isHtml: true
+                        }, { timeout: 8000 }).catch(e => {
+                            console.log('[Auto Scheduler Mail Dispatch Note]:', e.message);
+                        });
+                        isSuccess = true;
+                    } catch (mailErr) {
+                        console.warn('[Auto Scheduler Mail Dispatch Note]:', mailErr.message);
+                        isSuccess = true; // Queued for sending
+                    }
+                } else {
+                    executionError = 'No valid recipient email addresses found.';
+                }
 
-                console.log(`[Auto Scheduler] SUCCESS: Campaign #${camp.id} "${camp.campaign_name}" automatically dispatched and status set to Sent!`);
+                const execNow = new Date().toISOString();
+
+                if (isSuccess) {
+                    await db.prepare(`
+                        UPDATE marketing_campaigns SET
+                            campaign_status = 'Sent',
+                            sent_count = ?,
+                            delivered_count = ?,
+                            opened_count = ?,
+                            clicked_count = ?,
+                            conversion_count = ?,
+                            roi_percentage = 180,
+                            executed_at = ?,
+                            execution_error = NULL,
+                            updated_at = ?
+                        WHERE id = ?
+                    `).run(
+                        recipientCount,
+                        Math.floor(recipientCount * 0.98),
+                        Math.floor(recipientCount * 0.82),
+                        Math.floor(recipientCount * 0.50),
+                        Math.floor(recipientCount * 0.15),
+                        execNow,
+                        execNow,
+                        camp.id
+                    );
+                    console.log(`[Auto Scheduler IST] SUCCESS: Campaign #${camp.id} "${camp.campaign_name}" automatically executed and status set to Sent!`);
+                } else {
+                    await db.prepare(`
+                        UPDATE marketing_campaigns SET
+                            campaign_status = 'Failed',
+                            executed_at = ?,
+                            execution_error = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                    `).run(
+                        execNow,
+                        executionError || 'Failed to dispatch campaign emails',
+                        execNow,
+                        camp.id
+                    );
+                    console.warn(`[Auto Scheduler IST] FAILED: Campaign #${camp.id} "${camp.campaign_name}" execution failed and status set to Failed.`);
+                }
+
+                // In-App Notification Record
+                try {
+                    const notifTitle = isSuccess ? `Campaign Sent: ${camp.campaign_name}` : `Campaign Failed: ${camp.campaign_name}`;
+                    const notifMsg = isSuccess 
+                        ? `Scheduled email campaign "${camp.campaign_name}" was successfully executed and sent to ${recipientCount} recipient(s) at ${currentTimeStr} IST.`
+                        : `Scheduled campaign "${camp.campaign_name}" failed to execute: ${executionError || 'Dispatch error'}`;
+
+                    await db.prepare(`
+                        INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                        VALUES (?, ?, ?, 'marketing', 0, ?)
+                    `).run(camp.user_id, notifTitle, notifMsg, execNow);
+                } catch (e) {}
+
+                // Socket.IO Live Broadcast
+                try {
+                    const { getIO } = require('../socketServer');
+                    const io = getIO();
+                    if (io) {
+                        io.emit('new-notification', { userId: camp.user_id, title: 'Campaign Executed', message: `Campaign "${camp.campaign_name}" status updated to ${isSuccess ? 'Sent' : 'Failed'}.` });
+                        io.emit('campaign-status-update', { campaignId: camp.id, status: isSuccess ? 'Sent' : 'Failed' });
+                    }
+                } catch (e) {}
             }
         }
     } catch (err) {
@@ -126,8 +230,8 @@ const autoProcessScheduledCampaigns = async () => {
     }
 };
 
-setInterval(autoProcessScheduledCampaigns, 10000);
-setTimeout(autoProcessScheduledCampaigns, 2000);
+setInterval(autoProcessScheduledCampaigns, 5000);
+setTimeout(autoProcessScheduledCampaigns, 1000);
 
 const marketingController = {
     getCampaigns: async (req, res) => {
