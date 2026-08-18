@@ -428,12 +428,13 @@ const expensesController = {
             if (!employee_name || !employee_name.trim()) {
                 return sendError(res, 'Employee Name is mandatory', 400);
             }
+            const targetUserId = (req.user && req.user.id) ? req.user.id : 1;
             let empCode = employee_code ? String(employee_code).trim() : '';
             
             if (!empCode && employee_name) {
                 try {
                     const emp = await db.prepare("SELECT id FROM employees WHERE user_id = ? AND (LOWER(first_name || ' ' || last_name) LIKE ? OR LOWER(name) LIKE ?) LIMIT 1")
-                        .get(req.user.id, `%${employee_name.toLowerCase()}%`, `%${employee_name.toLowerCase()}%`);
+                        .get(targetUserId, `%${employee_name.toLowerCase()}%`, `%${employee_name.toLowerCase()}%`);
                     if (emp) {
                         empCode = `CLK-00${emp.id}`;
                     }
@@ -522,7 +523,7 @@ const expensesController = {
                     proof_file_path, proof_file_name, proof_file_type, proof_timestamp, proof_files, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending Approval', 'true', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                req.user.id || 1, 
+                targetUserId, 
                 val, 
                 employee_name || 'Employee', 
                 empCode || 'CLK-001',
@@ -550,7 +551,8 @@ const expensesController = {
     },
     getReimbursements: async (req, res) => {
         try {
-            const list = await db.prepare("SELECT * FROM expenses WHERE user_id = ? AND is_claim = 'true' ORDER BY id DESC").all(req.user.id);
+            const userId = (req.user && req.user.id) ? req.user.id : 1;
+            const list = await db.prepare("SELECT * FROM expenses WHERE user_id = ? AND is_claim = 'true' ORDER BY id DESC").all(userId);
             return sendSuccess(res, list, 'Reimbursements claims retrieved');
         } catch (error) {
             return sendError(res, 'Retrieve claims failed', 500);
