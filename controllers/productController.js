@@ -8,11 +8,6 @@ const productController = {
         if (!name) return sendError(res, 'Product name is required', 400);
         const resolvedHsn = hsn_code || hsn_sac || hsn || null;
 
-        // Ensure unit column exists
-        try {
-            await db.prepare("ALTER TABLE business_products ADD COLUMN unit TEXT DEFAULT 'PCS'").run();
-        } catch (e) {}
-
         try {
             const now = new Date().toISOString();
             const result = await db.prepare(`
@@ -90,23 +85,8 @@ const productController = {
         const { id } = req.params;
         const body = req.body || {};
         try {
-            // Self-healing DB check for columns
-            const alters = [
-                "ALTER TABLE business_products ADD COLUMN unit TEXT DEFAULT 'PCS'",
-                "ALTER TABLE business_products ADD COLUMN hsn_code TEXT",
-                "ALTER TABLE business_products ADD COLUMN low_stock_threshold REAL DEFAULT 5",
-                "ALTER TABLE business_products ADD COLUMN barcode TEXT",
-                "ALTER TABLE business_products ADD COLUMN serial_number TEXT",
-                "ALTER TABLE business_products ADD COLUMN batch_number TEXT",
-                "ALTER TABLE business_products ADD COLUMN expiry_date TEXT",
-                "ALTER TABLE business_products ADD COLUMN tax_percentage REAL DEFAULT 18",
-                "ALTER TABLE business_products ADD COLUMN warehouse_id TEXT"
-            ];
-            for (const sql of alters) {
-                try { await db.prepare(sql).run(); } catch (e) {}
-            }
-
             const product = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(id, req.user.id);
+
             if (!product) return sendError(res, 'Product not found', 404);
 
             const newQuantity = body.quantity !== undefined ? parseFloat(body.quantity) : (body.stock !== undefined ? parseFloat(body.stock) : (parseFloat(product.quantity) || 0));

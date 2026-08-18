@@ -26,7 +26,6 @@ const ensureInventoryTable = async () => {
 
 exports.getInventory = async (req, res) => {
     try {
-        await ensureInventoryTable();
         const userId = req.user.id;
         const items = await db.prepare('SELECT * FROM inventory WHERE user_id = ? ORDER BY created_at DESC').all(userId);
         res.json({ success: true, data: items });
@@ -41,10 +40,6 @@ exports.addInventoryItem = async (req, res) => {
     try {
         const userId = req.user.id;
         const now = new Date().toISOString();
-        try {
-            await db.prepare("ALTER TABLE inventory ADD COLUMN unit TEXT DEFAULT 'PCS'").run();
-        } catch (e) {}
-
         const itemUnit = unit || 'PCS';
         let result;
         try {
@@ -74,11 +69,8 @@ exports.updateInventoryItem = async (req, res) => {
     const body = req.body || {};
     try {
         const userId = req.user.id;
-        try {
-            await db.prepare("ALTER TABLE inventory ADD COLUMN unit TEXT DEFAULT 'PCS'").run();
-        } catch (e) {}
-
         const item = await db.prepare('SELECT * FROM inventory WHERE id = ? AND user_id = ?').get(id, userId);
+
         if (!item) {
             return res.status(404).json({ success: false, message: 'Item not found' });
         }

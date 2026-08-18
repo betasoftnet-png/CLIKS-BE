@@ -50,7 +50,6 @@ const ensureStockTable = async () => {
 
 // ── GET /stats — Aggregate inventory statistics ────────────────────────────
 const getStockStats = async (req, res) => {
-  await ensureStockTable();
   const stats = await db.prepare(`
     SELECT
       COUNT(*)                                                              AS totalItems,
@@ -79,8 +78,8 @@ const getStockStats = async (req, res) => {
 
 // ── GET / ─────────────────────────────────────────────────────────────────────
 const getStocks = async (req, res) => {
-  await ensureStockTable();
   const { category, location, status, page, limit, sort = 'created_at', order = 'desc', search } = req.query;
+
   let query = 'SELECT * FROM stock WHERE user_id = ?';
   const params = [req.user.id];
 

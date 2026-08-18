@@ -135,6 +135,94 @@ if (dbType === 'postgres') {
       };
     }
   };
+
+  // Run one-time schema optimization & indexing for ultra-fast product & stock queries
+  try {
+    const rawDb = db.raw || sqliteDb;
+    rawDb.exec(`
+      CREATE TABLE IF NOT EXISTS business_products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        sku TEXT,
+        category TEXT,
+        unit TEXT DEFAULT 'PCS',
+        status TEXT DEFAULT 'active',
+        stock_status TEXT DEFAULT 'In Stock',
+        quantity REAL DEFAULT 0,
+        low_stock_threshold REAL DEFAULT 5,
+        purchase_price REAL DEFAULT 0,
+        selling_price REAL DEFAULT 0,
+        barcode TEXT,
+        serial_number TEXT,
+        batch_number TEXT,
+        expiry_date TEXT,
+        tax_percentage REAL DEFAULT 18,
+        warehouse_id TEXT,
+        hsn_code TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS stock (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        sub_name TEXT,
+        sku TEXT,
+        category TEXT,
+        unit TEXT DEFAULT 'PCS',
+        unit_price REAL DEFAULT 0,
+        cost_price REAL DEFAULT 0,
+        quantity REAL DEFAULT 0,
+        low_stock_threshold INTEGER DEFAULT 5,
+        location TEXT,
+        warehouse TEXT,
+        supplier TEXT,
+        supplier_name TEXT,
+        notes TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS inventory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        sku TEXT,
+        category TEXT,
+        unit TEXT DEFAULT 'PCS',
+        quantity REAL DEFAULT 0,
+        price REAL DEFAULT 0,
+        supplier TEXT,
+        status TEXT DEFAULT 'In Stock',
+        created_at TEXT,
+        updated_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_bp_user ON business_products(user_id);
+      CREATE INDEX IF NOT EXISTS idx_bp_cat ON business_products(category);
+      CREATE INDEX IF NOT EXISTS idx_stock_user ON stock(user_id);
+      CREATE INDEX IF NOT EXISTS idx_inv_user ON inventory(user_id);
+    `);
+
+    const alterCols = [
+      "ALTER TABLE business_products ADD COLUMN unit TEXT DEFAULT 'PCS'",
+      "ALTER TABLE business_products ADD COLUMN hsn_code TEXT",
+      "ALTER TABLE business_products ADD COLUMN low_stock_threshold REAL DEFAULT 5",
+      "ALTER TABLE business_products ADD COLUMN barcode TEXT",
+      "ALTER TABLE business_products ADD COLUMN serial_number TEXT",
+      "ALTER TABLE business_products ADD COLUMN batch_number TEXT",
+      "ALTER TABLE business_products ADD COLUMN expiry_date TEXT",
+      "ALTER TABLE business_products ADD COLUMN tax_percentage REAL DEFAULT 18",
+      "ALTER TABLE business_products ADD COLUMN warehouse_id TEXT",
+      "ALTER TABLE inventory ADD COLUMN unit TEXT DEFAULT 'PCS'",
+      "ALTER TABLE stock ADD COLUMN unit TEXT DEFAULT 'PCS'"
+    ];
+    for (const sql of alterCols) {
+      try { rawDb.exec(sql); } catch (e) {}
+    }
+  } catch (err) {
+    console.error('[DB Initialization] Schema optimization warning:', err.message);
+  }
 }
 
 module.exports = db;
+
