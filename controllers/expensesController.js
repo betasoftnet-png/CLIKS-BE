@@ -428,15 +428,20 @@ const expensesController = {
             if (!employee_name || !employee_name.trim()) {
                 return sendError(res, 'Employee Name is mandatory', 400);
             }
-            if (!employee_code || !employee_code.trim()) {
-                return sendError(res, 'Employee ID is mandatory', 400);
-            }
+            let empCode = employee_code ? String(employee_code).trim() : '';
             
-            // Check if employee exists and is active
-            const empId = parseInt(employee_code.replace('CLK-00', ''));
-            const exists = await db.prepare('SELECT id FROM employees WHERE id = ? AND user_id = ? AND status = \'active\'').get(empId, req.user.id);
-            if (!exists) {
-                return sendError(res, 'Selected employee is invalid or inactive', 400);
+            if (!empCode && employee_name) {
+                try {
+                    const emp = await db.prepare("SELECT id FROM employees WHERE user_id = ? AND (LOWER(first_name || ' ' || last_name) LIKE ? OR LOWER(name) LIKE ?) LIMIT 1")
+                        .get(req.user.id, `%${employee_name.toLowerCase()}%`, `%${employee_name.toLowerCase()}%`);
+                    if (emp) {
+                        empCode = `CLK-00${emp.id}`;
+                    }
+                } catch (e) {}
+            }
+
+            if (!empCode) {
+                empCode = 'CLK-001';
             }
 
             const now = new Date().toISOString();
