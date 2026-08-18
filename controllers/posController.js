@@ -347,13 +347,16 @@ const posController = {
 
     getOrders: async (req, res) => {
         const userId = req.user.id;
-        const { limit = 50, offset = 0, customer_id } = req.query;
+        const { limit = 50, offset = 0, customer_id, client_name } = req.query;
         try {
             let query = `SELECT * FROM business_invoices WHERE user_id = ? AND invoice_type = 'POS'`;
             const params = [userId];
-            if (customer_id) {
+            if (customer_id && customer_id !== 'null' && customer_id !== 'undefined') {
                 query += ` AND (customer_id = ? OR customer_id = CAST(? AS TEXT))`;
                 params.push(customer_id, customer_id);
+            } else if (client_name) {
+                query += ` AND LOWER(client_name) = ?`;
+                params.push(client_name.toLowerCase().trim());
             }
             query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
             params.push(parseInt(limit), parseInt(offset));
