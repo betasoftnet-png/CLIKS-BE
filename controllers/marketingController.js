@@ -63,6 +63,132 @@ const normalizeTimeToHHMM = (timeStr) => {
     return `${hh}:${mm}`;
 };
 
+// ── Shared Core Execution Logic for Campaign Launch (Automated & Manual) ──
+const executeCampaignLaunchInternal = async (campId, userId) => {
+    const camp = await db.prepare('SELECT * FROM marketing_campaigns WHERE id = ?').get(campId);
+    if (!camp) throw new Error('Campaign not found');
+
+    console.log(`[Campaign Execution] Launching Campaign #${camp.id} "${camp.campaign_name}" for User #${userId}`);
+
+    let recipientCount = 0;
+    let recipientEmails = [];
+    let executionError = null;
+
+    try {
+        const customers = await db.prepare('SELECT email FROM business_customers WHERE user_id = ? AND email IS NOT NULL AND email LIKE "%@%"').all(userId);
+        if (customers && customers.length > 0) {
+            recipientEmails = customers.map(c => c.email).filter(e => e && e.includes('@'));
+            recipientCount = recipientEmails.length;
+        }
+    } catch (err) {
+        console.warn('[Campaign Execution] Customer query note:', err.message);
+    }
+
+    // Fallback to registered user email if no customer emails exist
+    if (recipientEmails.length === 0) {
+        try {
+            const u = await db.prepare('SELECT email FROM users WHERE id = ?').get(userId);
+            if (u && u.email) {
+                recipientEmails = [u.email];
+                recipientCount = 1;
+            }
+        } catch (e) {}
+    }
+
+    let isSuccess = false;
+    if (recipientEmails.length > 0) {
+        try {
+            await axios.post('https://api.bnxmail.com/api/mail/bulk-send', {
+                recipients: recipientEmails,
+                subject: camp.message_title || camp.campaign_name,
+                body: camp.message_content || 'Special Offer from CLIKS Business',
+                isHtml: true
+            }, { timeout: 8000 }).catch(e => {
+                console.log('[Campaign Execution Mail Dispatch Note]:', e.message);
+            });
+            isSuccess = true;
+        } catch (mailErr) {
+            console.warn('[Campaign Execution Mail Dispatch Note]:', mailErr.message);
+            isSuccess = true; // Queued for sending
+        }
+    } else {
+        executionError = 'No valid recipient email addresses found.';
+    }
+
+    const execNow = new Date().toISOString();
+
+    if (isSuccess) {
+        await db.prepare(`
+            UPDATE marketing_campaigns SET
+                campaign_status = 'Sent',
+                sent_count = ?,
+                delivered_count = ?,
+                opened_count = ?,
+                clicked_count = ?,
+                conversion_count = ?,
+                roi_percentage = 180,
+                executed_at = ?,
+                execution_error = NULL,
+                updated_at = ?
+            WHERE id = ?
+        `).run(
+            recipientCount,
+            Math.floor(recipientCount * 0.98),
+            Math.floor(recipientCount * 0.82),
+            Math.floor(recipientCount * 0.50),
+            Math.floor(recipientCount * 0.15),
+            execNow,
+            execNow,
+            camp.id
+        );
+        console.log(`[Campaign Execution] SUCCESS: Campaign #${camp.id} "${camp.campaign_name}" status set to Sent!`);
+    } else {
+        await db.prepare(`
+            UPDATE marketing_campaigns SET
+                campaign_status = 'Failed',
+                executed_at = ?,
+                execution_error = ?,
+                updated_at = ?
+            WHERE id = ?
+        `).run(
+            execNow,
+            executionError || 'Failed to dispatch campaign emails',
+            execNow,
+            camp.id
+        );
+        console.warn(`[Campaign Execution] FAILED: Campaign #${camp.id} "${camp.campaign_name}" status set to Failed.`);
+    }
+
+    // In-App Notification Record
+    try {
+        const notifTitle = isSuccess ? `Campaign Sent: ${camp.campaign_name}` : `Campaign Failed: ${camp.campaign_name}`;
+        const notifMsg = isSuccess 
+            ? `Email campaign "${camp.campaign_name}" was successfully executed and sent to ${recipientCount} recipient(s).`
+            : `Campaign "${camp.campaign_name}" failed to execute: ${executionError || 'Dispatch error'}`;
+
+        await db.prepare(`
+            INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+            VALUES (?, ?, ?, 'marketing', 0, ?)
+        `).run(userId, notifTitle, notifMsg, execNow);
+    } catch (e) {}
+
+    // Socket.IO Live Broadcast
+    try {
+        const { getIO } = require('../socketServer');
+        const io = getIO();
+        if (io) {
+            io.emit('new-notification', { userId, title: 'Campaign Executed', message: `Campaign "${camp.campaign_name}" status updated to ${isSuccess ? 'Sent' : 'Failed'}.` });
+            io.emit('campaign-status-update', { campaignId: camp.id, status: isSuccess ? 'Sent' : 'Failed' });
+        }
+    } catch (e) {}
+
+    if (!isSuccess) {
+        throw new Error(executionError || 'Failed to dispatch campaign emails');
+    }
+
+    return await db.prepare('SELECT * FROM marketing_campaigns WHERE id = ?').get(campId);
+};
+
 // ── Automated Background Scheduler for Scheduled Marketing Campaigns (IST Asia/Kolkata) ──
 const autoProcessScheduledCampaigns = async () => {
     try {
@@ -110,119 +236,13 @@ const autoProcessScheduledCampaigns = async () => {
                     continue;
                 }
 
-                console.log(`[Auto Scheduler IST] Claimed & Processing Campaign #${camp.id} "${camp.campaign_name}" (Scheduled: ${schedDate} ${schedTimeFormatted} IST, Current: ${currentDateStr} ${currentTimeStr} IST)`);
-
-                let recipientCount = 0;
-                let recipientEmails = [];
-                let executionError = null;
+                console.log(`[Auto Scheduler IST] Claimed Campaign #${camp.id} "${camp.campaign_name}" (Scheduled: ${schedDate} ${schedTimeFormatted} IST, Current: ${currentDateStr} ${currentTimeStr} IST)`);
 
                 try {
-                    const customers = await db.prepare('SELECT email FROM business_customers WHERE user_id = ? AND email IS NOT NULL AND email LIKE "%@%"').all(camp.user_id);
-                    if (customers && customers.length > 0) {
-                        recipientEmails = customers.map(c => c.email).filter(e => e && e.includes('@'));
-                        recipientCount = recipientEmails.length;
-                    }
+                    await executeCampaignLaunchInternal(camp.id, camp.user_id);
                 } catch (err) {
-                    console.warn('[Auto Scheduler] Customer query note:', err.message);
+                    console.error(`[Auto Scheduler IST] Error executing Campaign #${camp.id}:`, err.message);
                 }
-
-                // Fallback to registered user email if no customer emails exist
-                if (recipientEmails.length === 0) {
-                    try {
-                        const u = await db.prepare('SELECT email FROM users WHERE id = ?').get(camp.user_id);
-                        if (u && u.email) {
-                            recipientEmails = [u.email];
-                            recipientCount = 1;
-                        }
-                    } catch (e) {}
-                }
-
-                let isSuccess = false;
-                if (recipientEmails.length > 0) {
-                    try {
-                        await axios.post('https://api.bnxmail.com/api/mail/bulk-send', {
-                            recipients: recipientEmails,
-                            subject: camp.message_title || camp.campaign_name,
-                            body: camp.message_content || 'Special Campaign Offer from CLIKS Business',
-                            isHtml: true
-                        }, { timeout: 8000 }).catch(e => {
-                            console.log('[Auto Scheduler Mail Dispatch Note]:', e.message);
-                        });
-                        isSuccess = true;
-                    } catch (mailErr) {
-                        console.warn('[Auto Scheduler Mail Dispatch Note]:', mailErr.message);
-                        isSuccess = true; // Queued for sending
-                    }
-                } else {
-                    executionError = 'No valid recipient email addresses found.';
-                }
-
-                const execNow = new Date().toISOString();
-
-                if (isSuccess) {
-                    await db.prepare(`
-                        UPDATE marketing_campaigns SET
-                            campaign_status = 'Sent',
-                            sent_count = ?,
-                            delivered_count = ?,
-                            opened_count = ?,
-                            clicked_count = ?,
-                            conversion_count = ?,
-                            roi_percentage = 180,
-                            executed_at = ?,
-                            execution_error = NULL,
-                            updated_at = ?
-                        WHERE id = ?
-                    `).run(
-                        recipientCount,
-                        Math.floor(recipientCount * 0.98),
-                        Math.floor(recipientCount * 0.82),
-                        Math.floor(recipientCount * 0.50),
-                        Math.floor(recipientCount * 0.15),
-                        execNow,
-                        execNow,
-                        camp.id
-                    );
-                    console.log(`[Auto Scheduler IST] SUCCESS: Campaign #${camp.id} "${camp.campaign_name}" automatically executed and status set to Sent!`);
-                } else {
-                    await db.prepare(`
-                        UPDATE marketing_campaigns SET
-                            campaign_status = 'Failed',
-                            executed_at = ?,
-                            execution_error = ?,
-                            updated_at = ?
-                        WHERE id = ?
-                    `).run(
-                        execNow,
-                        executionError || 'Failed to dispatch campaign emails',
-                        execNow,
-                        camp.id
-                    );
-                    console.warn(`[Auto Scheduler IST] FAILED: Campaign #${camp.id} "${camp.campaign_name}" execution failed and status set to Failed.`);
-                }
-
-                // In-App Notification Record
-                try {
-                    const notifTitle = isSuccess ? `Campaign Sent: ${camp.campaign_name}` : `Campaign Failed: ${camp.campaign_name}`;
-                    const notifMsg = isSuccess 
-                        ? `Scheduled email campaign "${camp.campaign_name}" was successfully executed and sent to ${recipientCount} recipient(s) at ${currentTimeStr} IST.`
-                        : `Scheduled campaign "${camp.campaign_name}" failed to execute: ${executionError || 'Dispatch error'}`;
-
-                    await db.prepare(`
-                        INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
-                        VALUES (?, ?, ?, 'marketing', 0, ?)
-                    `).run(camp.user_id, notifTitle, notifMsg, execNow);
-                } catch (e) {}
-
-                // Socket.IO Live Broadcast
-                try {
-                    const { getIO } = require('../socketServer');
-                    const io = getIO();
-                    if (io) {
-                        io.emit('new-notification', { userId: camp.user_id, title: 'Campaign Executed', message: `Campaign "${camp.campaign_name}" status updated to ${isSuccess ? 'Sent' : 'Failed'}.` });
-                        io.emit('campaign-status-update', { campaignId: camp.id, status: isSuccess ? 'Sent' : 'Failed' });
-                    }
-                } catch (e) {}
             }
         }
     } catch (err) {
@@ -241,6 +261,17 @@ const marketingController = {
         } catch (error) {
             console.error('[Marketing Controller] Fetch Error:', error);
             return sendError(res, 'Failed to fetch campaigns', 500);
+        }
+    },
+
+    launchCampaign: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const updated = await executeCampaignLaunchInternal(id, req.user.id);
+            return sendSuccess(res, updated, 'Campaign launched successfully');
+        } catch (error) {
+            console.error('[Marketing Controller] Launch Error:', error);
+            return sendError(res, error.message || 'Failed to launch campaign', 500);
         }
     },
 
