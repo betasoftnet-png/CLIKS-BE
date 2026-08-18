@@ -30,6 +30,7 @@ const { runMigrations } = require('./db/migrations');
 const { seedDefaultUser, seedSalesAgent, seedPlatformAdmin } = require('./db/seed');
 const app = require('./app');
 
+const http = require('http');
 const { initSocketServer } = require('./socketServer');
 
 const PORT = parseInt(process.env.PORT || '8000', 10);
@@ -41,8 +42,10 @@ async function startServer() {
     await seedSalesAgent();
     await seedPlatformAdmin();
 
-    const server = app.listen(PORT, () => {
-      initSocketServer(server);
+    const server = http.createServer(app);
+    initSocketServer(server);
+
+    server.listen(PORT, () => {
       logger.info(`🚀 Books & Finance API (Socket.IO Realtime Enabled)`);
       logger.info(`   ENV  : ${process.env.NODE_ENV || 'development'}`);
       logger.info(`   URL  : http://localhost:${PORT}/api/v1`);

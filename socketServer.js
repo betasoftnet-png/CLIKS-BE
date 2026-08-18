@@ -9,7 +9,9 @@ function initSocketServer(httpServer) {
         cors: {
             origin: '*',
             methods: ['GET', 'POST']
-        }
+        },
+        transports: ['websocket', 'polling'],
+        allowEIO3: true
     });
 
     io.on('connection', (socket) => {
