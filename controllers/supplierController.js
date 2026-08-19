@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const supplierConnectionService = require('../utils/supplierConnectionService');
+const b2bConnectionService = require('../utils/b2bConnectionService');
 const { validatePhone, validateEmail, validateGstin, validatePan } = require('../utils/globalValidator');
 
 function normalizePaymentMode(mode) {
@@ -110,15 +111,12 @@ const supplierController = {
     getSuppliers: async (req, res) => {
         const { search, status, city } = req.query;
         try {
-            await supplierConnectionService.ensureTable();
-            await b2bConnectionService.ensureTable();
+            try { await supplierConnectionService.ensureTable(); } catch (e) {}
+            try { await b2bConnectionService.ensureTable(); } catch (e) {}
+
             let query = `SELECT * FROM business_suppliers WHERE user_id = ?`;
             const params = [req.user.id];
 
-            if (status && status !== 'All') {
-                query += ` AND (LOWER(status) = LOWER(?) OR status = ?)`;
-                params.push(status, status);
-            }
             if (city) {
                 query += ` AND city LIKE ?`;
                 params.push(`%${city}%`);
@@ -134,17 +132,27 @@ const supplierController = {
             const enriched = await Promise.all((suppliers || []).map(async s => {
                 let liveStatus = s.status || 'PENDING';
                 if (s.email) {
-                    const b2bConn = await db.prepare(`
-                        SELECT status FROM b2b_connections
-                        WHERE (requester_user_id = ? AND LOWER(target_email) = ?)
-                           OR (target_user_id = ? AND LOWER(requester_email) = ?)
-                    `).get(req.user.id, String(s.email).toLowerCase(), req.user.id, String(s.email).toLowerCase());
-                    if (b2bConn && b2bConn.status) {
-                        liveStatus = b2bConn.status === 'ACCEPTED' ? 'CONNECTED' : b2bConn.status;
-                    }
+                    try {
+                        const b2bConn = await db.prepare(`
+                            SELECT status FROM b2b_connections
+                            WHERE (requester_user_id = ? AND LOWER(target_email) = ?)
+                               OR (target_user_id = ? AND LOWER(requester_email) = ?)
+                            ORDER BY id DESC LIMIT 1
+                        `).get(req.user.id, String(s.email).toLowerCase(), req.user.id, String(s.email).toLowerCase());
+                        if (b2bConn && b2bConn.status) {
+                            liveStatus = b2bConn.status === 'ACCEPTED' ? 'CONNECTED' : b2bConn.status;
+                        }
+                    } catch (e) {}
                 }
-                const connStatus = await supplierConnectionService.getSupplierConnectionStatus(req.user.id, s.id, s.email);
-                const displaySt = (liveStatus === 'CONNECTED' || liveStatus === 'ACCEPTED' || s.status === 'CONNECTED') ? 'CONNECTED' : (liveStatus === 'REJECTED' ? 'REJECTED' : (connStatus || liveStatus));
+                let connStatus = null;
+                try {
+                    connStatus = await supplierConnectionService.getSupplierConnectionStatus(req.user.id, s.id, s.email);
+                } catch (e) {}
+
+                const displaySt = (liveStatus === 'CONNECTED' || liveStatus === 'ACCEPTED' || String(s.status).toUpperCase() === 'CONNECTED') 
+                    ? 'CONNECTED' 
+                    : (liveStatus === 'REJECTED' ? 'REJECTED' : (connStatus || liveStatus || 'PENDING'));
+
                 return {
                     ...s,
                     status: displaySt,
@@ -152,7 +160,17 @@ const supplierController = {
                 };
             }));
 
-            return sendSuccess(res, enriched, 'Suppliers retrieved successfully');
+            let finalResult = enriched;
+            if (status && status !== 'All') {
+                const targetSt = String(status).toLowerCase();
+                finalResult = enriched.filter(item => {
+                    const st1 = String(item.status || '').toLowerCase();
+                    const st2 = String(item.connection_status || '').toLowerCase();
+                    return st1 === targetSt || st2 === targetSt || (targetSt === 'connected' && (st1 === 'accepted' || st2 === 'accepted'));
+                });
+            }
+
+            return sendSuccess(res, finalResult, 'Suppliers retrieved successfully');
         } catch (error) {
             console.error('[Supplier Controller] Error fetching suppliers:', error);
             return sendError(res, 'Failed to retrieve suppliers', 500);
