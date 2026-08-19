@@ -157,13 +157,69 @@ const customerController = {
                 };
             });
 
+            let b2bRequests = [];
+            try {
+                const b2bConnectionService = require('../utils/b2bConnectionService');
+                const b2bConns = await b2bConnectionService.getConnectionsForUser(userId);
+                
+                (b2bConns || []).forEach(b => {
+                    const isTarget = b.target_user_id === userId || (b.target_email && b.target_email.toLowerCase() === (req.user.email || '').toLowerCase());
+                    const otherName = isTarget ? b.requester_business_name : b.target_business_name;
+                    const otherEmail = isTarget ? b.requester_email : b.target_email;
+
+                    const existingInNorm = normalized.find(nc => nc.email && nc.email.toLowerCase() === (otherEmail || '').toLowerCase());
+                    
+                    if (existingInNorm) {
+                        existingInNorm.b2b_connection_id = b.id;
+                        existingInNorm.connection_type = 'Supplier Connection Request';
+                        existingInNorm.request_date = b.created_at ? b.created_at.split('T')[0] : '';
+                        if (b.status === 'ACCEPTED') {
+                            existingInNorm.status = 'Connected';
+                            existingInNorm.connection_status = 'CONNECTED';
+                            existingInNorm.customer_type = 'ACCEPTED';
+                        } else if (b.status === 'REJECTED') {
+                            existingInNorm.status = 'Rejected';
+                            existingInNorm.connection_status = 'REJECTED';
+                            existingInNorm.customer_type = 'REJECTED';
+                        } else if (b.status === 'PENDING') {
+                            existingInNorm.status = 'PENDING';
+                            existingInNorm.connection_status = 'PENDING';
+                            existingInNorm.customer_type = 'PENDING';
+                        }
+                    } else if (isTarget || b.status === 'PENDING') {
+                        b2bRequests.push({
+                            id: `b2b_${b.id}`,
+                            b2b_connection_id: b.id,
+                            is_b2b_request: true,
+                            customer_code: `B2B-${b.id}`,
+                            name: otherName || 'Cliks Partner',
+                            business_name: otherName || 'Cliks Partner',
+                            email: otherEmail,
+                            phone: '',
+                            customer_type: b.status,
+                            status: b.status === 'ACCEPTED' ? 'Connected' : (b.status === 'REJECTED' ? 'Rejected' : 'PENDING'),
+                            connection_status: b.status === 'ACCEPTED' ? 'CONNECTED' : b.status,
+                            connection_type: 'Supplier Connection Request',
+                            request_date: b.created_at ? b.created_at.split('T')[0] : '',
+                            created_at: b.created_at,
+                            current_balance: 0,
+                            outstanding_balance: 0
+                        });
+                    }
+                });
+            } catch (b2bErr) {
+                console.warn('[Customer Controller] B2B request merge warning:', b2bErr.message);
+            }
+
+            const combinedList = [...b2bRequests, ...normalized];
+
             return sendSuccess(res, {
-                customers: normalized,
+                customers: combinedList,
                 pagination: {
-                    total,
+                    total: combinedList.length,
                     page: parseInt(page),
                     limit: parseInt(limit),
-                    totalPages: Math.ceil(total / parseInt(limit))
+                    totalPages: Math.ceil(combinedList.length / parseInt(limit))
                 }
             }, 'Customers fetched successfully');
         } catch (error) {
@@ -517,6 +573,27 @@ const customerController = {
             return sendSuccess(res, { id }, 'Customer deleted successfully');
         } catch (error) {
             return sendError(res, 'Failed to delete customer', 500);
+        }
+    },
+
+    respondB2BConnection: async (req, res) => {
+        try {
+            const b2bConnectionService = require('../utils/b2bConnectionService');
+            const { connection_id, action } = req.body;
+            if (!connection_id || !action) {
+                return sendError(res, 'connection_id and action are required', 400);
+            }
+
+            const updated = await b2bConnectionService.respondToConnection({
+                user_id: req.user.id,
+                connection_id: parseInt(connection_id),
+                action
+            });
+
+            return sendSuccess(res, updated, `B2B connection request ${action}ed successfully`);
+        } catch (error) {
+            console.error('[B2B Respond Error]', error);
+            return sendError(res, error.message || 'Failed to respond to connection request', error.statusCode || 500);
         }
     }
 };

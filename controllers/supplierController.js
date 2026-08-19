@@ -60,8 +60,23 @@ const supplierController = {
                 bank_account_number || null, ifsc_code || null, upi_id || null, docsStr, remStr, now, now
             );
 
+const b2bConnectionService = require('../utils/b2bConnectionService');
+
             const created = await db.prepare('SELECT * FROM business_suppliers WHERE id = ?').get(result.lastInsertRowid);
             
+            // Trigger B2B Connection request if supplier email matches a registered Cliks Business user
+            let b2bStatus = 'PENDING';
+            if (created.email) {
+                const b2bConn = await b2bConnectionService.createOrUpdateConnection({
+                    requester_user_id: req.user.id,
+                    supplier_email: created.email,
+                    supplier_name: created.name
+                });
+                if (b2bConn && b2bConn.status) {
+                    b2bStatus = b2bConn.status === 'ACCEPTED' ? 'CONNECTED' : b2bConn.status;
+                }
+            }
+
             // Sync connection request for website supplier portal
             await supplierConnectionService.syncSupplierConnectionOnCreateOrUpdate({
                 business_id: req.user.id,
@@ -71,7 +86,9 @@ const supplierController = {
             });
 
             const connStatus = await supplierConnectionService.getSupplierConnectionStatus(req.user.id, created.id, created.email);
-            return sendSuccess(res, { ...created, status: connStatus, connection_status: connStatus }, 'Supplier registered successfully with status PENDING', 201);
+            const finalStatus = (b2bStatus === 'CONNECTED' || b2bStatus === 'REJECTED') ? b2bStatus : (connStatus || b2bStatus || 'PENDING');
+
+            return sendSuccess(res, { ...created, status: finalStatus, connection_status: finalStatus }, 'Supplier registered successfully', 201);
         } catch (error) {
             console.error('[Supplier Controller] Error creating supplier:', error);
             return sendError(res, 'Failed to create supplier', 500);
@@ -83,6 +100,7 @@ const supplierController = {
         const { search, status, city } = req.query;
         try {
             await supplierConnectionService.ensureTable();
+            await b2bConnectionService.ensureTable();
             let query = `SELECT * FROM business_suppliers WHERE user_id = ?`;
             const params = [req.user.id];
 
@@ -103,8 +121,19 @@ const supplierController = {
             const suppliers = await db.prepare(query).all(...params);
 
             const enriched = await Promise.all((suppliers || []).map(async s => {
+                let liveStatus = s.status || 'PENDING';
+                if (s.email) {
+                    const b2bConn = await db.prepare(`
+                        SELECT status FROM b2b_connections
+                        WHERE (requester_user_id = ? AND LOWER(target_email) = ?)
+                           OR (target_user_id = ? AND LOWER(requester_email) = ?)
+                    `).get(req.user.id, String(s.email).toLowerCase(), req.user.id, String(s.email).toLowerCase());
+                    if (b2bConn && b2bConn.status) {
+                        liveStatus = b2bConn.status === 'ACCEPTED' ? 'CONNECTED' : b2bConn.status;
+                    }
+                }
                 const connStatus = await supplierConnectionService.getSupplierConnectionStatus(req.user.id, s.id, s.email);
-                const displaySt = (s.status === 'CONNECTED' || s.status === 'ACCEPTED') ? 'CONNECTED' : (connStatus || s.status || 'PENDING');
+                const displaySt = (liveStatus === 'CONNECTED' || liveStatus === 'ACCEPTED' || s.status === 'CONNECTED') ? 'CONNECTED' : (liveStatus === 'REJECTED' ? 'REJECTED' : (connStatus || liveStatus));
                 return {
                     ...s,
                     status: displaySt,
@@ -737,6 +766,33 @@ const supplierController = {
             return sendSuccess(res, chats, 'Supplier chat messages loaded');
         } catch (error) {
             return sendError(res, error.message || 'Failed to load chat messages', 500);
+        }
+    },
+
+    createB2BSupplierRequest: async (req, res) => {
+        try {
+            const b2bConnectionService = require('../utils/b2bConnectionService');
+            const { supplier_email, supplier_name } = req.body;
+            if (!supplier_email) {
+                return sendError(res, 'Supplier email is required', 400);
+            }
+
+            const emailLower = String(supplier_email).trim().toLowerCase();
+            if (!emailLower.endsWith('@bnxmail.com')) {
+                return sendError(res, 'Only @bnxmail.com business emails are allowed.', 400);
+            }
+
+            const connection = await b2bConnectionService.createOrUpdateConnection({
+                requester_user_id: req.user.id,
+                supplier_email: emailLower,
+                supplier_name: supplier_name || 'Supplier Partner',
+                isStrict: true
+            });
+
+            return sendSuccess(res, connection, 'Supplier connection request created successfully', 201);
+        } catch (error) {
+            console.error('[B2B Create Request Error]', error);
+            return sendError(res, error.message || 'Failed to create B2B connection request', error.statusCode || 500);
         }
     }
 };

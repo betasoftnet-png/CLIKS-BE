@@ -28,6 +28,9 @@ router.get('/search',                supplierController.searchSuppliers);
 router.get('/outstanding/list',      supplierController.getOutstandingList);
 router.get('/dashboard-summary',     supplierController.getDashboardSummary);
 
+// B2B Supplier Connection Request
+router.post('/b2b-request',          supplierController.createB2BSupplierRequest);
+
 // Base CRUD
 router.post('/',                     supplierController.createSupplier);
 router.get('/',                      supplierController.getSuppliers);

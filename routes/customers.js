@@ -5,6 +5,7 @@ const { authenticateToken } = require('../middleware/auth');
 
 router.get('/', authenticateToken, customerController.getCustomers);
 router.get('/lookup', authenticateToken, customerController.lookupCustomerByEmail);
+router.post('/b2b-respond', authenticateToken, customerController.respondB2BConnection);
 router.get('/:id', authenticateToken, customerController.getCustomerById);
 router.post('/', authenticateToken, customerController.createCustomer);
 router.put('/:id', authenticateToken, customerController.updateCustomer);

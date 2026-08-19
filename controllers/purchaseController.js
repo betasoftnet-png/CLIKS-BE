@@ -119,6 +119,42 @@ const purchaseController = {
                 created.items = items || [];
             }
 
+            // B2B Purchase-to-Sales Invoice Auto-Sync
+            const b2bConnectionService = require('../utils/b2bConnectionService');
+            try {
+                let targetSupplierEmail = req.body.supplier_email || (req.body.supplier && req.body.supplier.email);
+                if (!targetSupplierEmail) {
+                    const supRow = await db.prepare("SELECT email FROM business_suppliers WHERE user_id = ? AND (name = ? OR company = ?) AND email IS NOT NULL").get(req.user.id, supplierName, supplierName);
+                    if (supRow && supRow.email) targetSupplierEmail = supRow.email;
+                }
+                if (!targetSupplierEmail) {
+                    const supRow2 = await db.prepare("SELECT email FROM suppliers WHERE user_id = ? AND (name = ? OR company = ?) AND email IS NOT NULL").get(req.user.id, supplierName, supplierName);
+                    if (supRow2 && supRow2.email) targetSupplierEmail = supRow2.email;
+                }
+                if (targetSupplierEmail) {
+                    await b2bConnectionService.syncPurchaseToSalesInvoice({
+                        purchaseId: purchaseId,
+                        userId: req.user.id,
+                        supplierEmail: targetSupplierEmail,
+                        purchaseData: {
+                            ...req.body,
+                            purchase_number: purchaseNum,
+                            subtotal: parseFloat(subtotal) || 0,
+                            total_tax: parseFloat(total_tax) || 0,
+                            total_discount: parseFloat(total_discount) || 0,
+                            grand_total: parseFloat(grand_total) || 0,
+                            paid_amount: parseFloat(paid_amount) || 0,
+                            payment_status: finalPaymentStatus,
+                            payment_mode: payment_mode,
+                            due_date: due_date || purchase_date,
+                            items: created.items || items || []
+                        }
+                    });
+                }
+            } catch (b2bSyncErr) {
+                console.warn('[Purchase Controller] B2B Invoice Sync Warning:', b2bSyncErr.message);
+            }
+
             const totalPaid = (parseFloat(paid_amount) || 0) + (parseFloat(advance_amount) || 0);
             const unpaidAmount = (parseFloat(grand_total) || 0) - totalPaid;
 
