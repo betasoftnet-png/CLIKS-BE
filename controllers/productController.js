@@ -33,11 +33,15 @@ const productController = {
 
     // 2. Get Products with dynamic Filters
     getProducts: async (req, res) => {
-        const { search, category, status, stock_status } = req.query;
+        const { search, category, status, stock_status, warehouse_id } = req.query;
         try {
             let query = `SELECT * FROM business_products WHERE user_id = ?`;
             const params = [req.user.id];
 
+            if (warehouse_id) {
+                query += ` AND (warehouse_id = ? OR warehouse_id = ? OR warehouse_id LIKE ?)`;
+                params.push(String(warehouse_id), `WH-0${warehouse_id}`, `%${warehouse_id}%`);
+            }
             if (category) {
                 query += ` AND category = ?`;
                 params.push(category);
