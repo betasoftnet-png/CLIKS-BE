@@ -197,6 +197,48 @@ if (dbType === 'postgres') {
         created_at TEXT,
         updated_at TEXT
       );
+      CREATE TABLE IF NOT EXISTS business_purchases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        purchase_number TEXT,
+        supplier_name TEXT,
+        supplier_email TEXT,
+        status TEXT DEFAULT 'PENDING SUPPLIER CONFIRMATION',
+        supplier_confirmation_status TEXT,
+        supplier_response_type TEXT,
+        supplier_status_message TEXT,
+        expected_available_date TEXT,
+        supplier_response_items TEXT,
+        confirmed_at TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS business_purchase_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        purchase_id INTEGER,
+        product_name TEXT,
+        unit_price REAL DEFAULT 0,
+        quantity REAL DEFAULT 0,
+        available_quantity REAL DEFAULT 0,
+        item_availability_status TEXT,
+        item_status TEXT,
+        created_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS invoices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        invoice_number TEXT,
+        client_name TEXT,
+        client_email TEXT,
+        status TEXT,
+        supplier_confirmation_status TEXT,
+        supplier_response_type TEXT,
+        supplier_status_message TEXT,
+        expected_available_date TEXT,
+        supplier_response_items TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      );
       CREATE INDEX IF NOT EXISTS idx_bp_user ON business_products(user_id);
       CREATE INDEX IF NOT EXISTS idx_bp_cat ON business_products(category);
       CREATE INDEX IF NOT EXISTS idx_stock_user ON stock(user_id);

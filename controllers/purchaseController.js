@@ -991,11 +991,20 @@ const purchaseController = {
             const idClean = String(id).trim();
             const numClean = idClean.replace(/^INV-/, '');
 
-            let purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ?').get(idClean, idClean, numClean);
-            let invoice = await db.prepare('SELECT * FROM invoices WHERE id = ? OR invoice_number = ? OR invoice_number = ?').get(idClean, idClean, `INV-${numClean}`);
+            let purchase = null;
+            try {
+                purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ?').get(idClean, idClean, numClean);
+            } catch (e) {}
+
+            let invoice = null;
+            try {
+                invoice = await db.prepare('SELECT * FROM invoices WHERE id = ? OR invoice_number = ? OR invoice_number = ?').get(idClean, idClean, `INV-${numClean}`);
+            } catch (e) {}
 
             if (!purchase && invoice) {
-                purchase = await db.prepare('SELECT * FROM business_purchases WHERE purchase_number = ? OR purchase_number = ? OR id = ?').get(invoice.invoice_number, invoice.invoice_number.replace(/^INV-/, ''), invoice.id);
+                try {
+                    purchase = await db.prepare('SELECT * FROM business_purchases WHERE purchase_number = ? OR purchase_number = ? OR id = ?').get(invoice.invoice_number, invoice.invoice_number.replace(/^INV-/, ''), invoice.id);
+                } catch (e) {}
             }
 
             if (!purchase && !invoice) {
@@ -1105,9 +1114,17 @@ const purchaseController = {
                 }
             }
 
-            const updated = purchase ? await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(purchase.id) : (invoice ? await db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id) : {});
-            const items = purchase ? await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(purchase.id) : (invoice ? (invoice.items ? JSON.parse(invoice.items) : []) : []);
-            return sendSuccess(res, { ...updated, items }, 'Supplier response saved and order updated successfully');
+            let updated = {};
+            try {
+                updated = purchase ? await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(purchase.id) : (invoice ? await db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id) : {});
+            } catch (e) {}
+
+            let items = [];
+            try {
+                items = purchase ? await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(purchase.id) : (invoice ? (invoice.items ? JSON.parse(invoice.items) : []) : []);
+            } catch (e) {}
+
+            return sendSuccess(res, { ...(updated || {}), items: items || [] }, 'Supplier response saved and order updated successfully');
         } catch (error) {
             console.error('Error recording supplier purchase response:', error);
             return sendError(res, 'Failed to record supplier purchase response', 500);
