@@ -985,38 +985,99 @@ const purchaseController = {
     // 23. Supplier Portal Confirmation & Orders
     confirmSupplierPurchase: async (req, res) => {
         const { id } = req.params;
+        const { response_type = 'CONFIRMED', expected_available_date, notes, items: reqItems } = req.body || {};
         try {
             const now = new Date().toISOString();
             const purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(id);
             if (!purchase) return sendError(res, 'Purchase order not found', 404);
 
+            let status = 'CONFIRMED';
+            let supplierConfirmationStatus = 'CONFIRMED';
+            let statusMsg = 'Supplier has confirmed your order.';
+
+            if (response_type === 'PARTIALLY_AVAILABLE') {
+                status = 'PARTIALLY_AVAILABLE';
+                supplierConfirmationStatus = 'PARTIALLY_AVAILABLE';
+                statusMsg = notes || 'Supplier can provide only a smaller quantity.';
+            } else if (response_type === 'NOT_AVAILABLE') {
+                status = 'NOT_AVAILABLE';
+                supplierConfirmationStatus = 'NOT_AVAILABLE';
+                statusMsg = notes || 'Product not available — Waiting for buyer response.';
+            } else if (response_type === 'AVAILABLE_LATER') {
+                status = 'AVAILABLE_LATER';
+                supplierConfirmationStatus = 'AVAILABLE_LATER';
+                statusMsg = notes || (expected_available_date ? `Waiting for supplier — Available on ${expected_available_date}.` : 'Waiting for supplier — Available later.');
+            }
+
+            const itemsJson = reqItems && Array.isArray(reqItems) ? JSON.stringify(reqItems) : null;
+
             await db.prepare(`
                 UPDATE business_purchases 
-                SET status = 'CONFIRMED', supplier_confirmation_status = 'CONFIRMED', confirmed_at = ?, updated_at = ?
+                SET status = ?, 
+                    supplier_confirmation_status = ?, 
+                    supplier_response_type = ?, 
+                    supplier_status_message = ?, 
+                    expected_available_date = ?, 
+                    supplier_response_items = ?,
+                    confirmed_at = ?, 
+                    updated_at = ?
                 WHERE id = ?
-            `).run(now, now, id);
+            `).run(
+                status, 
+                supplierConfirmationStatus, 
+                response_type, 
+                statusMsg, 
+                expected_available_date || null, 
+                itemsJson,
+                now, 
+                now, 
+                id
+            );
 
+            if (reqItems && Array.isArray(reqItems)) {
+                for (const it of reqItems) {
+                    if (it.id) {
+                        try {
+                            await db.prepare(`
+                                UPDATE business_purchase_items 
+                                SET available_quantity = ?, item_availability_status = ? 
+                                WHERE id = ?
+                            `).run(parseFloat(it.available_quantity) || 0, it.item_availability_status || response_type, it.id);
+                        } catch(e) {}
+                    }
+                }
+            } else if (response_type === 'CONFIRMED') {
+                try {
+                    await db.prepare(`UPDATE business_purchase_items SET item_status = 'CONFIRMED' WHERE purchase_id = ?`).run(id);
+                } catch(e) {}
+            }
+
+            // Sync with invoices table if present
             try {
-                await db.prepare(`UPDATE business_purchase_items SET item_status = 'CONFIRMED' WHERE purchase_id = ?`).run(id);
+                await db.prepare(`
+                    UPDATE invoices 
+                    SET status = ? 
+                    WHERE id = ? OR invoice_number = ? OR invoice_number = ?
+                `).run(status, id, purchase.purchase_number, `INV-${purchase.purchase_number}`);
             } catch(e) {}
 
             // Send notification to dealer inside Cliks Business
             try {
-                const notifyMsg = `Supplier ${purchase.supplier_name || 'Vendor'} has confirmed Purchase Order #${purchase.purchase_number}.`;
+                const notifyMsg = `Supplier ${purchase.supplier_name || 'Vendor'} responded to Purchase Order #${purchase.purchase_number}: ${statusMsg}`;
                 await db.prepare(`
                     INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
                     VALUES (?, ?, ?, 'purchase', 0, ?)
-                `).run(purchase.user_id, 'Purchase Order Confirmed', notifyMsg, now);
+                `).run(purchase.user_id, 'Purchase Order Supplier Response', notifyMsg, now);
             } catch (notifyErr) {
                 console.warn('Failed to insert notification:', notifyErr.message);
             }
 
             const updated = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(id);
             const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(id);
-            return sendSuccess(res, { ...updated, items }, 'Purchase order confirmed by supplier successfully');
+            return sendSuccess(res, { ...updated, items }, 'Supplier response saved and order updated successfully');
         } catch (error) {
-            console.error('Error confirming purchase order:', error);
-            return sendError(res, 'Failed to confirm purchase order', 500);
+            console.error('Error recording supplier purchase response:', error);
+            return sendError(res, 'Failed to record supplier purchase response', 500);
         }
     },
 

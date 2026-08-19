@@ -214,7 +214,13 @@ if (dbType === 'postgres') {
       "ALTER TABLE business_products ADD COLUMN tax_percentage REAL DEFAULT 18",
       "ALTER TABLE business_products ADD COLUMN warehouse_id TEXT",
       "ALTER TABLE inventory ADD COLUMN unit TEXT DEFAULT 'PCS'",
-      "ALTER TABLE stock ADD COLUMN unit TEXT DEFAULT 'PCS'"
+      "ALTER TABLE stock ADD COLUMN unit TEXT DEFAULT 'PCS'",
+      "ALTER TABLE business_purchases ADD COLUMN supplier_response_type TEXT",
+      "ALTER TABLE business_purchases ADD COLUMN supplier_status_message TEXT",
+      "ALTER TABLE business_purchases ADD COLUMN expected_available_date TEXT",
+      "ALTER TABLE business_purchases ADD COLUMN supplier_response_items TEXT",
+      "ALTER TABLE business_purchase_items ADD COLUMN available_quantity REAL",
+      "ALTER TABLE business_purchase_items ADD COLUMN item_availability_status TEXT"
     ];
     for (const sql of alterCols) {
       try { rawDb.exec(sql); } catch (e) {}
