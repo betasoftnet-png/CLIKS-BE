@@ -988,8 +988,19 @@ const purchaseController = {
         const { response_type = 'CONFIRMED', expected_available_date, notes, items: reqItems } = req.body || {};
         try {
             const now = new Date().toISOString();
-            const purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(id);
-            if (!purchase) return sendError(res, 'Purchase order not found', 404);
+            const idClean = String(id).trim();
+            const numClean = idClean.replace(/^INV-/, '');
+
+            let purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ?').get(idClean, idClean, numClean);
+            let invoice = await db.prepare('SELECT * FROM invoices WHERE id = ? OR invoice_number = ? OR invoice_number = ?').get(idClean, idClean, `INV-${numClean}`);
+
+            if (!purchase && invoice) {
+                purchase = await db.prepare('SELECT * FROM business_purchases WHERE purchase_number = ? OR purchase_number = ? OR id = ?').get(invoice.invoice_number, invoice.invoice_number.replace(/^INV-/, ''), invoice.id);
+            }
+
+            if (!purchase && !invoice) {
+                return sendError(res, 'Purchase order not found', 404);
+            }
 
             let status = 'CONFIRMED';
             let supplierConfirmationStatus = 'CONFIRMED';
@@ -1011,69 +1022,91 @@ const purchaseController = {
 
             const itemsJson = reqItems && Array.isArray(reqItems) ? JSON.stringify(reqItems) : null;
 
-            await db.prepare(`
-                UPDATE business_purchases 
-                SET status = ?, 
-                    supplier_confirmation_status = ?, 
-                    supplier_response_type = ?, 
-                    supplier_status_message = ?, 
-                    expected_available_date = ?, 
-                    supplier_response_items = ?,
-                    confirmed_at = ?, 
-                    updated_at = ?
-                WHERE id = ?
-            `).run(
-                status, 
-                supplierConfirmationStatus, 
-                response_type, 
-                statusMsg, 
-                expected_available_date || null, 
-                itemsJson,
-                now, 
-                now, 
-                id
-            );
+            if (purchase) {
+                await db.prepare(`
+                    UPDATE business_purchases 
+                    SET status = ?, 
+                        supplier_confirmation_status = ?, 
+                        supplier_response_type = ?, 
+                        supplier_status_message = ?, 
+                        expected_available_date = ?, 
+                        supplier_response_items = ?,
+                        confirmed_at = ?, 
+                        updated_at = ?
+                    WHERE id = ?
+                `).run(
+                    status, 
+                    supplierConfirmationStatus, 
+                    response_type, 
+                    statusMsg, 
+                    expected_available_date || null, 
+                    itemsJson,
+                    now, 
+                    now, 
+                    purchase.id
+                );
 
-            if (reqItems && Array.isArray(reqItems)) {
-                for (const it of reqItems) {
-                    if (it.id) {
-                        try {
-                            await db.prepare(`
-                                UPDATE business_purchase_items 
-                                SET available_quantity = ?, item_availability_status = ? 
-                                WHERE id = ?
-                            `).run(parseFloat(it.available_quantity) || 0, it.item_availability_status || response_type, it.id);
-                        } catch(e) {}
+                if (reqItems && Array.isArray(reqItems)) {
+                    for (const it of reqItems) {
+                        if (it.id) {
+                            try {
+                                await db.prepare(`
+                                    UPDATE business_purchase_items 
+                                    SET available_quantity = ?, item_availability_status = ? 
+                                    WHERE id = ?
+                                `).run(parseFloat(it.available_quantity) || 0, it.item_availability_status || response_type, it.id);
+                            } catch(e) {}
+                        }
                     }
+                } else if (response_type === 'CONFIRMED') {
+                    try {
+                        await db.prepare(`UPDATE business_purchase_items SET item_status = 'CONFIRMED' WHERE purchase_id = ?`).run(purchase.id);
+                    } catch(e) {}
                 }
-            } else if (response_type === 'CONFIRMED') {
+            }
+
+            if (invoice) {
                 try {
-                    await db.prepare(`UPDATE business_purchase_items SET item_status = 'CONFIRMED' WHERE purchase_id = ?`).run(id);
+                    await db.prepare(`
+                        UPDATE invoices 
+                        SET status = ?,
+                            supplier_confirmation_status = ?,
+                            supplier_response_type = ?,
+                            supplier_status_message = ?,
+                            expected_available_date = ?,
+                            supplier_response_items = ?
+                        WHERE id = ?
+                    `).run(
+                        status,
+                        supplierConfirmationStatus,
+                        response_type,
+                        statusMsg,
+                        expected_available_date || null,
+                        itemsJson,
+                        invoice.id
+                    );
                 } catch(e) {}
             }
 
-            // Sync with invoices table if present
-            try {
-                await db.prepare(`
-                    UPDATE invoices 
-                    SET status = ? 
-                    WHERE id = ? OR invoice_number = ? OR invoice_number = ?
-                `).run(status, id, purchase.purchase_number, `INV-${purchase.purchase_number}`);
-            } catch(e) {}
-
             // Send notification to dealer inside Cliks Business
-            try {
-                const notifyMsg = `Supplier ${purchase.supplier_name || 'Vendor'} responded to Purchase Order #${purchase.purchase_number}: ${statusMsg}`;
-                await db.prepare(`
-                    INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
-                    VALUES (?, ?, ?, 'purchase', 0, ?)
-                `).run(purchase.user_id, 'Purchase Order Supplier Response', notifyMsg, now);
-            } catch (notifyErr) {
-                console.warn('Failed to insert notification:', notifyErr.message);
+            const targetUserId = purchase ? purchase.user_id : (invoice ? invoice.user_id : null);
+            const pNum = purchase ? purchase.purchase_number : (invoice ? invoice.invoice_number : idClean);
+            const sName = purchase ? purchase.supplier_name : (invoice ? invoice.client_name : 'Supplier');
+
+            if (targetUserId) {
+                try {
+                    const notifyMsg = `Supplier ${sName} responded to Purchase Order #${pNum}: ${statusMsg}`;
+                    await db.prepare(`
+                        INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                        VALUES (?, ?, ?, 'purchase', 0, ?)
+                    `).run(targetUserId, 'Purchase Order Supplier Response', notifyMsg, now);
+                } catch (notifyErr) {
+                    console.warn('Failed to insert notification:', notifyErr.message);
+                }
             }
 
-            const updated = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(id);
-            const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(id);
+            const updated = purchase ? await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(purchase.id) : (invoice ? await db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id) : {});
+            const items = purchase ? await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(purchase.id) : (invoice ? (invoice.items ? JSON.parse(invoice.items) : []) : []);
             return sendSuccess(res, { ...updated, items }, 'Supplier response saved and order updated successfully');
         } catch (error) {
             console.error('Error recording supplier purchase response:', error);

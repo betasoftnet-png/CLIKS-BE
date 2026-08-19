@@ -220,7 +220,12 @@ if (dbType === 'postgres') {
       "ALTER TABLE business_purchases ADD COLUMN expected_available_date TEXT",
       "ALTER TABLE business_purchases ADD COLUMN supplier_response_items TEXT",
       "ALTER TABLE business_purchase_items ADD COLUMN available_quantity REAL",
-      "ALTER TABLE business_purchase_items ADD COLUMN item_availability_status TEXT"
+      "ALTER TABLE business_purchase_items ADD COLUMN item_availability_status TEXT",
+      "ALTER TABLE invoices ADD COLUMN supplier_confirmation_status TEXT",
+      "ALTER TABLE invoices ADD COLUMN supplier_response_type TEXT",
+      "ALTER TABLE invoices ADD COLUMN supplier_status_message TEXT",
+      "ALTER TABLE invoices ADD COLUMN expected_available_date TEXT",
+      "ALTER TABLE invoices ADD COLUMN supplier_response_items TEXT"
     ];
     for (const sql of alterCols) {
       try { rawDb.exec(sql); } catch (e) {}
