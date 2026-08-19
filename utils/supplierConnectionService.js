@@ -196,7 +196,7 @@ const supplierConnectionService = {
         let websiteUser = null;
         if (emailLower) {
             websiteUser = await db.prepare(`
-                SELECT id, email, username, role FROM users 
+                SELECT id, email, username FROM users 
                 WHERE LOWER(email) = ? OR LOWER(username) = ? OR LOWER(username) = ?
             `).get(emailLower, emailLower, usernamePrefix);
         }

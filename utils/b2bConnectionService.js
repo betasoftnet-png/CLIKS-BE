@@ -6,9 +6,12 @@ const b2bConnectionService = {
     ensureTable: async () => {
         if (tableEnsured) return;
         try {
+            const isPg = process.env.DB_TYPE === 'postgres';
+            const autoId = isPg ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+
             await db.prepare(`
                 CREATE TABLE IF NOT EXISTS b2b_connections (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id ${autoId},
                     requester_user_id INTEGER NOT NULL,
                     requester_email TEXT NOT NULL,
                     requester_business_name TEXT,
@@ -25,7 +28,7 @@ const b2bConnectionService = {
 
             await db.prepare(`
                 CREATE TABLE IF NOT EXISTS b2b_invoice_relationships (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id ${autoId},
                     source_purchase_invoice_id INTEGER NOT NULL,
                     generated_sales_invoice_id INTEGER NOT NULL,
                     buyer_user_id INTEGER NOT NULL,

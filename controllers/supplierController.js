@@ -60,32 +60,43 @@ const supplierController = {
                 bank_account_number || null, ifsc_code || null, upi_id || null, docsStr, remStr, now, now
             );
 
-const b2bConnectionService = require('../utils/b2bConnectionService');
-
+            const b2bConnectionService = require('../utils/b2bConnectionService');
             const created = await db.prepare('SELECT * FROM business_suppliers WHERE id = ?').get(result.lastInsertRowid);
             
             // Trigger B2B Connection request if supplier email matches a registered Cliks Business user
             let b2bStatus = 'PENDING';
-            if (created.email) {
-                const b2bConn = await b2bConnectionService.createOrUpdateConnection({
-                    requester_user_id: req.user.id,
-                    supplier_email: created.email,
-                    supplier_name: created.name
-                });
-                if (b2bConn && b2bConn.status) {
-                    b2bStatus = b2bConn.status === 'ACCEPTED' ? 'CONNECTED' : b2bConn.status;
+            if (created && created.email) {
+                try {
+                    const b2bConn = await b2bConnectionService.createOrUpdateConnection({
+                        requester_user_id: req.user.id,
+                        supplier_email: created.email,
+                        supplier_name: created.name
+                    });
+                    if (b2bConn && b2bConn.status) {
+                        b2bStatus = b2bConn.status === 'ACCEPTED' ? 'CONNECTED' : b2bConn.status;
+                    }
+                } catch (b2bErr) {
+                    console.warn('[Supplier Controller] B2B connection sync warning:', b2bErr.message);
                 }
             }
 
             // Sync connection request for website supplier portal
-            await supplierConnectionService.syncSupplierConnectionOnCreateOrUpdate({
-                business_id: req.user.id,
-                supplier_id: created.id,
-                supplier_email: created.email,
-                phone: created.phone
-            });
+            try {
+                await supplierConnectionService.syncSupplierConnectionOnCreateOrUpdate({
+                    business_id: req.user.id,
+                    supplier_id: created.id,
+                    supplier_email: created.email,
+                    phone: created.phone
+                });
+            } catch (portalErr) {
+                console.warn('[Supplier Controller] Portal sync warning:', portalErr.message);
+            }
 
-            const connStatus = await supplierConnectionService.getSupplierConnectionStatus(req.user.id, created.id, created.email);
+            let connStatus = null;
+            try {
+                connStatus = await supplierConnectionService.getSupplierConnectionStatus(req.user.id, created.id, created.email);
+            } catch (csErr) {}
+
             const finalStatus = (b2bStatus === 'CONNECTED' || b2bStatus === 'REJECTED') ? b2bStatus : (connStatus || b2bStatus || 'PENDING');
 
             return sendSuccess(res, { ...created, status: finalStatus, connection_status: finalStatus }, 'Supplier registered successfully', 201);
