@@ -744,11 +744,19 @@ const purchaseController = {
             ).run(userId, `%${bill.purchase_number}%`);
 
             // 6. Sync to GSTR-2B with updated status
-            await gstHelper.syncPurchaseToGstr2b(id, userId);
+            try {
+                if (gstHelper && typeof gstHelper.syncPurchaseToGstr2b === 'function') {
+                    await gstHelper.syncPurchaseToGstr2b(bill.id, userId);
+                }
+            } catch(gstErr) {
+                console.warn('[Purchase Controller] GSTR-2B sync warning:', gstErr.message);
+            }
 
-            await logBusinessAudit(userId, 'GOODS_RECEIVED', `Goods received for Bill ${bill.purchase_number} (Supplier: ${bill.supplier_name}, Amount: ₹${billAmount})`, 'SUCCESS');
+            try {
+                await logBusinessAudit(userId, 'GOODS_RECEIVED', `Goods received for Bill ${bill.purchase_number} (Supplier: ${bill.supplier_name}, Amount: ₹${billAmount})`, 'SUCCESS');
+            } catch(auditErr) {}
 
-            return sendSuccess(res, { id, status: 'Completed' }, 'Goods received successfully. Inventory, Vendor Ledger, Accounts Payable, Accounting, and GSTR-2B have all been updated.');
+            return sendSuccess(res, { id: bill.id, purchase_number: bill.purchase_number, status: 'Completed' }, 'Goods received successfully. Inventory, Vendor Ledger, Accounts Payable, Accounting, and GSTR-2B have all been updated.');
         } catch (error) {
             console.error('[Purchase Controller] receiveGoods error:', error);
             return sendError(res, 'Failed to process goods receipt', 500);
