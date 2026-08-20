@@ -606,8 +606,17 @@ const purchaseController = {
         const selectedWarehouse = warehouse_name || warehouse_id || 'Main Godown';
 
         try {
-            // 1. Load the purchase bill
-            const bill = await db.prepare('SELECT * FROM business_purchases WHERE id = ? AND user_id = ?').get(id, userId);
+            const idClean = String(id).trim();
+            const numClean = idClean.replace(/^(INV|PO)-/i, '');
+
+            // 1. Load the purchase bill by ID or purchase_number
+            let bill = await db.prepare('SELECT * FROM business_purchases WHERE (id = ? OR purchase_number = ? OR purchase_number = ? OR purchase_number = ?) AND user_id = ?').get(idClean, idClean, numClean, `PO-${numClean}`, userId);
+
+            if (!bill) {
+                // Fallback check without user_id restriction if supplier confirmation created it
+                bill = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ? OR purchase_number = ?').get(idClean, idClean, numClean, `PO-${numClean}`);
+            }
+
             if (!bill) return sendError(res, 'Purchase bill not found', 404);
             if (bill.status === 'Completed') return sendError(res, 'Goods already received for this bill', 400);
 
@@ -616,18 +625,18 @@ const purchaseController = {
                 UPDATE business_purchases 
                 SET status = 'Completed', doc_type = 'BILL', warehouse_id = ?, updated_at = ? 
                 WHERE id = ?
-            `).run(selectedWarehouse, now, id);
+            `).run(selectedWarehouse, now, bill.id);
 
             // Also update linked sales invoice in business_invoices if present
             try {
-                const rel = await db.prepare('SELECT generated_sales_invoice_id FROM b2b_invoice_relationships WHERE source_purchase_invoice_id = ?').get(id);
+                const rel = await db.prepare('SELECT generated_sales_invoice_id FROM b2b_invoice_relationships WHERE source_purchase_invoice_id = ?').get(bill.id);
                 if (rel && rel.generated_sales_invoice_id) {
                     await db.prepare("UPDATE business_invoices SET status = 'Completed', updated_at = ? WHERE id = ?").run(now, rel.generated_sales_invoice_id);
                 }
             } catch(e) {}
 
             // 2.5 Update physical stock inventory levels for all products in this bill
-            const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(id);
+            const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(bill.id);
             if (items && items.length > 0) {
                 for (const item of items) {
                     const qty = parseFloat(item.quantity) || 0;
@@ -636,7 +645,7 @@ const purchaseController = {
 
                     // Mark received quantity as fully completed
                     await db.prepare("UPDATE business_purchase_items SET received_quantity = ?, item_status = 'COMPLETED' WHERE purchase_id = ? AND product_name = ?")
-                        .run(qty, id, item.product_name);
+                        .run(qty, bill.id, item.product_name);
 
                     // Find existing product by product_id or exact name match for user
                     let prod = null;
