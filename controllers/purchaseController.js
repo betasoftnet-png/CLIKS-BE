@@ -611,27 +611,41 @@ const purchaseController = {
         try {
             const idClean = String(id).trim();
             const numClean = idClean.replace(/^(INV|PO)-/i, '');
+            const idNum = (!isNaN(Number(idClean)) && idClean !== '') ? Number(idClean) : ((!isNaN(Number(numClean)) && numClean !== '') ? Number(numClean) : null);
 
-            // 1. Load the purchase bill by ID or purchase_number
-            let bill = await db.prepare('SELECT * FROM business_purchases WHERE (id = ? OR purchase_number = ? OR purchase_number = ? OR purchase_number = ?) AND user_id = ?').get(idClean, idClean, numClean, `PO-${numClean}`, userId);
-
+            // 1. Load the purchase bill by ID or purchase_number cleanly handling integer types
+            let bill = null;
+            if (idNum !== null) {
+                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND (id = ? OR purchase_number = ? OR purchase_number = ?)').get(userId, idNum, idClean, `PO-${numClean}`); } catch(e) {}
+            }
             if (!bill) {
-                bill = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ? OR purchase_number = ?').get(idClean, idClean, numClean, `PO-${numClean}`);
+                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND (purchase_number = ? OR purchase_number = ?)').get(userId, idClean, `PO-${numClean}`); } catch(e) {}
+            }
+            if (!bill && idNum !== null) {
+                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ?').get(idNum, idClean, `PO-${numClean}`); } catch(e) {}
+            }
+            if (!bill) {
+                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE purchase_number = ? OR purchase_number = ?').get(idClean, `PO-${numClean}`); } catch(e) {}
             }
 
             if (!bill) return sendError(res, 'Purchase bill not found', 404);
             if (bill.status === 'Completed') return sendError(res, 'Goods already received for this bill', 400);
 
-            // 1.5 Resolve Target Warehouse Database Profile
+            // 1.5 Resolve Target Warehouse Database Profile safely (preventing 22P02 PostgreSQL integer error)
             let targetWhObj = null;
-            if (warehouse_id) {
-                targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND (id = ? OR LOWER(code) = ? OR LOWER(name) = ?)').get(userId, warehouse_id, String(warehouse_id).toLowerCase(), String(warehouse_id).toLowerCase());
-            }
-            if (!targetWhObj && warehouse_name) {
-                targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(warehouse_name).toLowerCase());
+            const whIdNum = (!isNaN(Number(warehouse_id)) && warehouse_id !== null && String(warehouse_id).trim() !== '') ? Number(warehouse_id) : null;
+
+            if (whIdNum !== null) {
+                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND id = ?').get(userId, whIdNum); } catch(e) {}
             }
             if (!targetWhObj && warehouse_code) {
-                targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND LOWER(code) = ?').get(userId, String(warehouse_code).toLowerCase());
+                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND LOWER(code) = ?').get(userId, String(warehouse_code).toLowerCase()); } catch(e) {}
+            }
+            if (!targetWhObj && warehouse_name) {
+                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(warehouse_name).toLowerCase()); } catch(e) {}
+            }
+            if (!targetWhObj && warehouse_id && typeof warehouse_id === 'string') {
+                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND (LOWER(code) = ? OR LOWER(name) = ?)').get(userId, warehouse_id.toLowerCase(), warehouse_id.toLowerCase()); } catch(e) {}
             }
 
             const whDbId = targetWhObj ? String(targetWhObj.id) : String(warehouse_id || '1');
@@ -685,8 +699,10 @@ const purchaseController = {
                 // A. UPDATE OR INSERT IN business_products TABLE
                 // -------------------------------------------------------------
                 let prod = null;
-                if (item.product_id) {
-                    try { prod = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(item.product_id, userId); } catch(e) {}
+                const pIdNum = (item.product_id && !isNaN(Number(item.product_id))) ? Number(item.product_id) : null;
+
+                if (pIdNum !== null) {
+                    try { prod = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(pIdNum, userId); } catch(e) {}
                 }
                 if (!prod && pSku) {
                     try { prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(sku) = ?').get(userId, String(pSku).toLowerCase()); } catch(e) {}
