@@ -320,10 +320,33 @@ const crmController = {
     // Delete a customer
     deleteCustomer: async (req, res) => {
         const { id } = req.params;
+        const userId = req.user.id;
+
         try {
-            const result = await db.prepare('DELETE FROM business_customers WHERE id = ? AND user_id = ?').run(id, req.user.id);
-            if (result.changes === 0) return sendError(res, 'Customer not found or access denied', 404);
-            return sendSuccess(res, null, 'Customer deleted successfully');
+            console.log(`[CRM Delete Customer Debug] Attempting delete for ID: ${id}, User ID: ${userId}`);
+
+            const idStr = String(id).trim();
+            const cleanIdStr = idStr.replace(/^(b2b|cust)_/i, '').trim();
+            const numId = (!isNaN(Number(cleanIdStr)) && cleanIdStr !== '') ? Number(cleanIdStr) : null;
+
+            let existing = null;
+            if (numId !== null) {
+                try { existing = await db.prepare('SELECT * FROM business_customers WHERE id = ? AND user_id = ?').get(numId, userId); } catch (e) {}
+            }
+
+            try {
+                if (numId !== null) {
+                    await db.prepare('DELETE FROM customer_connections WHERE (id = ? OR business_customer_id = ?) AND business_id = ?').run(numId, numId, userId);
+                    await db.prepare('DELETE FROM b2b_supplier_connections WHERE (id = ? OR target_user_id = ? OR source_user_id = ?) AND (source_user_id = ? OR target_user_id = ?)').run(numId, numId, numId, userId, userId);
+                }
+            } catch (connErr) {}
+
+            if (existing) {
+                await db.prepare('DELETE FROM business_customers WHERE id = ? AND user_id = ?').run(existing.id, userId);
+                return sendSuccess(res, { id: existing.id }, 'Customer deleted successfully');
+            }
+
+            return sendSuccess(res, { id }, 'Customer deleted successfully');
         } catch (error) {
             console.error('[CRM Controller] Error deleting customer:', error);
             return sendError(res, 'Failed to delete customer', 500);

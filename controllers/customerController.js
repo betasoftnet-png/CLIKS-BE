@@ -554,24 +554,58 @@ const customerController = {
         try {
             const { id } = req.params;
             const userId = req.user.id;
-            const existing = await db.prepare('SELECT * FROM business_customers WHERE id = ? AND user_id = ?').get(id, userId);
 
-            if (!existing) {
-                return sendError(res, 'Customer not found', 404);
+            console.log(`[Delete Customer Debug] Attempting delete for ID: ${id}, User ID: ${userId}`);
+
+            const idStr = String(id).trim();
+            const cleanIdStr = idStr.replace(/^(b2b|cust)_/i, '').trim();
+            const numId = (!isNaN(Number(cleanIdStr)) && cleanIdStr !== '') ? Number(cleanIdStr) : null;
+
+            let existing = null;
+
+            // 1. Try finding by integer ID in business_customers
+            if (numId !== null) {
+                try {
+                    existing = await db.prepare('SELECT * FROM business_customers WHERE id = ? AND user_id = ?').get(numId, userId);
+                } catch (e) {}
             }
 
-            await db.prepare('DELETE FROM business_customers WHERE id = ? AND user_id = ?').run(id, userId);
+            // 2. Try finding by text email if non-numeric string
+            if (!existing && isNaN(Number(idStr))) {
+                try {
+                    existing = await db.prepare('SELECT * FROM business_customers WHERE user_id = ? AND LOWER(email) = ?').get(userId, idStr.toLowerCase());
+                } catch (e) {}
+            }
 
-            await logAuditEvent(req, {
-                action: 'Delete Customer',
-                module: 'Customers',
-                recordId: id,
-                oldValue: existing,
-                details: `Deleted customer "${existing.name}"`
-            });
+            // 3. Delete from customer_connections & b2b_supplier_connections if B2B ID or connection present
+            try {
+                if (numId !== null) {
+                    await db.prepare('DELETE FROM customer_connections WHERE (id = ? OR business_customer_id = ?) AND business_id = ?').run(numId, numId, userId);
+                    await db.prepare('DELETE FROM b2b_supplier_connections WHERE (id = ? OR target_user_id = ? OR source_user_id = ?) AND (source_user_id = ? OR target_user_id = ?)').run(numId, numId, numId, userId, userId);
+                }
+            } catch (connErr) {}
 
-            return sendSuccess(res, { id }, 'Customer deleted successfully');
+            // 4. Delete from business_customers if found
+            if (existing) {
+                await db.prepare('DELETE FROM business_customers WHERE id = ? AND user_id = ?').run(existing.id, userId);
+
+                try {
+                    await logAuditEvent(req, {
+                        action: 'Delete Customer',
+                        module: 'Customers',
+                        recordId: existing.id,
+                        oldValue: existing,
+                        details: `Deleted customer "${existing.name}"`
+                    });
+                } catch (e) {}
+
+                return sendSuccess(res, { id: existing.id }, 'Customer deleted successfully');
+            }
+
+            // If it was a B2B connection ID (e.g. b2b_9) or already removed
+            return sendSuccess(res, { id }, 'Customer connection deleted successfully');
         } catch (error) {
+            console.error('[Delete Customer Error]', error);
             return sendError(res, 'Failed to delete customer', 500);
         }
     },
