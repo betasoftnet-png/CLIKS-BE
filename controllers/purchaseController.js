@@ -635,7 +635,7 @@ const purchaseController = {
                 }
             } catch(e) {}
 
-            // 2.5 Update physical stock inventory levels for all products in this bill
+            // 2.5 Update physical stock inventory levels for all products in this bill across BOTH business_products & stock tables
             try {
                 const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(bill.id);
                 if (items && items.length > 0) {
@@ -643,42 +643,95 @@ const purchaseController = {
                         const qty = parseFloat(item.quantity) || 0;
                         const prevRec = parseFloat(item.received_quantity) || 0;
                         const delta = prevRec > 0 ? prevRec : qty;
+                        const pName = item.product_name || 'Unnamed Product';
+                        const pSku = item.sku || `SKU-${Math.floor(100000 + Math.random() * 900000)}`;
+                        const pUnit = item.primary_unit || item.unit || 'PCS';
+                        const pPrice = parseFloat(item.purchase_price) || parseFloat(item.unit_price) || parseFloat(item.price) || 0;
 
                         // Mark received quantity as fully completed
                         try {
                             await db.prepare("UPDATE business_purchase_items SET received_quantity = ?, item_status = 'COMPLETED' WHERE purchase_id = ? AND product_name = ?")
-                                .run(qty, bill.id, item.product_name);
+                                .run(qty, bill.id, pName);
                         } catch(e) {}
 
-                        // Find existing product by product_id or exact name match for user
+                        // -------------------------------------------------------------
+                        // A. UPDATE OR INSERT IN business_products TABLE
+                        // -------------------------------------------------------------
                         let prod = null;
                         if (item.product_id) {
                             try { prod = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(item.product_id, userId); } catch(e) {}
                         }
                         if (!prod) {
-                            try { prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(item.product_name || '').toLowerCase()); } catch(e) {}
+                            try { prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(pName).toLowerCase()); } catch(e) {}
                         }
 
+                        let targetProdId = null;
                         if (prod) {
+                            targetProdId = prod.id;
                             const currentQty = parseFloat(prod.quantity) || 0;
                             const newQty = currentQty + delta;
                             const threshold = parseFloat(prod.low_stock_threshold) || 5;
                             const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < threshold ? 'Low Stock' : 'In Stock');
+                            const effectivePrice = pPrice > 0 ? pPrice : (parseFloat(prod.purchase_price) || 0);
 
                             try {
                                 await db.prepare(`
                                     UPDATE business_products 
-                                    SET quantity = ?, stock_status = ?, warehouse = ?, warehouse_id = ?, updated_at = ? 
+                                    SET quantity = ?, stock_status = ?, warehouse = ?, warehouse_id = ?, purchase_price = ?, updated_at = ? 
                                     WHERE id = ? AND user_id = ?
-                                `).run(newQty, newStatus, selectedWarehouse, selectedWarehouse, now, prod.id, userId);
+                                `).run(newQty, newStatus, selectedWarehouse, selectedWarehouse, effectivePrice, now, prod.id, userId);
                             } catch(e) {}
+                        } else {
+                            // Create new product record in business_products
+                            try {
+                                const newProdRes = await db.prepare(`
+                                    INSERT INTO business_products (
+                                        user_id, name, sku, category, unit, quantity, purchase_price, selling_price,
+                                        stock_status, warehouse, warehouse_id, created_at, updated_at
+                                    ) VALUES (?, ?, ?, 'General', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                `).run(userId, pName, pSku, pUnit, delta, pPrice, pPrice > 0 ? (pPrice * 1.2) : 0, delta > 5 ? 'In Stock' : 'Low Stock', selectedWarehouse, selectedWarehouse, now, now);
+                                targetProdId = newProdRes.lastInsertRowid;
+                            } catch(e) {}
+                        }
 
-                            // Log to physical stock history ledger
+                        // -------------------------------------------------------------
+                        // B. UPDATE OR INSERT IN stock TABLE (FOR WAREHOUSE LIST & STOCKS API)
+                        // -------------------------------------------------------------
+                        try {
+                            let stockRow = await db.prepare('SELECT * FROM stock WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(pName).toLowerCase());
+                            if (!stockRow && pSku) {
+                                stockRow = await db.prepare('SELECT * FROM stock WHERE user_id = ? AND LOWER(sku) = ?').get(userId, String(pSku).toLowerCase());
+                            }
+
+                            if (stockRow) {
+                                const curStockQty = parseFloat(stockRow.quantity) || 0;
+                                const newStockQty = curStockQty + delta;
+                                const effectiveCost = pPrice > 0 ? pPrice : (parseFloat(stockRow.unit_price) || 0);
+
+                                await db.prepare(`
+                                    UPDATE stock 
+                                    SET quantity = ?, location = ?, unit_price = ?, updated_at = ?
+                                    WHERE id = ? AND user_id = ?
+                                `).run(newStockQty, selectedWarehouse, effectiveCost, now, stockRow.id, userId);
+                            } else {
+                                await db.prepare(`
+                                    INSERT INTO stock (
+                                        user_id, name, sku, category, unit, unit_price, quantity,
+                                        location, created_at, updated_at
+                                    ) VALUES (?, ?, ?, 'General', ?, ?, ?, ?, ?, ?)
+                                `).run(userId, pName, pSku, pUnit, pPrice, delta, selectedWarehouse, now, now);
+                            }
+                        } catch(stkErr) {
+                            console.warn('[Purchase Controller] stock table sync warning:', stkErr.message);
+                        }
+
+                        // Log to physical stock history ledger
+                        if (targetProdId) {
                             try {
                                 await db.prepare(`
                                     INSERT INTO product_stock_history (product_id, user_id, quantity_changed, type, description, created_at)
                                     VALUES (?, ?, ?, ?, ?, ?)
-                                `).run(prod.id, userId, delta, 'in', `Received via Purchase Bill #${bill.purchase_number} in ${selectedWarehouse}`, now);
+                                `).run(targetProdId, userId, delta, 'in', `Received via Purchase Bill #${bill.purchase_number} in ${selectedWarehouse}`, now);
                             } catch(e) {}
                         }
                     }
