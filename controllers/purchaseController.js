@@ -636,112 +636,130 @@ const purchaseController = {
             } catch(e) {}
 
             // 2.5 Update physical stock inventory levels for all products in this bill
-            const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(bill.id);
-            if (items && items.length > 0) {
-                for (const item of items) {
-                    const qty = parseFloat(item.quantity) || 0;
-                    const prevRec = parseFloat(item.received_quantity) || 0;
-                    const delta = prevRec > 0 ? prevRec : qty;
+            try {
+                const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(bill.id);
+                if (items && items.length > 0) {
+                    for (const item of items) {
+                        const qty = parseFloat(item.quantity) || 0;
+                        const prevRec = parseFloat(item.received_quantity) || 0;
+                        const delta = prevRec > 0 ? prevRec : qty;
 
-                    // Mark received quantity as fully completed
-                    await db.prepare("UPDATE business_purchase_items SET received_quantity = ?, item_status = 'COMPLETED' WHERE purchase_id = ? AND product_name = ?")
-                        .run(qty, bill.id, item.product_name);
-
-                    // Find existing product by product_id or exact name match for user
-                    let prod = null;
-                    if (item.product_id) {
-                        prod = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(item.product_id, userId);
-                    }
-                    if (!prod) {
-                        prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(item.product_name || '').toLowerCase());
-                    }
-
-                    if (prod) {
-                        const currentQty = parseFloat(prod.quantity) || 0;
-                        const newQty = currentQty + delta;
-                        const threshold = parseFloat(prod.low_stock_threshold) || 5;
-                        const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < threshold ? 'Low Stock' : 'In Stock');
-
-                        await db.prepare(`
-                            UPDATE business_products 
-                            SET quantity = ?, stock_status = ?, warehouse = ?, warehouse_id = ?, updated_at = ? 
-                            WHERE id = ? AND user_id = ?
-                        `).run(newQty, newStatus, selectedWarehouse, selectedWarehouse, now, prod.id, userId);
-
-                        // Log to physical stock history ledger
+                        // Mark received quantity as fully completed
                         try {
-                            await db.prepare(`
-                                INSERT INTO product_stock_history (product_id, user_id, quantity_changed, type, description, created_at)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                            `).run(prod.id, userId, delta, 'in', `Received via Purchase Bill #${bill.purchase_number} in ${selectedWarehouse}`, now);
+                            await db.prepare("UPDATE business_purchase_items SET received_quantity = ?, item_status = 'COMPLETED' WHERE purchase_id = ? AND product_name = ?")
+                                .run(qty, bill.id, item.product_name);
                         } catch(e) {}
+
+                        // Find existing product by product_id or exact name match for user
+                        let prod = null;
+                        if (item.product_id) {
+                            try { prod = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(item.product_id, userId); } catch(e) {}
+                        }
+                        if (!prod) {
+                            try { prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(item.product_name || '').toLowerCase()); } catch(e) {}
+                        }
+
+                        if (prod) {
+                            const currentQty = parseFloat(prod.quantity) || 0;
+                            const newQty = currentQty + delta;
+                            const threshold = parseFloat(prod.low_stock_threshold) || 5;
+                            const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < threshold ? 'Low Stock' : 'In Stock');
+
+                            try {
+                                await db.prepare(`
+                                    UPDATE business_products 
+                                    SET quantity = ?, stock_status = ?, warehouse = ?, warehouse_id = ?, updated_at = ? 
+                                    WHERE id = ? AND user_id = ?
+                                `).run(newQty, newStatus, selectedWarehouse, selectedWarehouse, now, prod.id, userId);
+                            } catch(e) {}
+
+                            // Log to physical stock history ledger
+                            try {
+                                await db.prepare(`
+                                    INSERT INTO product_stock_history (product_id, user_id, quantity_changed, type, description, created_at)
+                                    VALUES (?, ?, ?, ?, ?, ?)
+                                `).run(prod.id, userId, delta, 'in', `Received via Purchase Bill #${bill.purchase_number} in ${selectedWarehouse}`, now);
+                            } catch(e) {}
+                        }
                     }
                 }
+            } catch(itemErr) {
+                console.warn('[Purchase Controller] Stock item update warning:', itemErr.message);
             }
 
             // 3. Update Vendor Ledger
-            let supplier = await db.prepare('SELECT id, outstanding_balance FROM suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name);
-            if (!supplier) {
-                supplier = await db.prepare('SELECT id, outstanding_balance FROM business_suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name);
-            }
-            if (!supplier) {
-                // Auto-create supplier if not found
-                try {
-                    const newSup = await db.prepare(`
-                        INSERT INTO business_suppliers (user_id, name, email, outstanding_balance, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    `).run(userId, bill.supplier_name, bill.supplier_gstin || null, parseFloat(bill.grand_total) || 0, now, now);
-                    supplier = { id: newSup.lastInsertRowid, outstanding_balance: 0 };
-                } catch(e) {
+            try {
+                let supplier = null;
+                try { supplier = await db.prepare('SELECT id, outstanding_balance FROM suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name); } catch(e) {}
+                if (!supplier) {
+                    try { supplier = await db.prepare('SELECT id, outstanding_balance FROM business_suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name); } catch(e) {}
+                }
+                if (!supplier) {
+                    // Auto-create supplier if not found
                     try {
                         const newSup = await db.prepare(`
-                            INSERT INTO suppliers (user_id, name, outstanding_balance, created_at)
-                            VALUES (?, ?, ?, ?)
-                        `).run(userId, bill.supplier_name, parseFloat(bill.grand_total) || 0, now);
+                            INSERT INTO business_suppliers (user_id, name, email, outstanding_balance, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        `).run(userId, bill.supplier_name, bill.supplier_gstin || null, parseFloat(bill.grand_total) || 0, now, now);
                         supplier = { id: newSup.lastInsertRowid, outstanding_balance: 0 };
-                    } catch(e2) {
-                        supplier = { id: 1, outstanding_balance: 0 };
+                    } catch(e) {
+                        try {
+                            const newSup = await db.prepare(`
+                                INSERT INTO suppliers (user_id, name, outstanding_balance, created_at)
+                                VALUES (?, ?, ?, ?)
+                            `).run(userId, bill.supplier_name, parseFloat(bill.grand_total) || 0, now);
+                            supplier = { id: newSup.lastInsertRowid, outstanding_balance: 0 };
+                        } catch(e2) {
+                            supplier = { id: 1, outstanding_balance: 0 };
+                        }
                     }
                 }
+
+                const supId = supplier.id;
+                const billAmount = parseFloat(bill.grand_total) || 0;
+
+                // Debit entry: Goods received on credit
+                try {
+                    await db.prepare(`
+                        INSERT INTO supplier_ledger (supplier_id, user_id, description, amount, type, created_at)
+                        VALUES (?, ?, ?, ?, 'debit', ?)
+                    `).run(supId, userId, `Goods Received — Bill ${bill.purchase_number}`, billAmount, now);
+                } catch(e) {}
+
+                // 4. Update supplier outstanding balance (Accounts Payable)
+                try { await db.prepare('UPDATE suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?').run(billAmount, supId); } catch(e) {}
+                try { await db.prepare('UPDATE business_suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?').run(billAmount, supId); } catch(e) {}
+            } catch(supErr) {
+                console.warn('[Purchase Controller] Supplier ledger update warning:', supErr.message);
             }
-
-            const supId = supplier.id;
-            const billAmount = parseFloat(bill.grand_total) || 0;
-
-            // Debit entry: Goods received on credit
-            try {
-                await db.prepare(`
-                    INSERT INTO supplier_ledger (supplier_id, user_id, description, amount, type, created_at)
-                    VALUES (?, ?, ?, ?, 'debit', ?)
-                `).run(supId, userId, `Goods Received — Bill ${bill.purchase_number}`, billAmount, now);
-            } catch(e) {}
-
-            // 4. Update supplier outstanding balance (Accounts Payable)
-            try { await db.prepare('UPDATE suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?').run(billAmount, supId); } catch(e) {}
-            try { await db.prepare('UPDATE business_suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?').run(billAmount, supId); } catch(e) {}
 
             // 5. Create Accounting Journal Entry (Accrual: Inventory/Purchase Dr, Accounts Payable Cr)
-            const taxAmount = parseFloat(bill.total_tax) || 0;
-            const subtotalAmount = parseFloat(bill.subtotal) || (billAmount - taxAmount);
+            try {
+                const billAmount = parseFloat(bill.grand_total) || 0;
+                const taxAmount = parseFloat(bill.total_tax) || 0;
+                const subtotalAmount = parseFloat(bill.subtotal) || (billAmount - taxAmount);
 
-            // Inventory/Purchase expense entry
-            await db.prepare(`
-                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                VALUES (?, 'expense', ?, ?, 'Inventory Purchases', 'Payables', ?, 'Paid', ?, ?)
-            `).run(userId, now.split('T')[0], subtotalAmount, `Goods Received — Bill ${bill.purchase_number} (${bill.supplier_name})`, now, now);
-
-            // Input GST entry (if tax > 0)
-            if (taxAmount > 0) {
+                // Inventory/Purchase expense entry
                 await db.prepare(`
                     INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                    VALUES (?, 'expense', ?, ?, 'Input GST', 'GST Credit Account', ?, 'Paid', ?, ?)
-                `).run(userId, now.split('T')[0], taxAmount, `Input ITC — Bill ${bill.purchase_number} (${bill.supplier_name})`, now, now);
-            }
+                    VALUES (?, 'expense', ?, ?, 'Inventory Purchases', 'Payables', ?, 'Paid', ?, ?)
+                `).run(userId, now.split('T')[0], subtotalAmount, `Goods Received — Bill ${bill.purchase_number} (${bill.supplier_name})`, now, now);
 
-            // Mark the matching accounting payable entry as Paid/Posted
-            await db.prepare(
-                "UPDATE accounting SET status = 'Paid' WHERE user_id = ? AND mode = 'Payables' AND notes LIKE ?"
-            ).run(userId, `%${bill.purchase_number}%`);
+                // Input GST entry (if tax > 0)
+                if (taxAmount > 0) {
+                    await db.prepare(`
+                        INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                        VALUES (?, 'expense', ?, ?, 'Input GST', 'GST Credit Account', ?, 'Paid', ?, ?)
+                    `).run(userId, now.split('T')[0], taxAmount, `Input ITC — Bill ${bill.purchase_number} (${bill.supplier_name})`, now, now);
+                }
+
+                // Mark the matching accounting payable entry as Paid/Posted
+                await db.prepare(
+                    "UPDATE accounting SET status = 'Paid' WHERE user_id = ? AND mode = 'Payables' AND notes LIKE ?"
+                ).run(userId, `%${bill.purchase_number}%`);
+            } catch(acctErr) {
+                console.warn('[Purchase Controller] Accounting entry warning:', acctErr.message);
+            }
 
             // 6. Sync to GSTR-2B with updated status
             try {
@@ -753,7 +771,7 @@ const purchaseController = {
             }
 
             try {
-                await logBusinessAudit(userId, 'GOODS_RECEIVED', `Goods received for Bill ${bill.purchase_number} (Supplier: ${bill.supplier_name}, Amount: ₹${billAmount})`, 'SUCCESS');
+                await logBusinessAudit(userId, 'GOODS_RECEIVED', `Goods received for Bill ${bill.purchase_number} (Supplier: ${bill.supplier_name}, Amount: ₹${bill.grand_total || 0})`, 'SUCCESS');
             } catch(auditErr) {}
 
             return sendSuccess(res, { id: bill.id, purchase_number: bill.purchase_number, status: 'Completed' }, 'Goods received successfully. Inventory, Vendor Ledger, Accounts Payable, Accounting, and GSTR-2B have all been updated.');
