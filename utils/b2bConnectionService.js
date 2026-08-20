@@ -73,8 +73,8 @@ const b2bConnectionService = {
         const requesterUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE id = ?').get(requester_user_id);
         if (!requesterUser) return null;
 
-        // Lookup target user by email
-        const targetUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE LOWER(email) = ?').get(emailLower);
+        // Lookup target user by email or username
+        const targetUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get(emailLower, emailLower);
         if (!targetUser) {
             if (isStrict) {
                 const err = new Error('No registered Cliks Business account found with this @bnxmail.com email address.');
@@ -198,19 +198,29 @@ const b2bConnectionService = {
 
         const updated = await db.prepare('SELECT * FROM b2b_connections WHERE id = ?').get(connection_id);
 
-        const requesterUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE id = ?').get(conn.requester_user_id);
-        const targetUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE id = ?').get(conn.target_user_id);
+        let requesterUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE id = ?').get(conn.requester_user_id);
+        if (!requesterUser && conn.requester_email) {
+            requesterUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get(conn.requester_email.toLowerCase(), conn.requester_email.toLowerCase());
+        }
+
+        let targetUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE id = ?').get(conn.target_user_id);
+        if (!targetUser && conn.target_email) {
+            targetUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get(conn.target_email.toLowerCase(), conn.target_email.toLowerCase());
+        }
 
         const requesterName = requesterUser ? (requesterUser.business_name || requesterUser.username) : conn.requester_business_name;
         const targetName = targetUser ? (targetUser.business_name || targetUser.username) : conn.target_business_name;
 
+        const reqEmail = (conn.requester_email || (requesterUser ? requesterUser.email : '')).toLowerCase();
+        const tarEmail = (conn.target_email || (targetUser ? targetUser.email : '')).toLowerCase();
+
         if (newStatus === 'ACCEPTED') {
             // 1. Add Requester as Customer in Target User's business_customers table
-            if (targetUser) {
+            if (targetUser && reqEmail) {
                 const existingCust = await db.prepare(`
                     SELECT id FROM business_customers
                     WHERE user_id = ? AND LOWER(email) = ?
-                `).get(targetUser.id, conn.requester_email.toLowerCase());
+                `).get(targetUser.id, reqEmail);
 
                 if (!existingCust) {
                     await db.prepare(`
@@ -218,7 +228,7 @@ const b2bConnectionService = {
                             user_id, name, business_name, email, phone_number, status, created_at, updated_at
                         ) VALUES (?, ?, ?, ?, ?, 'Connected', ?, ?)
                     `).run(
-                        targetUser.id, requesterName, requesterName, conn.requester_email,
+                        targetUser.id, requesterName, requesterName, reqEmail,
                         null, now, now
                     );
                 } else {
@@ -231,11 +241,11 @@ const b2bConnectionService = {
             }
 
             // 2. Update Target as Connected Supplier in Requester's business_suppliers table
-            if (requesterUser) {
+            if (requesterUser && tarEmail) {
                 const existingSupp = await db.prepare(`
                     SELECT id FROM business_suppliers
                     WHERE user_id = ? AND LOWER(email) = ?
-                `).get(requesterUser.id, conn.target_email.toLowerCase());
+                `).get(requesterUser.id, tarEmail);
 
                 if (!existingSupp) {
                     await db.prepare(`
@@ -243,7 +253,7 @@ const b2bConnectionService = {
                             user_id, name, company, email, phone, status, created_at, updated_at
                         ) VALUES (?, ?, ?, ?, ?, 'CONNECTED', ?, ?)
                     `).run(
-                        requesterUser.id, targetName, targetName, conn.target_email,
+                        requesterUser.id, targetName, targetName, tarEmail,
                         null, now, now
                     );
                 } else {
@@ -255,16 +265,37 @@ const b2bConnectionService = {
                 }
             }
 
+            // 3. Synchronize supplier_connections & customer_connections tables
+            try {
+                if (requesterUser && targetUser) {
+                    await db.prepare(`
+                        UPDATE supplier_connections
+                        SET status = 'accepted', supplier_user_id = ?, responded_at = ?, updated_at = ?
+                        WHERE business_id = ? AND (supplier_user_id = ? OR LOWER(supplier_email) = ?)
+                    `).run(targetUser.id, now, now, requesterUser.id, targetUser.id, tarEmail);
+
+                    await db.prepare(`
+                        UPDATE customer_connections
+                        SET status = 'accepted', website_user_id = ?, responded_at = ?, updated_at = ?
+                        WHERE business_id = ? AND (website_user_id = ? OR LOWER(customer_email) = ?)
+                    `).run(targetUser.id, now, now, requesterUser.id, targetUser.id, tarEmail);
+                }
+            } catch (syncErr) {
+                console.warn('[B2B Connection] Sub-connection sync warning:', syncErr.message);
+            }
+
             // Notification to Requester: "[Business Name] accepted your supplier connection request."
             try {
-                await db.prepare(`
-                    INSERT INTO notifications (user_id, sender_id, receiver_id, type, title, message, is_read, created_at)
-                    VALUES (?, ?, ?, 'b2b_connection_accepted', 'Supplier Connection Accepted', ?, 0, ?)
-                `).run(
-                    conn.requester_user_id, user_id, conn.requester_user_id,
-                    `${targetName} accepted your supplier connection request.`,
-                    now
-                );
+                if (conn.requester_user_id) {
+                    await db.prepare(`
+                        INSERT INTO notifications (user_id, sender_id, receiver_id, type, title, message, is_read, created_at)
+                        VALUES (?, ?, ?, 'b2b_connection_accepted', 'Supplier Connection Accepted', ?, 0, ?)
+                    `).run(
+                        conn.requester_user_id, user_id, conn.requester_user_id,
+                        `${targetName} accepted your supplier connection request.`,
+                        now
+                    );
+                }
             } catch (nErr) {}
         } else {
             // REJECTED

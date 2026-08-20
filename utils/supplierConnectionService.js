@@ -463,6 +463,27 @@ const supplierConnectionService = {
             WHERE id = ?
         `).run(mainStatus, now, conn.supplier_id);
 
+        // Also trigger B2B connection response to create business_customers row for target user
+        try {
+            const b2bConnectionService = require('./b2bConnectionService');
+            const supEmailLower = (conn.supplier_email || '').toLowerCase();
+            const b2bConn = await db.prepare(`
+                SELECT id FROM b2b_connections
+                WHERE (requester_user_id = ? AND (target_user_id = ? OR LOWER(target_email) = ?))
+                   OR (target_user_id = ? AND (requester_user_id = ? OR LOWER(requester_email) = ?))
+            `).get(conn.business_id, website_user_id, supEmailLower, website_user_id, conn.business_id, supEmailLower);
+
+            if (b2bConn) {
+                await b2bConnectionService.respondToConnection({
+                    user_id: website_user_id,
+                    connection_id: b2bConn.id,
+                    action
+                });
+            }
+        } catch (b2bErr) {
+            console.warn('[SupplierConnectionService] B2B respond sync warning:', b2bErr.message);
+        }
+
         const updated = await db.prepare('SELECT * FROM supplier_connections WHERE id = ?').get(connection_id);
         return { ...updated, status: mainStatus, connection_status: mainStatus };
     },
