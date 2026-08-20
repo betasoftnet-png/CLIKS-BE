@@ -823,6 +823,22 @@ const supplierController = {
             console.error('[B2B Create Request Error]', error);
             return sendError(res, error.message || 'Failed to create B2B connection request', error.statusCode || 500);
         }
+    },
+
+    // Delegate supplier portal order methods to purchaseController
+    confirmPurchaseOrder: async (req, res) => {
+        const purchaseController = require('./purchaseController');
+        return purchaseController.confirmSupplierPurchase(req, res);
+    },
+
+    getPurchaseRequests: async (req, res) => {
+        const purchaseController = require('./purchaseController');
+        return purchaseController.getSupplierPortalOrders(req, res);
+    },
+
+    getPurchaseRequestById: async (req, res) => {
+        const purchaseController = require('./purchaseController');
+        return purchaseController.getSupplierPortalOrders(req, res);
     }
 };
 

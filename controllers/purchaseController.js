@@ -1051,13 +1051,25 @@ const purchaseController = {
             const idClean = String(id).trim();
             const numClean = idClean.replace(/^(INV|PO)-/i, '');
 
-            // Ensure column existence on business_invoices
-            try { await db.prepare("ALTER TABLE business_invoices ADD COLUMN supplier_confirmation_status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}
-            try { await db.prepare("ALTER TABLE business_invoices ADD COLUMN confirmed_at TEXT").run(); } catch(e) {}
-            try { await db.prepare("ALTER TABLE business_invoices ADD COLUMN supplier_response_type TEXT").run(); } catch(e) {}
-            try { await db.prepare("ALTER TABLE business_invoices ADD COLUMN supplier_status_message TEXT").run(); } catch(e) {}
-            try { await db.prepare("ALTER TABLE business_invoices ADD COLUMN expected_available_date TEXT").run(); } catch(e) {}
-            try { await db.prepare("ALTER TABLE business_invoices ADD COLUMN supplier_response_items TEXT").run(); } catch(e) {}
+            // Ensure column existence across business_purchases, business_invoices, invoices, and business_purchase_items
+            const tablesToEnsure = ['business_purchases', 'business_invoices', 'invoices'];
+            const colsToEnsure = [
+                "supplier_confirmation_status TEXT DEFAULT 'PENDING'",
+                "confirmed_at TEXT",
+                "supplier_response_type TEXT",
+                "supplier_status_message TEXT",
+                "expected_available_date TEXT",
+                "supplier_response_items TEXT"
+            ];
+            for (const tbl of tablesToEnsure) {
+                for (const colDef of colsToEnsure) {
+                    try { await db.prepare(`ALTER TABLE ${tbl} ADD COLUMN ${colDef}`).run(); } catch(e) {}
+                }
+            }
+
+            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN available_quantity REAL").run(); } catch(e) {}
+            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN item_availability_status TEXT").run(); } catch(e) {}
+            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN item_status TEXT").run(); } catch(e) {}
 
             let purchase = null;
             // 1. Direct lookup in business_purchases
@@ -1135,51 +1147,66 @@ const purchaseController = {
             const itemsJson = reqItems && Array.isArray(reqItems) ? JSON.stringify(reqItems) : null;
 
             if (purchase) {
-                await db.prepare(`
-                    UPDATE business_purchases 
-                    SET status = ?, 
-                        supplier_confirmation_status = ?, 
-                        supplier_response_type = ?, 
-                        supplier_status_message = ?, 
-                        expected_available_date = ?, 
-                        supplier_response_items = ?,
-                        confirmed_at = ?, 
-                        updated_at = ?
-                    WHERE id = ?
-                `).run(
-                    status, 
-                    supplierConfirmationStatus, 
-                    response_type, 
-                    statusMsg, 
-                    expected_available_date || null, 
-                    itemsJson,
-                    now, 
-                    now, 
-                    purchase.id
-                );
+                try {
+                    await db.prepare(`
+                        UPDATE business_purchases 
+                        SET status = ?, 
+                            supplier_confirmation_status = ?, 
+                            supplier_response_type = ?, 
+                            supplier_status_message = ?, 
+                            expected_available_date = ?, 
+                            supplier_response_items = ?,
+                            confirmed_at = ?, 
+                            updated_at = ?
+                        WHERE id = ?
+                    `).run(
+                        status, 
+                        supplierConfirmationStatus, 
+                        response_type, 
+                        statusMsg, 
+                        expected_available_date || null, 
+                        itemsJson,
+                        now, 
+                        now, 
+                        purchase.id
+                    );
+                } catch (errPurUpdate) {
+                    console.warn('[Purchase Controller] Full update failed on business_purchases, using fallback:', errPurUpdate.message);
+                    try {
+                        await db.prepare(`
+                            UPDATE business_purchases 
+                            SET status = ?, supplier_confirmation_status = ?, updated_at = ?
+                            WHERE id = ?
+                        `).run(status, supplierConfirmationStatus, now, purchase.id);
+                    } catch(e) {}
+                }
 
                 if (reqItems && Array.isArray(reqItems)) {
                     for (const it of reqItems) {
-                        if (it.id) {
+                        const targetId = it.id;
+                        const availQty = parseFloat(it.available_quantity) !== undefined && !isNaN(parseFloat(it.available_quantity)) ? parseFloat(it.available_quantity) : null;
+                        if (targetId) {
                             try {
                                 await db.prepare(`
                                     UPDATE business_purchase_items 
-                                    SET received_quantity = COALESCE(?, quantity), available_quantity = ?, item_availability_status = ? 
+                                    SET received_quantity = COALESCE(?, received_quantity, quantity), available_quantity = ?, item_availability_status = ? 
                                     WHERE id = ?
-                                `).run(parseFloat(it.available_quantity) || parseFloat(it.quantity) || 0, parseFloat(it.available_quantity) || 0, it.item_availability_status || response_type, it.id);
+                                `).run(availQty, availQty, it.item_availability_status || response_type, targetId);
                             } catch(e) {}
                         }
                     }
                 }
                 
-                // Automatically set received_quantity = quantity for confirmed purchase items
-                try {
-                    await db.prepare(`
-                        UPDATE business_purchase_items 
-                        SET received_quantity = quantity, item_status = 'CONFIRMED' 
-                        WHERE purchase_id = ?
-                    `).run(purchase.id);
-                } catch(e) {}
+                // If confirmed fully, set received_quantity = quantity for items
+                if (response_type === 'CONFIRMED') {
+                    try {
+                        await db.prepare(`
+                            UPDATE business_purchase_items 
+                            SET received_quantity = quantity, item_status = 'CONFIRMED' 
+                            WHERE purchase_id = ?
+                        `).run(purchase.id);
+                    } catch(e) {}
+                }
             }
 
             if (invoice) {
