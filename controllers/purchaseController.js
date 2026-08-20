@@ -725,9 +725,9 @@ const purchaseController = {
 
                     const dbUpdateProd = await db.prepare(`
                         UPDATE business_products 
-                        SET quantity = ?, stock_status = ?, warehouse = ?, warehouse_id = ?, purchase_price = ?, updated_at = ? 
+                        SET quantity = ?, stock_status = ?, warehouse_id = ?, purchase_price = ?, updated_at = ? 
                         WHERE id = ? AND user_id = ?
-                    `).run(newWarehouseStock, newStatus, whName, whDbId, effectivePrice, now, prod.id, userId);
+                    `).run(newWarehouseStock, newStatus, whDbId, effectivePrice, now, prod.id, userId);
 
                     console.log(`[Receive Goods Debug] Updated business_products productId=${prod.id}, sku=${pSku}, existingWarehouseStock=${existingWarehouseStock}, newWarehouseStock=${newWarehouseStock}, databaseUpdateResult=${dbUpdateProd.changes}`);
 
@@ -740,9 +740,9 @@ const purchaseController = {
                     const newProdRes = await db.prepare(`
                         INSERT INTO business_products (
                             user_id, name, sku, category, unit, quantity, purchase_price, selling_price,
-                            stock_status, warehouse, warehouse_id, created_at, updated_at
-                        ) VALUES (?, ?, ?, 'General', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    `).run(userId, pName, pSku, pUnit, receivedQty, pPrice, pPrice > 0 ? (pPrice * 1.2) : 0, receivedQty > 5 ? 'In Stock' : 'Low Stock', whName, whDbId, now, now);
+                            stock_status, warehouse_id, created_at, updated_at
+                        ) VALUES (?, ?, ?, 'General', ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(userId, pName, pSku, pUnit, receivedQty, pPrice, pPrice > 0 ? (pPrice * 1.2) : 0, receivedQty > 5 ? 'In Stock' : 'Low Stock', whDbId, now, now);
                     
                     targetProdId = newProdRes.lastInsertRowid;
                     console.log(`[Receive Goods Debug] Created business_products productId=${targetProdId}, sku=${pSku}, newWarehouseStock=${newWarehouseStock}, databaseUpdateResult=1`);
