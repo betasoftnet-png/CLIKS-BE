@@ -272,9 +272,10 @@ const returnsController = {
                         const prodHsn = masterProd?.hsn_code || item.hsn_code || 'N/A';
                         const prodBarcode = masterProd?.barcode || item.barcode || 'N/A';
 
-                        // Check if product ALREADY exists in business_products for this selected warehouse
+                        // Check if product ALREADY exists in business_products for this user
                         let existingWhProduct = null;
                         try {
+                            // 1a. Check by warehouse assignment
                             existingWhProduct = await db.prepare(`
                                 SELECT * FROM business_products 
                                 WHERE user_id = ? 
@@ -288,20 +289,41 @@ const returnsController = {
                                 targetWhId.toLowerCase(), targetWhName.toLowerCase(), targetWhCode.toLowerCase(),
                                 cleanPName.toLowerCase(), prodSku.toLowerCase()
                             );
+
+                            // 1b. Fallback: check by product ID, Name or SKU across user products
+                            if (!existingWhProduct) {
+                                existingWhProduct = await db.prepare(`
+                                    SELECT * FROM business_products 
+                                    WHERE user_id = ? 
+                                      AND (
+                                        id = ? 
+                                        OR LOWER(name) = ? 
+                                        OR (sku IS NOT NULL AND LOWER(sku) = ?)
+                                      )
+                                    LIMIT 1
+                                `).get(
+                                    req.user.id,
+                                    pId || 0,
+                                    cleanPName.toLowerCase(),
+                                    prodSku.toLowerCase()
+                                );
+                            }
                         } catch(e) {}
 
                         if (existingWhProduct) {
-                            const newQty = (parseFloat(existingWhProduct.quantity) || 0) + rQty;
+                            const currentQty = parseFloat(existingWhProduct.quantity) || 0;
+                            const newQty = currentQty + rQty;
                             const threshold = parseFloat(existingWhProduct.low_stock_threshold) || 5;
                             const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < threshold ? 'Low Stock' : 'In Stock');
 
                             await db.prepare(`
                                 UPDATE business_products SET 
                                     quantity = ?, 
+                                    warehouse_id = COALESCE(warehouse_id, ?),
                                     stock_status = ?, 
                                     updated_at = ? 
                                 WHERE id = ? AND user_id = ?
-                            `).run(newQty, newStatus, now, existingWhProduct.id, req.user.id);
+                            `).run(newQty, targetWhName, newStatus, now, existingWhProduct.id, req.user.id);
                         } else {
                             const newStatus = rQty <= 0 ? 'Out of Stock' : (rQty < 5 ? 'Low Stock' : 'In Stock');
                             await db.prepare(`
@@ -337,11 +359,20 @@ const returnsController = {
                                   AND (LOWER(name) = ? OR (sku IS NOT NULL AND LOWER(sku) = ?))
                                 LIMIT 1
                             `).get(req.user.id, targetWhName.toLowerCase(), targetWhName.toLowerCase(), cleanPName.toLowerCase(), prodSku.toLowerCase());
+
+                            if (!existingStock) {
+                                existingStock = await db.prepare(`
+                                    SELECT * FROM stock 
+                                    WHERE user_id = ? 
+                                      AND (LOWER(name) = ? OR (sku IS NOT NULL AND LOWER(sku) = ?))
+                                    LIMIT 1
+                                `).get(req.user.id, cleanPName.toLowerCase(), prodSku.toLowerCase());
+                            }
                         } catch(e) {}
 
                         if (existingStock) {
-                            await db.prepare('UPDATE stock SET quantity = quantity + ?, updated_at = ? WHERE id = ?')
-                                .run(rQty, now, existingStock.id);
+                            await db.prepare('UPDATE stock SET quantity = quantity + ?, location = COALESCE(location, ?), warehouse = COALESCE(warehouse, ?), updated_at = ? WHERE id = ?')
+                                .run(rQty, targetWhName, targetWhName, now, existingStock.id);
                         } else {
                             await db.prepare(`
                                 INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, warehouse, created_at, updated_at)
