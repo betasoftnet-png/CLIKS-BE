@@ -319,7 +319,7 @@ const returnsController = {
                             await db.prepare(`
                                 UPDATE business_products SET 
                                     quantity = ?, 
-                                    warehouse_id = COALESCE(warehouse_id, ?),
+                                    warehouse_id = ?,
                                     stock_status = ?, 
                                     updated_at = ? 
                                 WHERE id = ? AND user_id = ?
@@ -371,7 +371,7 @@ const returnsController = {
                         } catch(e) {}
 
                         if (existingStock) {
-                            await db.prepare('UPDATE stock SET quantity = quantity + ?, location = COALESCE(location, ?), warehouse = COALESCE(warehouse, ?), updated_at = ? WHERE id = ?')
+                            await db.prepare('UPDATE stock SET quantity = quantity + ?, location = ?, warehouse = ?, updated_at = ? WHERE id = ?')
                                 .run(rQty, targetWhName, targetWhName, now, existingStock.id);
                         } else {
                             await db.prepare(`
