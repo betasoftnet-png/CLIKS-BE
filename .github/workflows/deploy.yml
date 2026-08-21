@@ -1,0 +1,30 @@
+name: Deploy Backend to Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.0
+
+        with:
+          host: 204.168.244.118
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/CLIKS-BE
+
+            git fetch origin
+            git reset --hard origin/main
+
+            npm install
+
+            pm2 restart cliks-be
+
+            pm2 save
