@@ -184,6 +184,44 @@ const returnsController = {
                 WHERE id = ?
             `).run(status, refund_status, refund_date, refund_reference, inspection_status, warehouse_id, new Date().toISOString(), id);
 
+            if (warehouse_id) {
+                try {
+                    const retItems = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(id);
+                    const whName = req.body.warehouse_name || warehouse_id;
+                    const now = new Date().toISOString();
+
+                    for (const item of retItems) {
+                        const rQty = parseFloat(item.return_quantity || item.quantity) || 1;
+                        const pName = item.product_name || 'Returned Product';
+                        const pId = item.product_id || null;
+
+                        const existingStock = await db.prepare(
+                            'SELECT * FROM stock WHERE user_id = ? AND (warehouse_id = ? OR warehouse_name = ?) AND LOWER(product_name) = ?'
+                        ).get(req.user.id, warehouse_id, whName, String(pName).toLowerCase());
+
+                        if (existingStock) {
+                            await db.prepare('UPDATE stock SET quantity = quantity + ?, updated_at = ? WHERE id = ?')
+                                .run(rQty, now, existingStock.id);
+                        } else {
+                            await db.prepare(
+                                `INSERT INTO stock (user_id, product_name, quantity, warehouse_id, warehouse_name, created_at, updated_at)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?)`
+                            ).run(req.user.id, pName, rQty, warehouse_id, whName, now, now);
+                        }
+
+                        if (pId) {
+                            await db.prepare('UPDATE business_products SET warehouse_id = ?, warehouse_name = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+                                .run(warehouse_id, whName, now, pId, req.user.id);
+                        } else if (pName) {
+                            await db.prepare('UPDATE business_products SET warehouse_id = ?, warehouse_name = ?, updated_at = ? WHERE LOWER(name) = ? AND user_id = ?')
+                                .run(warehouse_id, whName, now, String(pName).toLowerCase(), req.user.id);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[Returns Controller] Error mapping return items to warehouse stock:', e.message);
+                }
+            }
+
             const updated = await db.prepare('SELECT * FROM business_returns WHERE id = ?').get(id);
             updated.items = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(id);
 
