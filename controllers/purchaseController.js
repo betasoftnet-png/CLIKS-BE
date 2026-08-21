@@ -630,6 +630,7 @@ const purchaseController = {
 
             if (!bill) return sendError(res, 'Purchase bill not found', 404);
             if (bill.status === 'Completed') return sendError(res, 'Goods already received for this bill', 400);
+            if (bill.status === 'PARTIAL_REJECTED') return sendError(res, 'Cannot receive goods for a rejected purchase order', 400);
 
             // 1.5 Resolve Target Warehouse Database Profile safely (preventing 22P02 PostgreSQL integer error)
             let targetWhObj = null;
@@ -693,7 +694,7 @@ const purchaseController = {
 
                 // Mark received quantity as fully completed
                 await db.prepare("UPDATE business_purchase_items SET received_quantity = ?, item_status = 'COMPLETED' WHERE id = ?")
-                    .run(orderedQty, item.id);
+                    .run(receivedQty, item.id);
 
                 // -------------------------------------------------------------
                 // A. UPDATE OR INSERT IN business_products TABLE
@@ -1470,6 +1471,80 @@ const purchaseController = {
         } catch (error) {
             console.error('Error loading supplier portal orders:', error);
             return sendError(res, 'Failed to load supplier portal orders', 500);
+        }
+    },
+
+    handleBuyerResponse: async (req, res) => {
+        const { id } = req.params;
+        const { action } = req.body || {};
+        const now = new Date().toISOString();
+
+        try {
+            const idClean = String(id).trim();
+            const numClean = idClean.replace(/^(INV|PO)-/i, '');
+
+            let purchase = null;
+            try {
+                purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ?').get(idClean, idClean, `PO-${numClean}`);
+            } catch (e) {}
+
+            if (!purchase) {
+                return sendError(res, 'Purchase order not found', 404);
+            }
+
+            if (action === 'ACCEPT') {
+                const newStatus = 'PARTIAL_ACCEPTED';
+                const statusMsg = 'Buyer accepted available quantity.';
+
+                await db.prepare(`
+                    UPDATE business_purchases 
+                    SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ?
+                    WHERE id = ?
+                `).run(newStatus, newStatus, statusMsg, now, purchase.id);
+
+                try {
+                    const rel = await db.prepare('SELECT generated_sales_invoice_id FROM b2b_invoice_relationships WHERE source_purchase_invoice_id = ?').get(purchase.id);
+                    if (rel && rel.generated_sales_invoice_id) {
+                        await db.prepare("UPDATE business_invoices SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ? WHERE id = ?")
+                            .run(newStatus, newStatus, statusMsg, now, rel.generated_sales_invoice_id);
+                    }
+                } catch (e) {}
+
+                const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(purchase.id);
+                for (const it of items) {
+                    const availQty = parseFloat(it.available_quantity);
+                    const reqQty = parseFloat(it.quantity) || 0;
+                    const finalRecQty = (!isNaN(availQty) && availQty > 0) ? availQty : reqQty;
+                    await db.prepare("UPDATE business_purchase_items SET received_quantity = ?, item_availability_status = 'PARTIAL_ACCEPTED' WHERE id = ?")
+                        .run(finalRecQty, it.id);
+                }
+
+                return sendSuccess(res, { id: purchase.id, status: newStatus }, 'Partial quantity accepted.');
+            } else if (action === 'REJECT') {
+                const newStatus = 'PARTIAL_REJECTED';
+                const statusMsg = 'Buyer rejected available quantity.';
+
+                await db.prepare(`
+                    UPDATE business_purchases 
+                    SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ?
+                    WHERE id = ?
+                `).run(newStatus, newStatus, statusMsg, now, purchase.id);
+
+                try {
+                    const rel = await db.prepare('SELECT generated_sales_invoice_id FROM b2b_invoice_relationships WHERE source_purchase_invoice_id = ?').get(purchase.id);
+                    if (rel && rel.generated_sales_invoice_id) {
+                        await db.prepare("UPDATE business_invoices SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ? WHERE id = ?")
+                            .run(newStatus, newStatus, statusMsg, now, rel.generated_sales_invoice_id);
+                    }
+                } catch (e) {}
+
+                return sendSuccess(res, { id: purchase.id, status: newStatus }, 'Partial quantity rejected.');
+            } else {
+                return sendError(res, 'Invalid action', 400);
+            }
+        } catch (error) {
+            console.error('[Purchase Controller] handleBuyerResponse error:', error);
+            return sendError(res, 'Failed to process buyer response', 500);
         }
     }
 };

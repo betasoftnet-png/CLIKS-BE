@@ -17,6 +17,7 @@ router.get('/dashboard-summary',    purchaseController.getDashboardSummary);
 // Supplier Portal Routes
 router.get('/portal/orders',                 purchaseController.getSupplierPortalOrders);
 router.post('/:id/supplier-confirm',         purchaseController.confirmSupplierPurchase);
+router.post('/:id/buyer-response',           purchaseController.handleBuyerResponse);
 
 // Import / Export
 router.post('/import',              purchaseController.importPurchases);
