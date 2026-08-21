@@ -169,8 +169,33 @@ const returnsController = {
         } = req.body;
 
         try {
-            const ret = await db.prepare('SELECT id FROM business_returns WHERE id = ? AND user_id = ?').get(id, req.user.id);
-            if (!ret) return sendError(res, 'Return record not found', 404);
+            const existingReturn = await db.prepare('SELECT * FROM business_returns WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!existingReturn) return sendError(res, 'Return record not found', 404);
+
+            const now = new Date().toISOString();
+
+            // Determine target warehouse details
+            let targetWh = null;
+            if (warehouse_id) {
+                try {
+                    targetWh = await db.prepare(
+                        'SELECT * FROM warehouses WHERE user_id = ? AND (id = ? OR LOWER(name) = ? OR LOWER(code) = ?) LIMIT 1'
+                    ).get(req.user.id, warehouse_id, String(warehouse_id).toLowerCase(), String(warehouse_id).toLowerCase());
+                } catch(e) {}
+            }
+
+            const targetWhId = targetWh ? String(targetWh.id) : String(warehouse_id || '');
+            const targetWhName = targetWh ? targetWh.name : (req.body.warehouse_name || warehouse_id || '');
+            const targetWhCode = targetWh ? (targetWh.code || `WH-${targetWh.id}`) : targetWhId;
+
+            const isAlreadyAssignedToWh = Boolean(
+                targetWhName &&
+                existingReturn.warehouse_id &&
+                (
+                    String(existingReturn.warehouse_id).toLowerCase() === targetWhName.toLowerCase() ||
+                    String(existingReturn.warehouse_id).toLowerCase() === targetWhId.toLowerCase()
+                )
+            );
 
             await db.prepare(`
                 UPDATE business_returns SET
@@ -182,39 +207,119 @@ const returnsController = {
                     warehouse_id = COALESCE(?, warehouse_id),
                     updated_at = ?
                 WHERE id = ?
-            `).run(status, refund_status, refund_date, refund_reference, inspection_status, warehouse_id, new Date().toISOString(), id);
+            `).run(status, refund_status, refund_date, refund_reference, inspection_status, targetWhName || warehouse_id, now, id);
 
-            if (warehouse_id) {
+            if (warehouse_id && !isAlreadyAssignedToWh) {
                 try {
-                    const retItems = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(id);
-                    const whName = req.body.warehouse_name || warehouse_id;
-                    const now = new Date().toISOString();
+                    let itemsToProcess = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(id);
+                    if ((!itemsToProcess || itemsToProcess.length === 0) && existingReturn.items) {
+                        try {
+                            itemsToProcess = typeof existingReturn.items === 'string' ? JSON.parse(existingReturn.items) : existingReturn.items;
+                        } catch(e) {}
+                    }
+                    if (!itemsToProcess || !Array.isArray(itemsToProcess) || itemsToProcess.length === 0) {
+                        itemsToProcess = [{
+                            product_name: existingReturn.product_name || 'Returned Product',
+                            return_quantity: 1,
+                            price: existingReturn.refund_amount || existingReturn.total_amount || 0
+                        }];
+                    }
 
-                    for (const item of retItems) {
+                    for (const item of itemsToProcess) {
                         const rQty = parseFloat(item.return_quantity || item.quantity) || 1;
-                        const pName = item.product_name || 'Returned Product';
+                        const pName = item.product_name || item.name || 'Returned Product';
                         const pId = item.product_id || null;
+                        const cleanPName = String(pName).trim();
 
-                        const existingStock = await db.prepare(
-                            'SELECT * FROM stock WHERE user_id = ? AND (warehouse_id = ? OR warehouse_name = ?) AND LOWER(product_name) = ?'
-                        ).get(req.user.id, warehouse_id, whName, String(pName).toLowerCase());
+                        // Retrieve master product info (SKU, Category, Unit, Unit Cost/Price)
+                        let masterProd = null;
+                        if (pId) {
+                            masterProd = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND id = ?').get(req.user.id, pId);
+                        }
+                        if (!masterProd) {
+                            masterProd = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ? LIMIT 1')
+                                .get(req.user.id, cleanPName.toLowerCase());
+                        }
+
+                        const prodSku = masterProd?.sku || item.sku || `SKU-${Date.now().toString().slice(-6)}`;
+                        const prodCategory = masterProd?.category || item.category || 'General';
+                        const prodUnit = masterProd?.unit || item.unit || 'PCS';
+                        const prodPurchasePrice = masterProd?.purchase_price || item.price || item.unit_price || 0;
+                        const prodSellingPrice = masterProd?.selling_price || item.price || item.unit_price || 0;
+                        const prodHsn = masterProd?.hsn_code || item.hsn_code || 'N/A';
+                        const prodBarcode = masterProd?.barcode || item.barcode || 'N/A';
+
+                        // Check if product ALREADY exists in business_products for this selected warehouse
+                        const existingWhProduct = await db.prepare(`
+                            SELECT * FROM business_products 
+                            WHERE user_id = ? 
+                              AND (
+                                LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ? 
+                                OR LOWER(warehouse_name) = ? OR LOWER(warehouse_name) = ?
+                              )
+                              AND (LOWER(name) = ? OR (sku IS NOT NULL AND LOWER(sku) = ?))
+                            LIMIT 1
+                        `).get(
+                            req.user.id, 
+                            targetWhId.toLowerCase(), targetWhName.toLowerCase(), targetWhCode.toLowerCase(),
+                            targetWhId.toLowerCase(), targetWhName.toLowerCase(),
+                            cleanPName.toLowerCase(), prodSku.toLowerCase()
+                        );
+
+                        if (existingWhProduct) {
+                            const newQty = (parseFloat(existingWhProduct.quantity) || 0) + rQty;
+                            const threshold = parseFloat(existingWhProduct.low_stock_threshold) || 5;
+                            const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < threshold ? 'Low Stock' : 'In Stock');
+
+                            await db.prepare(`
+                                UPDATE business_products SET 
+                                    quantity = ?, 
+                                    stock_status = ?, 
+                                    updated_at = ? 
+                                WHERE id = ? AND user_id = ?
+                            `).run(newQty, newStatus, now, existingWhProduct.id, req.user.id);
+                        } else {
+                            const newStatus = rQty <= 0 ? 'Out of Stock' : (rQty < 5 ? 'Low Stock' : 'In Stock');
+                            await db.prepare(`
+                                INSERT INTO business_products (
+                                    user_id, name, sku, category, quantity, unit,
+                                    purchase_price, selling_price, warehouse_id, warehouse_name, stock_status, hsn_code, barcode, created_at, updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            `).run(
+                                req.user.id,
+                                cleanPName,
+                                prodSku,
+                                prodCategory,
+                                rQty,
+                                prodUnit,
+                                prodPurchasePrice,
+                                prodSellingPrice,
+                                targetWhName,
+                                targetWhName,
+                                newStatus,
+                                prodHsn,
+                                prodBarcode,
+                                now,
+                                now
+                            );
+                        }
+
+                        // Also track in \`stock\` table
+                        const existingStock = await db.prepare(`
+                            SELECT * FROM stock 
+                            WHERE user_id = ? 
+                              AND (LOWER(warehouse_id) = ? OR LOWER(warehouse_name) = ? OR LOWER(location) = ?) 
+                              AND LOWER(product_name) = ?
+                        `).get(req.user.id, targetWhId.toLowerCase(), targetWhName.toLowerCase(), targetWhName.toLowerCase(), cleanPName.toLowerCase());
 
                         if (existingStock) {
                             await db.prepare('UPDATE stock SET quantity = quantity + ?, updated_at = ? WHERE id = ?')
                                 .run(rQty, now, existingStock.id);
                         } else {
-                            await db.prepare(
-                                `INSERT INTO stock (user_id, product_name, quantity, warehouse_id, warehouse_name, created_at, updated_at)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?)`
-                            ).run(req.user.id, pName, rQty, warehouse_id, whName, now, now);
-                        }
-
-                        if (pId) {
-                            await db.prepare('UPDATE business_products SET warehouse_id = ?, warehouse_name = ?, updated_at = ? WHERE id = ? AND user_id = ?')
-                                .run(warehouse_id, whName, now, pId, req.user.id);
-                        } else if (pName) {
-                            await db.prepare('UPDATE business_products SET warehouse_id = ?, warehouse_name = ?, updated_at = ? WHERE LOWER(name) = ? AND user_id = ?')
-                                .run(warehouse_id, whName, now, String(pName).toLowerCase(), req.user.id);
+                            await db.prepare(`
+                                INSERT INTO stock (user_id, product_name, quantity, warehouse_id, warehouse_name, location, sku, created_at, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            `).run(req.user.id, cleanPName, rQty, targetWhId, targetWhName, targetWhName, prodSku, now, now);
                         }
                     }
                 } catch (e) {
@@ -227,6 +332,7 @@ const returnsController = {
 
             return sendSuccess(res, updated, 'Return updated successfully');
         } catch (error) {
+            console.error('[Returns Controller] Error updating return:', error);
             return sendError(res, 'Update failed', 500);
         }
     },
