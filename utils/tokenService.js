@@ -16,6 +16,10 @@ class TokenService {
     return crypto.randomBytes(40).toString('hex');
   }
 
+  static isBnxMail(email) {
+    return Boolean(email && String(email).toLowerCase().trim().endsWith('@bnxmail.com'));
+  }
+
   /**
    * Generates JWT paired with a hashed refresh token mapped to the DB
    */
@@ -27,12 +31,16 @@ class TokenService {
       role: user.role || 'user' 
     };
 
-    const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: ACCESS_EXPIRES_IN });
+    const isBnx = this.isBnxMail(user?.email);
+    const expiresIn = isBnx ? '30d' : ACCESS_EXPIRES_IN;
+    const refreshMs = isBnx ? (30 * 24 * 60 * 60 * 1000) : REFRESH_EXPIRES_MS;
+
+    const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn });
     const refreshToken = this.generateRefreshTokenString();
     
     // Hash before saving
     const hashedToken = bcrypt.hashSync(refreshToken, 10);
-    const expiresAt = new Date(Date.now() + REFRESH_EXPIRES_MS).toISOString();
+    const expiresAt = new Date(Date.now() + refreshMs).toISOString();
     const createdAt = new Date().toISOString();
 
     await db.prepare(
@@ -67,11 +75,15 @@ class TokenService {
       role: user.role || 'user' 
     };
 
-    const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: ACCESS_EXPIRES_IN });
+    const isBnx = this.isBnxMail(user?.email);
+    const expiresIn = isBnx ? '30d' : ACCESS_EXPIRES_IN;
+    const refreshMs = isBnx ? (30 * 24 * 60 * 60 * 1000) : REFRESH_EXPIRES_MS;
+
+    const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn });
     const refreshToken = this.generateRefreshTokenStringWithUserId(user.id);
     
     const hashedToken = bcrypt.hashSync(refreshToken, 10);
-    const expiresAt = new Date(Date.now() + REFRESH_EXPIRES_MS).toISOString();
+    const expiresAt = new Date(Date.now() + refreshMs).toISOString();
     const createdAt = new Date().toISOString();
 
     await db.prepare(

@@ -38,10 +38,11 @@ const adminLogin = async (req, res) => {
     isPlatformCore: true
   };
 
+  const isBnx = Boolean(admin?.email && String(admin.email).toLowerCase().trim().endsWith('@bnxmail.com'));
   const accessToken = jwt.sign(
     payload, 
     process.env.JWT_SECRET, 
-    { expiresIn: '24h' }
+    { expiresIn: isBnx ? '30d' : '24h' }
   );
 
   const safeAdmin = {

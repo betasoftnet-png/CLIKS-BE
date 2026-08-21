@@ -47,10 +47,11 @@ const supportAgentLogin = async (req, res) => {
       role: 'support_agent'
     };
 
+    const isBnx = Boolean(agent?.email && String(agent.email).toLowerCase().trim().endsWith('@bnxmail.com'));
     const accessToken = jwt.sign(
       payload,
       process.env.JWT_SECRET,
-      { expiresIn: '24h' }
+      { expiresIn: isBnx ? '30d' : '24h' }
     );
 
     return sendSuccess(res, { accessToken, user: payload }, 'Customer Support Command Clearance Granted.');
