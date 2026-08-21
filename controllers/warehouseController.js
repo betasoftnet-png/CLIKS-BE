@@ -136,6 +136,55 @@ const warehouseController = {
             }
 
             const rows = await db.prepare(query).all(...params);
+            for (const wh of rows) {
+                try {
+                    const stats = await db.prepare(`
+                        SELECT 
+                            COUNT(*) as total_items, 
+                            COALESCE(SUM(quantity), 0) as total_quantity, 
+                            COALESCE(SUM(quantity * purchase_price), 0) as total_value 
+                        FROM business_products 
+                        WHERE user_id = ? 
+                          AND (
+                            LOWER(warehouse_id) = ? 
+                            OR LOWER(warehouse_id) = ? 
+                            OR LOWER(warehouse_id) = ? 
+                            OR warehouse_id = ?
+                          )
+                    `).get(
+                        req.user.id, 
+                        String(wh.id).toLowerCase(), 
+                        (wh.name || '').toLowerCase(), 
+                        (wh.code || '').toLowerCase(),
+                        wh.id
+                    );
+
+                    const stockStats = await db.prepare(`
+                        SELECT 
+                            COUNT(*) as st_count, 
+                            COALESCE(SUM(quantity), 0) as st_qty, 
+                            COALESCE(SUM(quantity * unit_price), 0) as st_value 
+                        FROM stock 
+                        WHERE user_id = ? 
+                          AND (
+                            LOWER(location) = ? 
+                            OR LOWER(location) = ? 
+                            OR LOWER(warehouse) = ?
+                          )
+                    `).get(
+                        req.user.id,
+                        String(wh.id).toLowerCase(),
+                        (wh.name || '').toLowerCase(),
+                        (wh.name || '').toLowerCase()
+                    );
+
+                    wh.total_items = (stats?.total_items || 0) + (stockStats?.st_count || 0);
+                    wh.total_quantity = (stats?.total_quantity || 0) + (stockStats?.st_qty || 0);
+                    wh.total_value = (stats?.total_value || 0) + (stockStats?.st_value || 0);
+                    wh.inventory_value = wh.total_value;
+                    wh.item_count = wh.total_items;
+                } catch(e) {}
+            }
             return sendSuccess(res, rows, 'Warehouses fetched successfully');
         } catch (error) {
             console.error('[Warehouse Controller] Error listing warehouses:', error);
@@ -221,10 +270,89 @@ const warehouseController = {
     // GET /warehouses/:id/products
     getWarehouseProducts: async (req, res) => {
         try {
-            const products = await db.prepare('SELECT * FROM stock WHERE user_id = ?').all(req.user.id);
-            return sendSuccess(res, products, 'Warehouse products fetched');
+            const { id } = req.params;
+
+            // Find warehouse
+            let wh = null;
+            try {
+                wh = await db.prepare(
+                    'SELECT * FROM warehouses WHERE user_id = ? AND (id = ? OR LOWER(name) = ? OR LOWER(code) = ?) LIMIT 1'
+                ).get(req.user.id, id, String(id).toLowerCase(), String(id).toLowerCase());
+            } catch(e) {}
+
+            const targetWhId = wh ? String(wh.id) : String(id);
+            const targetWhName = wh ? wh.name : String(id);
+            const targetWhCode = wh ? (wh.code || '') : targetWhId;
+
+            // Fetch products mapped to this warehouse from business_products
+            let products = [];
+            try {
+                products = await db.prepare(`
+                    SELECT * FROM business_products 
+                    WHERE user_id = ? 
+                      AND (
+                        LOWER(warehouse_id) = ? 
+                        OR LOWER(warehouse_id) = ? 
+                        OR LOWER(warehouse_id) = ?
+                        OR warehouse_id = ?
+                      )
+                `).all(
+                    req.user.id,
+                    targetWhName.toLowerCase(),
+                    targetWhId.toLowerCase(),
+                    targetWhCode.toLowerCase(),
+                    id
+                );
+            } catch(e) {}
+
+            // Also check `stock` table for items with matching location/warehouse
+            try {
+                const stockItems = await db.prepare(`
+                    SELECT * FROM stock 
+                    WHERE user_id = ? 
+                      AND (
+                        LOWER(location) = ? 
+                        OR LOWER(location) = ? 
+                        OR LOWER(warehouse) = ?
+                        OR LOWER(warehouse) = ?
+                      )
+                `).all(
+                    req.user.id,
+                    targetWhName.toLowerCase(),
+                    targetWhId.toLowerCase(),
+                    targetWhName.toLowerCase(),
+                    targetWhId.toLowerCase()
+                );
+
+                const existingNames = new Set(products.map(p => (p.name || '').toLowerCase()));
+                for (const item of stockItems) {
+                    if (!existingNames.has((item.name || '').toLowerCase())) {
+                        products.push({
+                            id: item.id,
+                            user_id: item.user_id,
+                            name: item.name,
+                            sku: item.sku || `SKU-${item.id}`,
+                            category: item.category || 'General',
+                            unit: item.unit || 'PCS',
+                            quantity: item.quantity || 0,
+                            purchase_price: item.unit_price || item.cost_price || 0,
+                            selling_price: item.unit_price || 0,
+                            warehouse_id: targetWhName,
+                            stock_status: (item.quantity || 0) > 0 ? 'In Stock' : 'Out of Stock'
+                        });
+                    }
+                }
+            } catch(e) {}
+
+            // Fallback if no specific warehouse products exist yet: if id is 'all' or 'global'
+            if (products.length === 0 && (id === 'all' || id === 'global')) {
+                products = await db.prepare('SELECT * FROM business_products WHERE user_id = ?').all(req.user.id);
+            }
+
+            return sendSuccess(res, products, 'Warehouse products fetched successfully');
         } catch (error) {
-            return sendError(res, 'Failed to fetch products', 500);
+            console.error('[Warehouse Controller] Error getting warehouse products:', error);
+            return sendError(res, 'Failed to fetch warehouse products', 500);
         }
     },
 
@@ -375,9 +503,70 @@ const warehouseController = {
     // GET /warehouses/:id/valuation
     getWarehouseValuation: async (req, res) => {
         try {
-            const result = await db.prepare('SELECT SUM(quantity * unit_price) as total FROM stock WHERE user_id = ?').get(req.user.id);
-            return sendSuccess(res, { valuation: result.total || 0 }, 'Valuation fetched');
+            const { id } = req.params;
+
+            let wh = null;
+            try {
+                wh = await db.prepare(
+                    'SELECT * FROM warehouses WHERE user_id = ? AND (id = ? OR LOWER(name) = ? OR LOWER(code) = ?) LIMIT 1'
+                ).get(req.user.id, id, String(id).toLowerCase(), String(id).toLowerCase());
+            } catch(e) {}
+
+            const targetWhId = wh ? String(wh.id) : String(id);
+            const targetWhName = wh ? wh.name : String(id);
+            const targetWhCode = wh ? (wh.code || '') : targetWhId;
+
+            const bpRes = await db.prepare(`
+                SELECT 
+                    COALESCE(SUM(quantity * purchase_price), 0) as bp_total, 
+                    COALESCE(SUM(quantity), 0) as bp_qty, 
+                    COUNT(*) as bp_count
+                FROM business_products 
+                WHERE user_id = ? 
+                  AND (
+                    LOWER(warehouse_id) = ? 
+                    OR LOWER(warehouse_id) = ? 
+                    OR LOWER(warehouse_id) = ?
+                    OR warehouse_id = ?
+                  )
+            `).get(
+                req.user.id,
+                targetWhName.toLowerCase(),
+                targetWhId.toLowerCase(),
+                targetWhCode.toLowerCase(),
+                id
+            );
+
+            const stRes = await db.prepare(`
+                SELECT 
+                    COALESCE(SUM(quantity * unit_price), 0) as st_total, 
+                    COALESCE(SUM(quantity), 0) as st_qty,
+                    COUNT(*) as st_count
+                FROM stock 
+                WHERE user_id = ? 
+                  AND (
+                    LOWER(location) = ? 
+                    OR LOWER(location) = ? 
+                    OR LOWER(warehouse) = ?
+                  )
+            `).get(
+                req.user.id,
+                targetWhName.toLowerCase(),
+                targetWhId.toLowerCase(),
+                targetWhName.toLowerCase()
+            );
+
+            const totalValuation = (bpRes?.bp_total || 0) + (stRes?.st_total || 0);
+            const totalQuantity = (bpRes?.bp_qty || 0) + (stRes?.st_qty || 0);
+            const totalItems = (bpRes?.bp_count || 0) + (stRes?.st_count || 0);
+
+            return sendSuccess(res, { 
+                valuation: totalValuation,
+                total_items: totalItems,
+                total_quantity: totalQuantity
+            }, 'Warehouse valuation fetched successfully');
         } catch (err) {
+            console.error('[Warehouse Controller] Error getting valuation:', err);
             return sendError(res, 'Failed to fetch valuation', 500);
         }
     },
