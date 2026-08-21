@@ -19,6 +19,10 @@ router.get('/health', (req, res) =>
   res.json({ success: true, data: { status: 'ok', version: 'v1', timestamp: new Date().toISOString() } })
 );
 
+router.get(['/test', '/accounting/test'], (req, res) =>
+  res.json({ success: true, message: 'successfully working', timestamp: new Date().toISOString() })
+);
+
 // ── Auth (no middleware) ───────────────────────────────────────────────────
 router.use('/auth',    require('../auth'));
 
