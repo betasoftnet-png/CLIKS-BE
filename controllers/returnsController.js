@@ -234,17 +234,33 @@ const returnsController = {
 
             if (warehouse_id && !isAlreadyAssignedToWh) {
                 try {
-                    let itemsToProcess = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(id);
+                    let itemsToProcess = [];
+
+                    if (Array.isArray(req.body.items) && req.body.items.length > 0) {
+                        itemsToProcess = req.body.items;
+                    } else if (req.body.return_obj && Array.isArray(req.body.return_obj.items) && req.body.return_obj.items.length > 0) {
+                        itemsToProcess = req.body.return_obj.items;
+                    }
+
+                    if (!itemsToProcess || itemsToProcess.length === 0) {
+                        try {
+                            itemsToProcess = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ? OR return_id = ?').all(id, existingReturn.id || id);
+                        } catch(e) {}
+                    }
+
                     if ((!itemsToProcess || itemsToProcess.length === 0) && existingReturn.items) {
                         try {
                             itemsToProcess = typeof existingReturn.items === 'string' ? JSON.parse(existingReturn.items) : existingReturn.items;
                         } catch(e) {}
                     }
+
                     if (!itemsToProcess || !Array.isArray(itemsToProcess) || itemsToProcess.length === 0) {
+                        const fallbackPName = req.body.product_name || req.body.return_obj?.product_name || existingReturn.product_name || 'Returned Item';
+                        const fallbackQty = parseFloat(req.body.return_quantity || req.body.return_obj?.return_quantity || existingReturn.return_quantity) || 1;
                         itemsToProcess = [{
-                            product_name: existingReturn.product_name || 'Returned Product',
-                            return_quantity: 1,
-                            price: existingReturn.refund_amount || existingReturn.total_amount || 0
+                            product_name: fallbackPName,
+                            return_quantity: fallbackQty,
+                            price: req.body.refund_amount || existingReturn.refund_amount || existingReturn.total_amount || 0
                         }];
                     }
 

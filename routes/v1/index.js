@@ -54,6 +54,11 @@ router.use('/goal-wallets',    auth, require('../goalWallet'));
 
 // ── Books Module ───────────────────────────────────────────────────────────
 router.use('/stock',            auth, require('../stock'));
+router.use('/returns',          auth, require('../returns'));
+router.use('/warehouses',       auth, require('../warehouses'));
+router.use('/products',         auth, require('../products'));
+router.use('/purchases',        auth, require('../purchases'));
+router.use('/suppliers',        auth, require('../suppliers'));
 
 // ── Financial Plans (static paths before param paths) ─────────────────────
 router.use('/financial-plans/calendar',                auth, require('../financialCalendar'));
