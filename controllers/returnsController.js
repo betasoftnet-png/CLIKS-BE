@@ -365,16 +365,16 @@ const returnsController = {
                             );
                         }
 
-                        // Also track in \`stock\` table
+                        // Also track in `stock` table
                         let existingStock = null;
                         try {
                             existingStock = await db.prepare(`
                                 SELECT * FROM stock 
                                 WHERE user_id = ? 
-                                  AND (LOWER(location) = ? OR LOWER(warehouse) = ?) 
+                                  AND (LOWER(location) = ? OR location IS NULL) 
                                   AND (LOWER(name) = ? OR (sku IS NOT NULL AND LOWER(sku) = ?))
                                 LIMIT 1
-                            `).get(req.user.id, targetWhName.toLowerCase(), targetWhName.toLowerCase(), cleanPName.toLowerCase(), prodSku.toLowerCase());
+                            `).get(req.user.id, targetWhName.toLowerCase(), cleanPName.toLowerCase(), prodSku.toLowerCase());
 
                             if (!existingStock) {
                                 existingStock = await db.prepare(`
@@ -387,13 +387,13 @@ const returnsController = {
                         } catch(e) {}
 
                         if (existingStock) {
-                            await db.prepare('UPDATE stock SET quantity = quantity + ?, location = ?, warehouse = ?, updated_at = ? WHERE id = ?')
-                                .run(rQty, targetWhName, targetWhName, now, existingStock.id);
+                            await db.prepare('UPDATE stock SET quantity = quantity + ?, location = ?, updated_at = ? WHERE id = ?')
+                                .run(rQty, targetWhName, now, existingStock.id);
                         } else {
                             await db.prepare(`
-                                INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, warehouse, created_at, updated_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            `).run(req.user.id, cleanPName, prodSku, prodCategory, prodUnit, prodPurchasePrice, rQty, targetWhName, targetWhName, now, now);
+                                INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, created_at, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            `).run(req.user.id, cleanPName, prodSku, prodCategory, prodUnit, prodPurchasePrice, rQty, targetWhName, now, now);
                         }
                     }
                 } catch (e) {
