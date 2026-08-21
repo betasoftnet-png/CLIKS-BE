@@ -91,19 +91,46 @@ const returnsController = {
 
             const returnId = result.lastInsertRowid;
 
-            // Save return items
-            const parsedItems = Array.isArray(items) ? items : (typeof items === 'string' ? JSON.parse(items) : []);
+            // Save return items & update inventory stock
+            const parsedItems = Array.isArray(items) ? items : (typeof items === 'string' ? JSON.parse(items || '[]') : []);
             for (const item of parsedItems) {
+                const rQty = parseFloat(item.return_quantity || item.quantity) || 1;
+                const rPrice = parseFloat(item.price || item.unit_price) || 0;
+                const rTotal = item.total || (rQty * rPrice);
+                const pName = item.product_name || item.name || 'Returned Item';
+
                 await db.prepare(`
                     INSERT INTO business_return_items (
                         return_id, product_id, product_name, batch_number, serial_number,
                         return_quantity, replacement_quantity, price, gst_percentage, tax_amount, total
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
-                    returnId, item.product_id || null, item.product_name, item.batch_number || null, item.serial_number || null,
-                    item.return_quantity || 1, item.replacement_quantity || 0, item.price || 0,
-                    item.gst_percentage || 18, item.tax_amount || 0, item.total || 0
+                    returnId, item.product_id || null, pName, item.batch_number || null, item.serial_number || null,
+                    rQty, item.replacement_quantity || 0, rPrice,
+                    item.gst_percentage || 18, item.tax_amount || 0, rTotal
                 );
+
+                // Add returned quantities back to inventory stock
+                if (item.product_id || pName) {
+                    try {
+                        let prod = null;
+                        if (item.product_id) {
+                            prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND id = ?').get(req.user.id, item.product_id);
+                        }
+                        if (!prod && pName) {
+                            prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ?').get(req.user.id, String(pName).toLowerCase());
+                        }
+                        if (prod) {
+                            const currentQty = parseFloat(prod.quantity) || 0;
+                            const newQty = currentQty + rQty;
+                            const threshold = parseFloat(prod.low_stock_threshold) || 5;
+                            const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < threshold ? 'Low Stock' : 'In Stock');
+                            await db.prepare('UPDATE business_products SET quantity = ?, stock_status = ?, updated_at = ? WHERE id = ?').run(newQty, newStatus, now, prod.id);
+                        }
+                    } catch (e) {
+                        console.warn('[Returns Controller] Failed to update product stock:', e.message);
+                    }
+                }
             }
 
             const createdReturn = await db.prepare('SELECT * FROM business_returns WHERE id = ?').get(returnId);
