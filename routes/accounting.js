@@ -92,4 +92,12 @@ router.post('/unlock-period', accountingController.unlockPeriod);
 
 router.get('/dashboard-summary', accountingController.getDashboardSummary);
 
+router.get('/test', (req, res) => {
+    return res.status(200).json({
+        success: true,
+        message: 'successfully working',
+        timestamp: new Date().toISOString()
+    });
+});
+
 module.exports = router;

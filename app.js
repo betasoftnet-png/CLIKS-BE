@@ -123,6 +123,10 @@ app.get('/api/v1/health', (req, res) =>
   res.json({ success: true, data: { status: 'ok', timestamp: new Date().toISOString() } })
 );
 
+app.get(['/test', '/api/test', '/api/v1/test', '/ping'], (req, res) =>
+  res.json({ success: true, message: 'successfully working', timestamp: new Date().toISOString() })
+);
+
 
 // ── Auth (no middleware) ──────────────────────────────────────────────────────
 app.use('/api/v1/auth', require('./routes/auth'));
