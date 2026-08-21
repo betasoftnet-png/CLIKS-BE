@@ -383,6 +383,8 @@ const returnsController = {
                 )
             );
 
+            const targetRowId = existingReturn ? existingReturn.id : id;
+
             await db.prepare(`
                 UPDATE business_returns SET
                     status = COALESCE(?, status),
@@ -392,8 +394,8 @@ const returnsController = {
                     inspection_status = COALESCE(?, inspection_status),
                     warehouse_id = COALESCE(?, warehouse_id),
                     updated_at = ?
-                WHERE id = ?
-            `).run(status, refund_status, refund_date, refund_reference, inspection_status, targetWhName || warehouse_id, now, id);
+                WHERE (id = ? OR return_number = ?) AND user_id = ?
+            `).run(status, refund_status, refund_date, refund_reference, inspection_status, targetWhName || warehouse_id, now, targetRowId, id, req.user.id);
 
             if (warehouse_id) {
                 try {
@@ -407,7 +409,7 @@ const returnsController = {
 
                     if (!itemsToProcess || itemsToProcess.length === 0) {
                         try {
-                            itemsToProcess = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ? OR return_id = ?').all(id, existingReturn.id || id);
+                            itemsToProcess = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ? OR return_id = ?').all(targetRowId, id);
                         } catch(e) {}
                     }
 
@@ -423,10 +425,13 @@ const returnsController = {
                 }
             }
 
-            const updatedReturn = await db.prepare('SELECT * FROM business_returns WHERE id = ?').get(id);
-            if (updatedReturn) {
-                updatedReturn.items = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(id);
-            }
+            let updatedReturn = null;
+            try {
+                updatedReturn = await db.prepare('SELECT * FROM business_returns WHERE (id = ? OR return_number = ?) AND user_id = ?').get(targetRowId, id, req.user.id);
+                if (updatedReturn) {
+                    updatedReturn.items = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(updatedReturn.id);
+                }
+            } catch (e) {}
 
             return sendSuccess(res, updatedReturn || existingReturn, 'Return record updated successfully');
         } catch (error) {
