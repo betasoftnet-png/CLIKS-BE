@@ -79,6 +79,9 @@ class TokenService {
       payload.is_sub_id = true;
       payload.parent_email = user.email;
       payload.email = user.originalSubEmail; // Frontend will see this as the main email
+      if (user.subPermissions) {
+        payload.permissions = user.subPermissions;
+      }
     }
 
     const isBnx = this.isBnxMail(user?.email);

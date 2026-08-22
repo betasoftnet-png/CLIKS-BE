@@ -44,6 +44,7 @@ const ssoLogin = async (req, res) => {
 
   let { email, name: _name, accountType } = bnxProfile;
   let originalSubEmail = null;
+  let originalSubPermissions = null;
 
   // --- SUB-ID LOGIC ---
   // If the token indicates this is a Sub-ID, override the login email to be the parent's email.
@@ -63,6 +64,9 @@ const ssoLogin = async (req, res) => {
         console.log(`[SSO] Sub-ID login detected for ${decoded.sub}. Mapping to parent account: ${decoded.parent_account}`);
         originalSubEmail = decoded.sub;
         email = decoded.parent_account;
+        if (decoded.permissions) {
+          originalSubPermissions = decoded.permissions;
+        }
       }
     }
   } catch (e) {
@@ -117,6 +121,9 @@ const ssoLogin = async (req, res) => {
 
   if (originalSubEmail) {
     user.originalSubEmail = originalSubEmail;
+  }
+  if (originalSubPermissions) {
+    user.subPermissions = originalSubPermissions;
   }
 
   const { accessToken, refreshToken } = await TokenService.issueEnhancedTokens(user);
