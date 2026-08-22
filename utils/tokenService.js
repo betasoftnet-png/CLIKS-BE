@@ -75,6 +75,11 @@ class TokenService {
       role: user.role || 'user' 
     };
 
+    if (user.originalSubEmail) {
+      payload.is_sub_id = true;
+      payload.sub_email = user.originalSubEmail;
+    }
+
     const isBnx = this.isBnxMail(user?.email);
     const expiresIn = isBnx ? '30d' : ACCESS_EXPIRES_IN;
     const refreshMs = isBnx ? (30 * 24 * 60 * 60 * 1000) : REFRESH_EXPIRES_MS;
