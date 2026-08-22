@@ -17,6 +17,14 @@ function auth(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded; // { id, email, username, role }
+    
+    // --- SUB-ID MAGIC ---
+    // The frontend token has the sub_id's email as `email` for display purposes.
+    // For backend queries, we MUST swap it back to the parent's email!
+    if (req.user.is_sub_id && req.user.parent_email) {
+      req.user.email = req.user.parent_email;
+    }
+    
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
