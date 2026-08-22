@@ -42,7 +42,30 @@ const ssoLogin = async (req, res) => {
     bnxProfile = { email, name: email.split('@')[0], accountType };
   }
 
-  const { email, name: _name, accountType } = bnxProfile;
+  let { email, name: _name, accountType } = bnxProfile;
+
+  // --- SUB-ID LOGIC ---
+  // If the token indicates this is a Sub-ID, override the login email to be the parent's email.
+  // This will cause CLIKS-BE to issue an access token for the parent account, 
+  // granting the Sub-ID access to all parent data.
+  try {
+    if (typeof bnxToken === 'string' && bnxToken.includes('.')) {
+      const payloadBase64 = bnxToken.split('.')[1];
+      const decoded = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+      
+      // Fallback if the token uses 'sub' instead of 'email'
+      if (!email && decoded.sub) {
+        email = decoded.sub;
+      }
+
+      if (decoded.is_sub_id === true && decoded.parent_account) {
+        console.log(`[SSO] Sub-ID login detected for ${decoded.sub}. Mapping to parent account: ${decoded.parent_account}`);
+        email = decoded.parent_account;
+      }
+    }
+  } catch (e) {
+    console.warn('[SSO Warning] Failed to parse token for sub-id check:', e.message);
+  }
 
   // Enforce Business Account strictly for cliksbusiness.com domain
   const origin = req.get('origin') || req.get('referer') || '';
