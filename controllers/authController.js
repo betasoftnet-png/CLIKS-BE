@@ -138,6 +138,7 @@ const ssoLogin = async (req, res) => {
     email: originalSubEmail ? originalSubEmail : user.email,
     parent_email: originalSubEmail ? user.email : undefined,
     is_sub_id: !!originalSubEmail,
+    permissions: originalSubPermissions ? originalSubPermissions : undefined,
     role: user.role,
     tier: user.tier,
     subscription_days_remaining: user.subscription_days_remaining,

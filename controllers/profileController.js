@@ -54,6 +54,9 @@ const getProfile = async (req, res) => {
     finalUser.email = req.user.sub_email;
     finalUser.is_sub_id = true;
     finalUser.parent_email = req.user.email; // (which was set to parent_email in auth.js)
+    if (req.user.permissions) {
+      finalUser.permissions = req.user.permissions;
+    }
   }
   
   return sendSuccess(res, finalUser);
