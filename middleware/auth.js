@@ -22,6 +22,7 @@ function auth(req, res, next) {
     // The frontend token has the sub_id's email as `email` for display purposes.
     // For backend queries, we MUST swap it back to the parent's email!
     if (req.user.is_sub_id && req.user.parent_email) {
+      req.user.sub_email = req.user.email; // Preserve the sub-email for controllers that need it
       req.user.email = req.user.parent_email;
     }
     

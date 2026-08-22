@@ -49,7 +49,14 @@ const getProfile = async (req, res) => {
     return sendSuccess(res, safe);
   }
   
-  return sendSuccess(res, safeUser(user));
+  const finalUser = safeUser(user);
+  if (req.user.is_sub_id) {
+    finalUser.email = req.user.sub_email;
+    finalUser.is_sub_id = true;
+    finalUser.parent_email = req.user.email; // (which was set to parent_email in auth.js)
+  }
+  
+  return sendSuccess(res, finalUser);
 };
 
 // ── PATCH / — Update username, email, or avatar ───────────────────────────────
