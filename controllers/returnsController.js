@@ -127,20 +127,20 @@ const syncReturnItemsToWarehouse = async (userId, warehouseId, items, returnReco
                 existingStock = await db.prepare(`
                     SELECT * FROM stock 
                     WHERE user_id = ? 
-                      AND (LOWER(location) = ? OR LOWER(location) = ? OR LOWER(warehouse) = ? OR location IS NULL) 
+                      AND (LOWER(location) = ? OR LOWER(location) = ? OR location IS NULL) 
                       AND (LOWER(name) = ? OR (sku IS NOT NULL AND LOWER(sku) = ?))
                     LIMIT 1
-                `).get(userId, targetWhName.toLowerCase(), targetWhId.toLowerCase(), targetWhName.toLowerCase(), cleanPName.toLowerCase(), prodSku.toLowerCase());
+                `).get(userId, targetWhName.toLowerCase(), targetWhId.toLowerCase(), cleanPName.toLowerCase(), prodSku.toLowerCase());
             } catch(e) {}
 
             if (existingStock) {
-                await db.prepare('UPDATE stock SET quantity = quantity + ?, location = ?, warehouse = ?, updated_at = ? WHERE id = ?')
-                    .run(rQty, targetWhName, targetWhName, now, existingStock.id);
+                await db.prepare('UPDATE stock SET quantity = quantity + ?, location = ?, updated_at = ? WHERE id = ?')
+                    .run(rQty, targetWhName, now, existingStock.id);
             } else {
                 await db.prepare(`
-                    INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, warehouse, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `).run(userId, cleanPName, prodSku, prodCategory, prodUnit, prodPurchasePrice, rQty, targetWhName, targetWhName, now, now);
+                    INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(userId, cleanPName, prodSku, prodCategory, prodUnit, prodPurchasePrice, rQty, targetWhName, now, now);
             }
         }
 
@@ -213,16 +213,17 @@ const returnsController = {
     createReturn: async (req, res) => {
         const {
             return_number, return_type, return_date, status, invoice_id, purchase_id,
-            customer_name, supplier_name, refund_amount, adjustment_amount, tax_adjustment,
-            refund_mode, refund_status, refund_date, refund_reference, reason_code,
-            inspection_status, warehouse_id, items
+            customer_name, client_name, supplier_name, refund_amount, total_amount, amount,
+            adjustment_amount, tax_adjustment, refund_mode, refund_status, refund_date,
+            refund_reference, reason_code, inspection_status, warehouse_id, items
         } = req.body;
 
         try {
             const now = new Date().toISOString();
             const retNum = return_number || `RET-${Date.now().toString().slice(-6)}`;
+            const retDate = return_date || now;
 
-            let resolvedCustName = customer_name || null;
+            let resolvedCustName = customer_name || client_name || null;
             if (!resolvedCustName && invoice_id) {
                 try {
                     const inv = await db.prepare('SELECT client_name, customer_name, client_email FROM business_invoices WHERE user_id = ? AND (invoice_number = ? OR id = ?)').get(req.user.id, invoice_id, invoice_id);
@@ -232,6 +233,8 @@ const returnsController = {
                 } catch (e) {}
             }
 
+            const finalRefundAmount = parseFloat(refund_amount || total_amount || amount || 0) || 0;
+
             const result = await db.prepare(`
                 INSERT INTO business_returns (
                     user_id, return_number, return_type, return_date, status, invoice_id, purchase_id,
@@ -240,9 +243,9 @@ const returnsController = {
                     inspection_status, warehouse_id, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                req.user.id, retNum, return_type || 'sales', return_date, status || 'Pending',
+                req.user.id, retNum, return_type || 'sales', retDate, status || 'Pending',
                 invoice_id || null, purchase_id || null, resolvedCustName, supplier_name || null,
-                refund_amount || 0, adjustment_amount || 0, tax_adjustment || 0,
+                finalRefundAmount, parseFloat(adjustment_amount || 0) || 0, parseFloat(tax_adjustment || 0) || 0,
                 refund_mode || 'Cash', refund_status || 'pending', refund_date || null, refund_reference || null,
                 reason_code || null, inspection_status || 'Pending Check', warehouse_id || 'Main Godown',
                 now, now
@@ -293,11 +296,13 @@ const returnsController = {
             }
 
             if (warehouse_id) {
-                await syncReturnItemsToWarehouse(req.user.id, warehouse_id, parsedItems, { refund_amount });
+                await syncReturnItemsToWarehouse(req.user.id, warehouse_id, parsedItems, { refund_amount: finalRefundAmount });
             }
 
             const createdReturn = await db.prepare('SELECT * FROM business_returns WHERE id = ?').get(returnId);
-            createdReturn.items = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(returnId);
+            if (createdReturn) {
+                createdReturn.items = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(returnId);
+            }
 
             return sendSuccess(res, createdReturn, 'Return logged successfully', 201);
         } catch (error) {
@@ -353,7 +358,7 @@ const returnsController = {
                             user_id, return_number, return_type, return_date, status,
                             customer_name, refund_amount, warehouse_id, created_at, updated_at
                         ) VALUES (?, ?, 'sales', ?, 'Completed', ?, 0, ?, ?, ?)
-                    `).run(req.user.id, retNum, now, req.body.client_name || 'Customer', warehouse_id || '', now, now);
+                    `).run(req.user.id, retNum, now, req.body.client_name || req.body.customer_name || 'Customer', warehouse_id || '', now, now);
                     existingReturn = await db.prepare('SELECT * FROM business_returns WHERE id = ?').get(insRes.lastInsertRowid);
                 } catch(e) {
                     existingReturn = { id, user_id: req.user.id };
@@ -372,16 +377,6 @@ const returnsController = {
 
             const targetWhId = targetWh ? String(targetWh.id) : String(warehouse_id || '');
             const targetWhName = targetWh ? targetWh.name : (req.body.warehouse_name || warehouse_id || '');
-            const targetWhCode = targetWh ? (targetWh.code || `WH-${targetWh.id}`) : targetWhId;
-
-            const isAlreadyAssignedToWh = Boolean(
-                targetWhName &&
-                existingReturn.warehouse_id &&
-                (
-                    String(existingReturn.warehouse_id).toLowerCase() === targetWhName.toLowerCase() ||
-                    String(existingReturn.warehouse_id).toLowerCase() === targetWhId.toLowerCase()
-                )
-            );
 
             const targetRowId = existingReturn ? existingReturn.id : id;
 
@@ -395,7 +390,18 @@ const returnsController = {
                     warehouse_id = COALESCE(?, warehouse_id),
                     updated_at = ?
                 WHERE (id = ? OR return_number = ?) AND user_id = ?
-            `).run(status, refund_status, refund_date, refund_reference, inspection_status, targetWhName || warehouse_id, now, targetRowId, id, req.user.id);
+            `).run(
+                status ?? null,
+                refund_status ?? null,
+                refund_date ?? null,
+                refund_reference ?? null,
+                inspection_status ?? null,
+                targetWhName || warehouse_id || null,
+                now,
+                targetRowId,
+                id,
+                req.user.id
+            );
 
             if (warehouse_id) {
                 try {
