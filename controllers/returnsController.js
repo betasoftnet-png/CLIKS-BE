@@ -192,11 +192,17 @@ const returnsController = {
             // Fetch items for each return & resolve missing customer_name from invoice
             for (const ret of returns) {
                 ret.items = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(ret.id);
+                ret.amount = ret.refund_amount || 0;
+                ret.total_amount = ret.refund_amount || 0;
+                ret.invoice_number = ret.invoice_id || '';
+                ret.purchase_number = ret.purchase_id || '';
+                ret.client_name = ret.customer_name || ret.supplier_name || '';
                 if ((!ret.customer_name || !String(ret.customer_name).trim()) && ret.invoice_id) {
                     try {
                         const inv = await db.prepare('SELECT client_name, customer_name, client_email FROM business_invoices WHERE user_id = ? AND (invoice_number = ? OR id = ?)').get(req.user.id, ret.invoice_id, ret.invoice_id);
                         if (inv) {
                             ret.customer_name = inv.client_name || inv.customer_name || inv.client_email || '';
+                            ret.client_name = ret.customer_name;
                         }
                     } catch (e) {}
                 }
@@ -212,7 +218,7 @@ const returnsController = {
     // 2. Create Return
     createReturn: async (req, res) => {
         const {
-            return_number, return_type, return_date, status, invoice_id, purchase_id,
+            return_number, return_type, return_date, status, invoice_id, invoice_number, purchase_id, purchase_number,
             customer_name, client_name, supplier_name, refund_amount, total_amount, amount,
             adjustment_amount, tax_adjustment, refund_mode, refund_status, refund_date,
             refund_reference, reason_code, inspection_status, warehouse_id, items
@@ -223,16 +229,20 @@ const returnsController = {
             const retNum = return_number || `RET-${Date.now().toString().slice(-6)}`;
             const retDate = return_date || now;
 
+            const resolvedInvoiceId = invoice_id || invoice_number || null;
+            const resolvedPurchaseId = purchase_id || purchase_number || null;
+
             let resolvedCustName = customer_name || client_name || null;
-            if (!resolvedCustName && invoice_id) {
+            if (!resolvedCustName && resolvedInvoiceId) {
                 try {
-                    const inv = await db.prepare('SELECT client_name, customer_name, client_email FROM business_invoices WHERE user_id = ? AND (invoice_number = ? OR id = ?)').get(req.user.id, invoice_id, invoice_id);
+                    const inv = await db.prepare('SELECT client_name, customer_name, client_email FROM business_invoices WHERE user_id = ? AND (invoice_number = ? OR id = ?)').get(req.user.id, resolvedInvoiceId, resolvedInvoiceId);
                     if (inv) {
                         resolvedCustName = inv.client_name || inv.customer_name || inv.client_email || null;
                     }
                 } catch (e) {}
             }
 
+            const resolvedSupplierName = supplier_name || (return_type === 'purchase' ? client_name : null);
             const finalRefundAmount = parseFloat(refund_amount || total_amount || amount || 0) || 0;
 
             const result = await db.prepare(`
@@ -244,7 +254,7 @@ const returnsController = {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, retNum, return_type || 'sales', retDate, status || 'Pending',
-                invoice_id || null, purchase_id || null, resolvedCustName, supplier_name || null,
+                resolvedInvoiceId, resolvedPurchaseId, resolvedCustName, resolvedSupplierName,
                 finalRefundAmount, parseFloat(adjustment_amount || 0) || 0, parseFloat(tax_adjustment || 0) || 0,
                 refund_mode || 'Cash', refund_status || 'pending', refund_date || null, refund_reference || null,
                 reason_code || null, inspection_status || 'Pending Check', warehouse_id || 'Main Godown',
@@ -302,6 +312,11 @@ const returnsController = {
             const createdReturn = await db.prepare('SELECT * FROM business_returns WHERE id = ?').get(returnId);
             if (createdReturn) {
                 createdReturn.items = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(returnId);
+                createdReturn.amount = createdReturn.refund_amount || 0;
+                createdReturn.total_amount = createdReturn.refund_amount || 0;
+                createdReturn.invoice_number = createdReturn.invoice_id || '';
+                createdReturn.purchase_number = createdReturn.purchase_id || '';
+                createdReturn.client_name = createdReturn.customer_name || createdReturn.supplier_name || '';
             }
 
             return sendSuccess(res, createdReturn, 'Return logged successfully', 201);
