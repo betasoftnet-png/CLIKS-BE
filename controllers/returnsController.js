@@ -215,6 +215,21 @@ const returnsController = {
                 if (ret.return_type === 'warranty') {
                     ret.claim_type = ret.claim_type || 'Warranty Tracking';
                     ret.status = ret.status || 'Active';
+                    let resolvedPeriod = ret.warranty_period || null;
+                    if (!resolvedPeriod && ret.reason_code && ret.reason_code.includes('Warranty Period:')) {
+                        try {
+                            resolvedPeriod = ret.reason_code.split('Warranty Period:')[1].split('(')[0].trim();
+                        } catch (e) {}
+                    }
+                    if (!resolvedPeriod && ret.product_name) {
+                        try {
+                            const p = await db.prepare('SELECT warranty_period FROM business_products WHERE user_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1')
+                                .get(req.user.id, ret.product_name);
+                            if (p && p.warranty_period) resolvedPeriod = p.warranty_period;
+                        } catch (e) {}
+                    }
+                    ret.warranty_period = resolvedPeriod || '1 Year';
+                    ret.period = ret.warranty_period;
                 }
                 if ((!ret.customer_name || !String(ret.customer_name).trim()) && ret.invoice_id) {
                     try {
