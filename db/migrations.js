@@ -2768,6 +2768,18 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       // Column already exists
     }
 
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN has_warranty TEXT DEFAULT 'No'").run();
+    } catch (e) {
+      // Column already exists
+    }
+
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN warranty_period TEXT").run();
+    } catch (e) {
+      // Column already exists
+    }
+
     await seedHsnMaster();
   } catch (hsnErr) {
     console.warn("⚠️ Error initializing HSN master migrations:", hsnErr.message);

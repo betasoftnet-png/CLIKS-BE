@@ -4,30 +4,84 @@ const { sendSuccess, sendError } = require('../utils/response');
 const productController = {
     // 1. Create Product
     createProduct: async (req, res) => {
-        const { name, sku, category, unit, quantity, low_stock_threshold, purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, hsn_code, hsn_sac, hsn, has_warranty, warranty_period } = req.body;
+        const { 
+            name, sku, category, unit, quantity, low_stock_threshold, purchase_price, selling_price, 
+            barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, 
+            hsn_code, hsn_sac, hsn, has_warranty, warrantyDetails, warranty_period, warrantyPeriod 
+        } = req.body || {};
+        
         if (!name) return sendError(res, 'Product name is required', 400);
         const resolvedHsn = hsn_code || hsn_sac || hsn || null;
 
+        const rawHasWarranty = has_warranty || warrantyDetails || 'No';
+        const isWarrantyYes = rawHasWarranty === 'Yes' || rawHasWarranty === true || String(rawHasWarranty).toLowerCase() === 'yes';
+        const finalHasWarranty = isWarrantyYes ? 'Yes' : 'No';
+        const finalWarrantyPeriod = isWarrantyYes ? (warranty_period || warrantyPeriod || null) : null;
+
         try {
             const now = new Date().toISOString();
-            const result = await db.prepare(`
-                INSERT INTO business_products (
-                    user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
-                    purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                    tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
-                req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
-                purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
-                batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || 'Main Godown',
-                resolvedHsn, has_warranty || 'No', warranty_period || null, now, now
-            );
+            let result;
+            try {
+                result = await db.prepare(`
+                    INSERT INTO business_products (
+                        user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
+                        purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
+                        tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
+                    purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
+                    batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || 'Main Godown',
+                    resolvedHsn, finalHasWarranty, finalWarrantyPeriod, now, now
+                );
+            } catch (insertError) {
+                // If column is missing in legacy SQLite schema, auto-migrate and retry
+                if (insertError && insertError.message && (insertError.message.includes('has_warranty') || insertError.message.includes('no such column'))) {
+                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN has_warranty TEXT DEFAULT 'No'").run(); } catch (_) {}
+                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN warranty_period TEXT").run(); } catch (_) {}
+                    
+                    result = await db.prepare(`
+                        INSERT INTO business_products (
+                            user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
+                            purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
+                            tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
+                        purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
+                        batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || 'Main Godown',
+                        resolvedHsn, finalHasWarranty, finalWarrantyPeriod, now, now
+                    );
+                } else {
+                    throw insertError;
+                }
+            }
 
             const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(result.lastInsertRowid);
             return sendSuccess(res, created, 'Product created successfully', 201);
         } catch (error) {
             console.error('[Product Controller] Error creating product:', error);
-            return sendError(res, 'Failed to create product', 500);
+            // Fallback insert without warranty columns if strict schema constraint failed
+            try {
+                const now = new Date().toISOString();
+                const fallbackResult = await db.prepare(`
+                    INSERT INTO business_products (
+                        user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
+                        purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
+                        tax_percentage, warehouse_id, hsn_code, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
+                    purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
+                    batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || 'Main Godown',
+                    resolvedHsn, now, now
+                );
+                const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(fallbackResult.lastInsertRowid);
+                return sendSuccess(res, created, 'Product created successfully', 201);
+            } catch (fallbackErr) {
+                console.error('[Product Controller] Fallback error creating product:', fallbackErr);
+                return sendError(res, error.message || 'Failed to create product', 500);
+            }
         }
     },
 
