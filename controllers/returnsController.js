@@ -257,13 +257,13 @@ const returnsController = {
                 resolvedInvoiceId, resolvedPurchaseId, resolvedCustName, resolvedSupplierName,
                 finalRefundAmount, parseFloat(adjustment_amount || 0) || 0, parseFloat(tax_adjustment || 0) || 0,
                 refund_mode || 'Cash', refund_status || 'pending', refund_date || null, refund_reference || null,
-                reason_code || null, inspection_status || 'Pending Check', warehouse_id || 'Main Godown',
+                reason_code || null, inspection_status || 'Pending Check', warehouse_id || null,
                 now, now
             );
 
             const returnId = result.lastInsertRowid;
 
-            // Save return items & update inventory stock
+            // Save return items
             const parsedItems = Array.isArray(items) ? items : (typeof items === 'string' ? JSON.parse(items || '[]') : []);
             for (const item of parsedItems) {
                 const rQty = parseFloat(item.return_quantity || item.quantity) || 1;
@@ -281,31 +281,10 @@ const returnsController = {
                     rQty, item.replacement_quantity || 0, rPrice,
                     item.gst_percentage || 18, item.tax_amount || 0, rTotal
                 );
-
-                // Add returned quantities back to inventory stock
-                if (item.product_id || pName) {
-                    try {
-                        let prod = null;
-                        if (item.product_id) {
-                            prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND id = ?').get(req.user.id, item.product_id);
-                        }
-                        if (!prod && pName) {
-                            prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ?').get(req.user.id, String(pName).toLowerCase());
-                        }
-                        if (prod) {
-                            const currentQty = parseFloat(prod.quantity) || 0;
-                            const newQty = currentQty + rQty;
-                            const threshold = parseFloat(prod.low_stock_threshold) || 5;
-                            const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < threshold ? 'Low Stock' : 'In Stock');
-                            await db.prepare('UPDATE business_products SET quantity = ?, stock_status = ?, updated_at = ? WHERE id = ?').run(newQty, newStatus, now, prod.id);
-                        }
-                    } catch (e) {
-                        console.warn('[Returns Controller] Failed to update product stock:', e.message);
-                    }
-                }
             }
 
-            if (warehouse_id) {
+            // Sync stock ONLY if a warehouse was explicitly specified during creation
+            if (warehouse_id && String(warehouse_id).trim() !== '') {
                 await syncReturnItemsToWarehouse(req.user.id, warehouse_id, parsedItems, { refund_amount: finalRefundAmount });
             }
 
