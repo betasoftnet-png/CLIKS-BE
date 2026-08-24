@@ -189,14 +189,27 @@ const returnsController = {
 
             const returns = await db.prepare(query).all(...params);
 
-            // Fetch items for each return & resolve missing customer_name from invoice
+            // Fetch items for each return & resolve missing customer_name/product_name from invoice/return items
             for (const ret of returns) {
                 ret.items = await db.prepare('SELECT * FROM business_return_items WHERE return_id = ?').all(ret.id);
                 ret.amount = ret.refund_amount || 0;
                 ret.total_amount = ret.refund_amount || 0;
                 ret.invoice_number = ret.invoice_id || '';
                 ret.purchase_number = ret.purchase_id || '';
-                ret.client_name = ret.customer_name || ret.supplier_name || '';
+                ret.client_name = ret.customer_name || ret.supplier_name || 'Customer';
+                ret.claim_number = ret.return_number || `CLM-${ret.id}`;
+                if (ret.items && ret.items.length > 0) {
+                    ret.product_name = ret.items[0].product_name || ret.product_name || 'Product';
+                    ret.item_name = ret.product_name;
+                    ret.serial_number = ret.items[0].serial_number || ret.serial_number || 'N/A';
+                } else {
+                    ret.item_name = ret.product_name || 'Product';
+                    ret.serial_number = ret.serial_number || 'N/A';
+                }
+                if (ret.return_type === 'warranty') {
+                    ret.claim_type = ret.claim_type || 'Warranty Tracking';
+                    ret.status = ret.status || 'Active';
+                }
                 if ((!ret.customer_name || !String(ret.customer_name).trim()) && ret.invoice_id) {
                     try {
                         const inv = await db.prepare('SELECT client_name, customer_name, client_email FROM business_invoices WHERE user_id = ? AND (invoice_number = ? OR id = ?)').get(req.user.id, ret.invoice_id, ret.invoice_id);

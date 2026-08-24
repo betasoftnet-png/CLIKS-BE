@@ -297,6 +297,20 @@ const posController = {
                 console.error('[POS Controller] Sync notice:', syncErr);
             }
 
+            // Automatic warranty tracking for warranty-enabled products
+            try {
+                const { processWarrantyForCompletedSale } = require('../utils/warrantyHelper');
+                await processWarrantyForCompletedSale({
+                    userId,
+                    invoiceNumber,
+                    customerName: client_name || 'Walk-in Customer',
+                    items,
+                    purchaseDate: now
+                });
+            } catch (warrErr) {
+                console.error('[POS Controller] Warranty sync notice:', warrErr.message || warrErr);
+            }
+
             return sendSuccess(res, createdInvoice, 'POS checkout completed successfully', 201);
         } catch (error) {
             console.error('[POS Controller] Checkout error:', error);

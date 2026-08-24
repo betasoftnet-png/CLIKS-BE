@@ -192,6 +192,21 @@ const billingController = {
                 console.error('[SYNC WARNING] Customer invoice integration error:', syncErr.message || syncErr);
             }
 
+            // Automatic warranty tracking for warranty-enabled products
+            try {
+                const { processWarrantyForCompletedSale } = require('../utils/warrantyHelper');
+                const parsedItems = typeof items === 'string' ? JSON.parse(items || '[]') : (items || []);
+                await processWarrantyForCompletedSale({
+                    userId: req.user.id,
+                    invoiceNumber: invNum,
+                    customerName: client_name,
+                    items: parsedItems,
+                    purchaseDate: now
+                });
+            } catch (warrErr) {
+                console.error('[Billing Controller] Warranty sync notice:', warrErr.message || warrErr);
+            }
+
             return sendSuccess(res, createdInvoice, 'Invoice created successfully', 201);
         } catch (error) {
             console.error('[Billing Controller] Error creating invoice:', error);
