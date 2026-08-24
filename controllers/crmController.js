@@ -52,14 +52,17 @@ const crmController = {
                 if (r.name) salesByName.set(r.name, (salesByName.get(r.name) || 0) + val);
             });
 
-            const normalized = customers.map(c => {
+            const normalized = await Promise.all(customers.map(async c => {
                 const phoneVal = c.phone_number || c.phone || '';
                 const panVal = c.pan_number || c.pan || '';
                 const addrVal = c.billing_address || c.address || '';
                 const emailLower = c.email ? String(c.email).toLowerCase().trim() : '';
                 const nameLower = c.name ? String(c.name).toLowerCase().trim() : '';
 
-                const connStatus = connMapByCustId.get(c.id) || (emailLower ? connMapByEmail.get(emailLower) : null) || 'UNCONNECTED';
+                let connStatus = connMapByCustId.get(c.id) || (emailLower ? connMapByEmail.get(emailLower) : null);
+                if (!connStatus || connStatus === 'UNCONNECTED') {
+                    connStatus = await connectionService.getCustomerConnectionStatus(userId, c.id, c.email);
+                }
                 const totalSales = (emailLower ? salesByEmail.get(emailLower) : 0) || (nameLower ? salesByName.get(nameLower) : 0) || 0;
 
                 return {
@@ -76,7 +79,7 @@ const crmController = {
                     totalSales: totalSales,
                     total_spent: totalSales
                 };
-            });
+            }));
 
             // Sort customers by total_sales DESC so top customers appear first
             normalized.sort((a, b) => b.total_sales - a.total_sales);

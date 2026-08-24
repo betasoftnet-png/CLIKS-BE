@@ -91,9 +91,34 @@ const connectionService = {
 
         if (conn) {
             const st = String(conn.status).toLowerCase();
-            if (st === 'accepted' || st === 'connected') return 'CONNECTED';
+            if (st === 'accepted' || st === 'connected' || st === 'active') return 'CONNECTED';
             if (st === 'pending') return 'PENDING';
             if (st === 'rejected') return 'UNCONNECTED';
+        }
+
+        if (emailLower && business_id) {
+            try {
+                const ai = await db.prepare(`
+                    SELECT * FROM active_integrations 
+                    WHERE merchant_business_id = ? AND LOWER(customer_email) = ?
+                `).get(business_id, emailLower);
+                if (ai) {
+                    const st = String(ai.status).toLowerCase();
+                    if (st === 'active' || st === 'connected' || st === 'accepted') return 'CONNECTED';
+                }
+            } catch (e) {}
+
+            try {
+                const b2b = await db.prepare(`
+                    SELECT * FROM b2b_connections 
+                    WHERE (requester_user_id = ? AND LOWER(target_email) = ?) OR (target_user_id = ? AND LOWER(requester_email) = ?)
+                `).get(business_id, emailLower, business_id, emailLower);
+                if (b2b) {
+                    const st = String(b2b.status).toLowerCase();
+                    if (st === 'accepted' || st === 'connected' || st === 'active') return 'CONNECTED';
+                    if (st === 'pending') return 'PENDING';
+                }
+            } catch (e) {}
         }
 
         // If no connection record exists, check if email matches a website user
