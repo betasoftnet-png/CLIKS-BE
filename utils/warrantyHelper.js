@@ -58,8 +58,8 @@ async function processWarrantyForCompletedSale({ userId, invoiceNumber, customer
         }
         if (!masterProd && pName) {
             try {
-                masterProd = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ? LIMIT 1')
-                    .get(userId, pName.toLowerCase());
+                masterProd = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND (LOWER(TRIM(name)) = LOWER(TRIM(?)) OR LOWER(TRIM(name)) LIKE LOWER(TRIM(?))) LIMIT 1')
+                    .get(userId, pName, `%${pName}%`);
             } catch (e) {}
         }
 
@@ -132,7 +132,38 @@ async function processWarrantyForCompletedSale({ userId, invoiceNumber, customer
     }
 }
 
+async function syncPastInvoicesWarranties(userId) {
+    if (!userId) return;
+    try {
+        const invoices = await db.prepare(`
+            SELECT * FROM business_invoices 
+            WHERE user_id = ? AND items IS NOT NULL
+            ORDER BY id DESC LIMIT 50
+        `).all(userId);
+
+        for (const inv of invoices) {
+            let itemsArr = [];
+            try {
+                itemsArr = typeof inv.items === 'string' ? JSON.parse(inv.items) : (inv.items || []);
+            } catch (e) {}
+
+            if (Array.isArray(itemsArr) && itemsArr.length > 0) {
+                await processWarrantyForCompletedSale({
+                    userId,
+                    invoiceNumber: inv.invoice_number || `INV-${inv.id}`,
+                    customerName: inv.client_name || inv.customer_name || 'Customer',
+                    items: itemsArr,
+                    purchaseDate: inv.created_at || new Date().toISOString()
+                });
+            }
+        }
+    } catch (err) {
+        console.error('[Warranty Retroactive Sync Warning]', err.message || err);
+    }
+}
+
 module.exports = {
     calculateWarrantyExpiry,
-    processWarrantyForCompletedSale
+    processWarrantyForCompletedSale,
+    syncPastInvoicesWarranties
 };

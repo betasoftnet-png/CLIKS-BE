@@ -165,6 +165,12 @@ const returnsController = {
     getReturns: async (req, res) => {
         const { search, status, customer_id, invoice_id } = req.query;
         try {
+            // Retroactively scan completed invoices for missing warranty records
+            try {
+                const { syncPastInvoicesWarranties } = require('../utils/warrantyHelper');
+                await syncPastInvoicesWarranties(req.user.id);
+            } catch (syncErr) {}
+
             let query = `SELECT * FROM business_returns WHERE user_id = ?`;
             const params = [req.user.id];
 
