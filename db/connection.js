@@ -255,6 +255,8 @@ if (dbType === 'postgres') {
       "ALTER TABLE business_products ADD COLUMN expiry_date TEXT",
       "ALTER TABLE business_products ADD COLUMN tax_percentage REAL DEFAULT 18",
       "ALTER TABLE business_products ADD COLUMN warehouse_id TEXT",
+      "ALTER TABLE business_products ADD COLUMN has_warranty TEXT DEFAULT 'No'",
+      "ALTER TABLE business_products ADD COLUMN warranty_period TEXT",
       "ALTER TABLE inventory ADD COLUMN unit TEXT DEFAULT 'PCS'",
       "ALTER TABLE stock ADD COLUMN unit TEXT DEFAULT 'PCS'",
       "ALTER TABLE business_purchases ADD COLUMN supplier_response_type TEXT",

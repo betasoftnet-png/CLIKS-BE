@@ -4,7 +4,7 @@ const { sendSuccess, sendError } = require('../utils/response');
 const productController = {
     // 1. Create Product
     createProduct: async (req, res) => {
-        const { name, sku, category, unit, quantity, low_stock_threshold, purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, hsn_code, hsn_sac, hsn } = req.body;
+        const { name, sku, category, unit, quantity, low_stock_threshold, purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, hsn_code, hsn_sac, hsn, has_warranty, warranty_period } = req.body;
         if (!name) return sendError(res, 'Product name is required', 400);
         const resolvedHsn = hsn_code || hsn_sac || hsn || null;
 
@@ -14,13 +14,13 @@ const productController = {
                 INSERT INTO business_products (
                     user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
                     purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                    tax_percentage, warehouse_id, hsn_code, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                 purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                 batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || 'Main Godown',
-                resolvedHsn, now, now
+                resolvedHsn, has_warranty || 'No', warranty_period || null, now, now
             );
 
             const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(result.lastInsertRowid);
@@ -111,6 +111,8 @@ const productController = {
             const tax_percentage = body.tax_percentage !== undefined ? body.tax_percentage : product.tax_percentage;
             const warehouse_id = body.warehouse_id !== undefined ? body.warehouse_id : product.warehouse_id;
             const resolvedHsn = body.hsn_code || body.hsn_sac || body.hsn || product.hsn_code || null;
+            const has_warranty = body.has_warranty !== undefined ? body.has_warranty : (product.has_warranty || 'No');
+            const warranty_period = body.warranty_period !== undefined ? body.warranty_period : product.warranty_period;
 
             try {
                 await db.prepare(`
@@ -118,13 +120,13 @@ const productController = {
                         name = ?, sku = ?, category = ?, unit = ?, status = ?, stock_status = ?, quantity = ?,
                         low_stock_threshold = ?, purchase_price = ?, selling_price = ?, barcode = ?,
                         serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?,
-                        warehouse_id = ?, hsn_code = ?, updated_at = ?
+                        warehouse_id = ?, hsn_code = ?, has_warranty = ?, warranty_period = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
                     name, sku || null, category || null, unit, status || 'active', newStockStatus,
                     newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
                     barcode || null, serial_number || null, batch_number || null, expiry_date || null,
-                    tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, new Date().toISOString(), id, req.user.id
+                    tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null, new Date().toISOString(), id, req.user.id
                 );
             } catch (sqlErr) {
                 await db.prepare(`
