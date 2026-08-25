@@ -161,7 +161,7 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
             paymentStatus = numPaid >= numTotal ? 'Paid' : (numPaid > 0 ? 'Partially Paid' : 'Unpaid');
         }
         const invoiceStatus = createdInvoice.status || 'Active';
-        const invoiceDate = createdInvoice.created_at || createdInvoice.due_date || now;
+        const invoiceDate = createdInvoice.invoice_date || createdInvoice.invoiceDate || createdInvoice.date || createdInvoice.created_at || createdInvoice.due_date || now;
         const dueDate = createdInvoice.due_date || '';
         const invoiceType = createdInvoice.invoice_type || 'GST';
         const paymentMode = createdInvoice.payment_mode || 'Cash';

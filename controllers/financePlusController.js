@@ -442,7 +442,8 @@ const getCustomerPurchases = async (req, res) => {
     grand_total: p.net_amount || p.total_amount,
     purchase_status: p.invoice_status || 'Paid',
     points_earned: parseInt(p.points_earned) || Math.floor((p.net_amount || p.total_amount) / 100),
-    timestamp: p.created_at || p.invoice_date
+    timestamp: p.invoice_date || p.created_at,
+    invoice_date: p.invoice_date || p.created_at
   }));
 
   return sendSuccess(res, normalized);

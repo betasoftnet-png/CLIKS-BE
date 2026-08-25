@@ -78,7 +78,8 @@ const customerPurchaseController = {
                 p.send_to_customer_history = true;
                 p.sendPurchaseHistoryToCustomer = true;
                 p.grand_total = p.net_amount || p.total_amount;
-                p.timestamp = p.created_at || p.invoice_date;
+                p.timestamp = p.invoice_date || p.created_at;
+                p.invoice_date = p.invoice_date || p.created_at;
 
                 if (p.items && typeof p.items === 'string') {
                     try { p.items = JSON.parse(p.items); } catch (e) { p.items = []; }
