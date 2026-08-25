@@ -236,7 +236,9 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
                 discount_amount: discAmt,
                 gst_percent: gstPct,
                 gst_amount: gstAmt,
-                item_total: total
+                item_total: total,
+                has_warranty: item.has_warranty || item.hasWarranty || item.warrantyDetails || item.warranty_details,
+                warranty_period: item.warranty_period || item.warrantyPeriod || item.period
             };
         });
         const itemsJson = JSON.stringify(formattedItems);
