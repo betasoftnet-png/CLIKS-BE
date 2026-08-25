@@ -2060,6 +2060,18 @@ const caController = {
                 const owner = await db.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
                 if (owner) ownerId = owner.id;
             }
+            if (!ownerId) {
+                try {
+                    const portalRow = await db.prepare("SELECT business_owner_id FROM portal_credentials WHERE connected_ca_id = ? AND shared_status = 'Shared' LIMIT 1").get(req.user.id);
+                    if (portalRow) ownerId = portalRow.business_owner_id;
+                } catch(e) {}
+            }
+            if (!ownerId) {
+                try {
+                    const inv = await db.prepare("SELECT sender_id, receiver_id FROM ca_invitations WHERE (sender_id = ? OR receiver_id = ?) AND status = 'Accepted' ORDER BY id DESC LIMIT 1").get(req.user.id, req.user.id);
+                    if (inv) ownerId = inv.sender_id === req.user.id ? inv.receiver_id : inv.sender_id;
+                } catch(e) {}
+            }
 
             let legacyGstUser = null;
             let legacyGstPass = null;
@@ -2277,6 +2289,18 @@ const caController = {
             if (!ownerId && client.email) {
                 const owner = await db.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?)").get(client.email);
                 if (owner) ownerId = owner.id;
+            }
+            if (!ownerId) {
+                try {
+                    const portalRow = await db.prepare("SELECT business_owner_id FROM portal_credentials WHERE connected_ca_id = ? AND shared_status = 'Shared' LIMIT 1").get(req.user.id);
+                    if (portalRow) ownerId = portalRow.business_owner_id;
+                } catch(e) {}
+            }
+            if (!ownerId) {
+                try {
+                    const inv = await db.prepare("SELECT sender_id, receiver_id FROM ca_invitations WHERE (sender_id = ? OR receiver_id = ?) AND status = 'Accepted' ORDER BY id DESC LIMIT 1").get(req.user.id, req.user.id);
+                    if (inv) ownerId = inv.sender_id === req.user.id ? inv.receiver_id : inv.sender_id;
+                } catch(e) {}
             }
 
             let gstShareStatus = client.gst_share_status || 'Not Shared';
