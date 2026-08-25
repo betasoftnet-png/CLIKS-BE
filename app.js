@@ -39,13 +39,20 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
   } else {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Version, X-Request-Id, Cache-Control, Pragma');
-  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, X-API-Version');
+  
+  const reqHeaders = req.headers['access-control-request-headers'];
+  if (reqHeaders) {
+    res.setHeader('Access-Control-Allow-Headers', reqHeaders);
+  } else {
+    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Version, X-Request-Id, Cache-Control, Pragma, *');
+  }
+  res.setHeader('Access-Control-Expose-Headers', '*');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -71,12 +78,11 @@ const allowedOriginsSet = new Set([...defaultOrigins, ...envOrigins]);
 
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
     return callback(null, true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Origin', 'Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version', 'X-Request-Id', 'Cache-Control', 'Pragma'],
+  allowedHeaders: ['*'],
   optionsSuccessStatus: 200
 };
 
