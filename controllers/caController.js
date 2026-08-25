@@ -289,8 +289,16 @@ const initTableAndColumns = async () => {
                 business_owner_id INTEGER,
                 start_time TEXT,
                 stop_time TEXT,
+                end_time TEXT,
                 duration_seconds INTEGER,
                 audit_date TEXT,
+                audit_description TEXT,
+                hourly_rate REAL DEFAULT 500,
+                professional_fee REAL DEFAULT 0,
+                gst_amount REAL DEFAULT 0,
+                grand_total REAL DEFAULT 0,
+                invoice_number TEXT,
+                payment_status TEXT DEFAULT 'Unpaid',
                 status TEXT DEFAULT 'Completed',
                 created_at TEXT
             )
@@ -368,6 +376,14 @@ const initTableAndColumns = async () => {
         try { await db.prepare("ALTER TABLE ca_payments ADD COLUMN ca_user_id INTEGER").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_payments ADD COLUMN created_at TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN session_id TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN end_time TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN audit_description TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN hourly_rate REAL DEFAULT 500").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN professional_fee REAL DEFAULT 0").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN gst_amount REAL DEFAULT 0").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN grand_total REAL DEFAULT 0").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN invoice_number TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN payment_status TEXT DEFAULT 'Unpaid'").run(); } catch(e) {}
     } catch (e) {
         console.error('[CA Dynamic Init Error]', e.message);
     }

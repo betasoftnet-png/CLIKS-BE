@@ -1,9 +1,15 @@
 const db = require('../db/connection');
 
-try {
-    console.log('Testing binding undefined...');
-    const res = db.prepare("SELECT business_owner_id, name FROM ca_clients WHERE id = ?").get(undefined);
-    console.log('Result:', res);
-} catch (err) {
-    console.error('BINDING UNDEFINED THREW ERROR:', err);
+async function testColumns() {
+    try {
+        const tableInfo = await db.prepare("PRAGMA table_info(ca_audit_sessions)").all();
+        console.log('ca_audit_sessions columns:', tableInfo.map(c => c.name));
+
+        const viewInfo = await db.prepare("PRAGMA table_info(audit_sessions)").all();
+        console.log('audit_sessions view columns:', viewInfo.map(c => c.name));
+    } catch(e) {
+        console.error('Error PRAGMA:', e);
+    }
 }
+
+testColumns();

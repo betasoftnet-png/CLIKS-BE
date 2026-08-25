@@ -212,8 +212,16 @@ CREATE TABLE IF NOT EXISTS ca_audit_sessions (
   business_owner_id INTEGER,
   start_time TEXT,
   stop_time TEXT,
+  end_time TEXT,
   duration_seconds INTEGER,
   audit_date TEXT,
+  audit_description TEXT,
+  hourly_rate REAL DEFAULT 500,
+  professional_fee REAL DEFAULT 0,
+  gst_amount REAL DEFAULT 0,
+  grand_total REAL DEFAULT 0,
+  invoice_number TEXT,
+  payment_status TEXT DEFAULT 'Unpaid',
   status TEXT DEFAULT 'Completed',
   created_at TEXT
 );
