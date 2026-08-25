@@ -2047,8 +2047,6 @@ const caController = {
     },
     getClientGstCredentials: async (req, res) => {
         const { id: clientId } = req.params;
-    getClientGstCredentials: async (req, res) => {
-        const { id: clientId } = req.params;
         try {
             const client = await db.prepare("SELECT * FROM ca_clients WHERE id = ? AND ca_user_id = ?").get(clientId, req.user.id);
             if (!client) {
