@@ -686,9 +686,6 @@ const caController = {
         if (!email || !email.includes('@')) {
             return sendError(res, 'Valid receiver email is required', 400);
         }
-        if (!email.toLowerCase().endsWith('@bnxmail.com')) {
-            return sendError(res, 'Email address must end with @bnxmail.com (e.g. finpro@bnxmail.com)', 400);
-        }
         
         try {
             // Check self-invitation
@@ -906,9 +903,6 @@ const caController = {
     addClient: async (req, res) => {
         const { name, email, status, regime, income } = req.body;
         if (!name) return sendError(res, 'Client name is required', 400);
-        if (email && !email.toLowerCase().endsWith('@bnxmail.com')) {
-            return sendError(res, 'Email address must end with @bnxmail.com (e.g. client@bnxmail.com)', 400);
-        }
         try {
             const pending_filings = status === 'Active' ? 0 : 1;
             const result = await db.prepare(`

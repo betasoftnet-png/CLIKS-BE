@@ -19,15 +19,12 @@ function errorHandler(err, req, res, _next) {
   const origin = req.headers?.origin;
   if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
   } else {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  const reqHeaders = req.headers?.['access-control-request-headers'];
-  res.setHeader('Access-Control-Allow-Headers', reqHeaders || 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Version, X-Request-Id, Cache-Control, Pragma, *');
-  res.setHeader('Access-Control-Expose-Headers', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Version, X-Request-Id, Cache-Control, Pragma');
 
   // ── Zod Validation Error ──────────────────────────────────────────────────
   if (err instanceof ZodError) {
