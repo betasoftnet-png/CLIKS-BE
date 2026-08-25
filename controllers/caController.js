@@ -331,6 +331,11 @@ const initTableAndColumns = async () => {
                 business_owner_id INTEGER NOT NULL,
                 client_id INTEGER,
                 audit_session_id INTEGER,
+                audit_description TEXT,
+                start_time TEXT,
+                end_time TEXT,
+                hourly_rate REAL DEFAULT 500,
+                duration_text TEXT,
                 amount REAL DEFAULT 0,
                 gst_amount REAL DEFAULT 0,
                 total_amount REAL DEFAULT 0,
@@ -384,6 +389,11 @@ const initTableAndColumns = async () => {
         try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN grand_total REAL DEFAULT 0").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN invoice_number TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_audit_sessions ADD COLUMN payment_status TEXT DEFAULT 'Unpaid'").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_professional_invoices ADD COLUMN audit_description TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_professional_invoices ADD COLUMN start_time TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_professional_invoices ADD COLUMN end_time TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_professional_invoices ADD COLUMN hourly_rate REAL DEFAULT 500").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE ca_professional_invoices ADD COLUMN duration_text TEXT").run(); } catch(e) {}
     } catch (e) {
         console.error('[CA Dynamic Init Error]', e.message);
     }
