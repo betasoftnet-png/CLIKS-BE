@@ -373,6 +373,22 @@ const initTableAndColumns = async () => {
             )
         `).run();
 
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS portal_credentials (
+                id ${idType},
+                business_owner_id INTEGER NOT NULL,
+                connected_ca_id INTEGER,
+                portal_type TEXT NOT NULL,
+                username TEXT,
+                encrypted_password TEXT,
+                shared_status TEXT DEFAULT 'Shared',
+                shared_date TEXT,
+                revoked_date TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        `).run();
+
         try { await db.prepare("ALTER TABLE notifications ADD COLUMN sender_id INTEGER").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE notifications ADD COLUMN receiver_id INTEGER").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE notifications ADD COLUMN related_task_id INTEGER").run(); } catch(e) {}
@@ -1023,10 +1039,21 @@ const caController = {
             await ensureSeededPracticeData(req.user.id);
             const email = req.user.email || '';
 
-            // Query tasks where:
-            // 1. Logged-in user is the creator (CA)
-            // 2. Logged-in user is the assigned Business Owner (by business_owner_id or client_id)
-            // 3. Logged-in user is the client by email or name match
+            // Automated Filing Status:
+            // 1. Pending: Initial state when task is assigned.
+            // 2. In Progress: Automatically updated when the Business Owner views/sees the requested document/task.
+            try {
+                await db.prepare(`
+                    UPDATE ca_tasks 
+                    SET status = 'In Progress' 
+                    WHERE status = 'Pending' 
+                      AND (business_owner_id = ? OR client_id = ? OR LOWER(client_email) = LOWER(?))
+                      AND ca_user_id != ?
+                `).run(req.user.id, req.user.id, email, req.user.id);
+            } catch (e) {
+                console.error('[CA getTasks Auto In-Progress Error]', e);
+            }
+
             const list = await db.prepare(`
                 SELECT * FROM ca_tasks 
                 WHERE ca_user_id = ? 
@@ -1240,7 +1267,7 @@ const caController = {
 
             await db.prepare(`
                 UPDATE ca_tasks 
-                SET attached_file = ?, status = 'Uploaded', phase = ?
+                SET attached_file = ?, status = 'Completed', phase = ?
                 WHERE id = ?
             `).run(attachedFile, phase || null, id);
 
@@ -1271,7 +1298,7 @@ const caController = {
                 }
             }
 
-            return sendSuccess(res, { id: parseInt(id), status: 'Uploaded', attachedFile, version: nextVersion, phase: phase || null }, 'Task document uploaded successfully');
+            return sendSuccess(res, { id: parseInt(id), status: 'Completed', attachedFile, version: nextVersion, phase: phase || null }, 'Task document uploaded successfully');
         } catch (error) {
             console.error('[CA uploadTaskDoc Error]', error);
             return sendError(res, 'Failed to upload task document', 500);
@@ -3369,7 +3396,6 @@ const caController = {
             `).get(userId, userId);
 
             if (!record) {
-                // Fallback check on users table
                 const user = await db.prepare("SELECT gst_username, gst_password, gst_share_status, gst_shared_at, gst_connected_advisor_id FROM users WHERE id = ?").get(userId);
                 if (user && user.gst_username) {
                     record = {
@@ -3384,26 +3410,56 @@ const caController = {
                 }
             }
 
-            if (!record) {
-                return sendSuccess(res, {
-                    gstUsername: '',
-                    sharedStatus: 'Not Shared',
-                    isShared: false,
-                    passwordAvailable: false
-                }, 'No GST credentials stored');
-            }
+            const targetOwnerId = record ? record.business_owner_id : userId;
+            const isOwner = targetOwnerId === userId;
+            const isCA = (record && record.connected_ca_id === userId) || !isOwner;
+            const isShared = record ? record.shared_status === 'Shared' : false;
 
-            const isOwner = record.business_owner_id === userId;
-            const isCA = record.connected_ca_id === userId || !isOwner;
-            const isShared = record.shared_status === 'Shared';
+            // Retrieve multi-portal credentials
+            let portalsList = [];
+            try {
+                portalsList = await db.prepare(`
+                    SELECT * FROM portal_credentials 
+                    WHERE business_owner_id = ? OR connected_ca_id = ?
+                `).all(targetOwnerId, targetOwnerId);
+            } catch(e) {}
+
+            const portalsData = {};
+            const portalKeys = ['gst', 'incometax', 'traces', 'mca', 'epfo', 'stategst'];
+            portalKeys.forEach(key => {
+                const item = portalsList.find(p => p.portal_type === key);
+                if (item) {
+                    const dec = (isOwner || (isCA && item.shared_status === 'Shared')) ? (decrypt(item.encrypted_password) || item.encrypted_password) : '';
+                    portalsData[key] = {
+                        username: item.username || '',
+                        password: dec || '',
+                        sharedStatus: item.shared_status || 'Not Shared',
+                        isShared: item.shared_status === 'Shared'
+                    };
+                } else if (key === 'gst' && record) {
+                    const decGst = (isOwner || (isCA && isShared)) ? (decrypt(record.encrypted_password) || record.encrypted_password) : '';
+                    portalsData[key] = {
+                        username: record.gst_username || '',
+                        password: decGst || '',
+                        sharedStatus: record.shared_status || 'Not Shared',
+                        isShared
+                    };
+                } else {
+                    portalsData[key] = {
+                        username: '',
+                        password: '',
+                        sharedStatus: 'Not Shared',
+                        isShared: false
+                    };
+                }
+            });
 
             let decryptedPassword = null;
-            if (isOwner || (isCA && isShared)) {
+            if (record && (isOwner || (isCA && isShared))) {
                 decryptedPassword = decrypt(record.encrypted_password) || record.encrypted_password;
             }
 
-            if (isCA && isShared) {
-                // Log access to ca_gst_access_logs
+            if (isCA && isShared && record) {
                 const caUser = await db.prepare("SELECT username FROM users WHERE id = ?").get(userId);
                 const ownerUser = await db.prepare("SELECT username, business_name FROM users WHERE id = ?").get(record.business_owner_id);
                 await db.prepare(`
@@ -3413,34 +3469,36 @@ const caController = {
             }
 
             return sendSuccess(res, {
-                id: record.id,
-                businessOwnerId: record.business_owner_id,
-                connectedCaId: record.connected_ca_id,
-                gstUsername: record.gst_username || '',
-                gstPassword: decryptedPassword || (isOwner ? '' : '••••••••'),
-                sharedStatus: record.shared_status || 'Not Shared',
-                isShared,
-                sharedDate: record.shared_date,
-                revokedDate: record.revoked_date
-            }, 'GST credentials retrieved');
+                id: record?.id || null,
+                businessOwnerId: targetOwnerId,
+                connectedCaId: record?.connected_ca_id || null,
+                gstUsername: record?.gst_username || portalsData.gst.username || '',
+                gstPassword: decryptedPassword || portalsData.gst.password || (isOwner ? '' : '••••••••'),
+                sharedStatus: record?.shared_status || (portalsData.gst.isShared ? 'Shared' : 'Not Shared'),
+                isShared: record ? isShared : portalsData.gst.isShared,
+                sharedDate: record?.shared_date || null,
+                revokedDate: record?.revoked_date || null,
+                portals: portalsData
+            }, 'Portal credentials retrieved');
         } catch (error) {
             console.error('[CA getGstCredentials Error]', error);
-            return sendError(res, 'Failed to fetch GST credentials', 500);
+            return sendError(res, 'Failed to fetch portal credentials', 500);
         }
     },
 
     saveGstCredentials: async (req, res) => {
-        const { gstUsername, gstPassword, connectedCaId } = req.body;
-        if (!gstUsername || !gstPassword) {
-            return sendError(res, 'GST Username and Password are required', 400);
+        const { gstUsername, gstPassword, username, password, portalType = 'gst', connectedCaId } = req.body || {};
+        const finalUser = username || gstUsername;
+        const finalPass = password || gstPassword;
+        if (!finalUser || !finalPass) {
+            return sendError(res, 'Username and Password are required', 400);
         }
 
         try {
             const userId = req.user.id;
-            const encryptedPassword = encrypt(gstPassword);
+            const encryptedPassword = encrypt(finalPass);
             const now = new Date().toISOString();
 
-            // Find connected CA if not explicitly passed
             let caId = connectedCaId;
             if (!caId) {
                 const inv = await db.prepare(`
@@ -3453,48 +3511,67 @@ const caController = {
                 }
             }
 
-            const existing = await db.prepare("SELECT * FROM gst_credentials WHERE business_owner_id = ?").get(userId);
+            // Save to portal_credentials table
+            try {
+                const existingPortal = await db.prepare("SELECT * FROM portal_credentials WHERE business_owner_id = ? AND portal_type = ?").get(userId, portalType);
+                if (existingPortal) {
+                    await db.prepare(`
+                        UPDATE portal_credentials 
+                        SET username = ?, encrypted_password = ?, connected_ca_id = ?, shared_status = 'Shared', shared_date = ?, revoked_date = NULL, updated_at = ?
+                        WHERE business_owner_id = ? AND portal_type = ?
+                    `).run(finalUser, encryptedPassword, caId || existingPortal.connected_ca_id, now, now, userId, portalType);
+                } else {
+                    await db.prepare(`
+                        INSERT INTO portal_credentials (business_owner_id, connected_ca_id, portal_type, username, encrypted_password, shared_status, shared_date, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, 'Shared', ?, ?, ?)
+                    `).run(userId, caId || null, portalType, finalUser, encryptedPassword, now, now, now);
+                }
+            } catch(e) { console.error('portal_credentials insert error:', e); }
 
-            if (existing) {
+            // Sync legacy GST if portalType is gst
+            if (portalType === 'gst') {
+                const existing = await db.prepare("SELECT * FROM gst_credentials WHERE business_owner_id = ?").get(userId);
+                if (existing) {
+                    await db.prepare(`
+                        UPDATE gst_credentials 
+                        SET gst_username = ?, encrypted_password = ?, connected_ca_id = ?, shared_status = 'Shared', shared_date = ?, revoked_date = NULL, updated_at = ?
+                        WHERE business_owner_id = ?
+                    `).run(finalUser, encryptedPassword, caId || existing.connected_ca_id, now, now, userId);
+                } else {
+                    await db.prepare(`
+                        INSERT INTO gst_credentials (business_owner_id, connected_ca_id, gst_username, encrypted_password, shared_status, shared_date, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, 'Shared', ?, ?, ?)
+                    `).run(userId, caId || null, finalUser, encryptedPassword, now, now, now);
+                }
+
                 await db.prepare(`
-                    UPDATE gst_credentials 
-                    SET gst_username = ?, encrypted_password = ?, connected_ca_id = ?, shared_status = 'Shared', shared_date = ?, revoked_date = NULL, updated_at = ?
-                    WHERE business_owner_id = ?
-                `).run(gstUsername, encryptedPassword, caId || existing.connected_ca_id, now, now, userId);
-            } else {
-                await db.prepare(`
-                    INSERT INTO gst_credentials (business_owner_id, connected_ca_id, gst_username, encrypted_password, shared_status, shared_date, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, 'Shared', ?, ?, ?)
-                `).run(userId, caId || null, gstUsername, encryptedPassword, now, now, now);
+                    UPDATE users 
+                    SET gst_username = ?, gst_password = ?, gst_share_status = 'Shared', gst_shared_at = ?, gst_connected_advisor_id = ?
+                    WHERE id = ?
+                `).run(finalUser, encryptedPassword, now, caId || null, userId);
             }
 
-            // Sync user profile
-            await db.prepare(`
-                UPDATE users 
-                SET gst_username = ?, gst_password = ?, gst_share_status = 'Shared', gst_shared_at = ?, gst_connected_advisor_id = ?
-                WHERE id = ?
-            `).run(gstUsername, encryptedPassword, now, caId || null, userId);
-
-            // Create notification for connected CA
             if (caId) {
                 const owner = await db.prepare("SELECT username, business_name FROM users WHERE id = ?").get(userId);
                 const ownerName = owner?.business_name || owner?.username || 'Business Owner';
-                const messageText = `Business Owner ${ownerName} has saved and shared GST Portal credentials with you.`;
+                const messageText = `Business Owner ${ownerName} has saved and shared ${portalType.toUpperCase()} Portal credentials with you.`;
                 await db.prepare(`
                     INSERT INTO notifications (sender_id, receiver_id, user_id, type, title, message, is_read, created_at)
-                    VALUES (?, ?, ?, 'GST Credential Shared', 'GST Portal Credentials Shared', ?, 0, ?)
+                    VALUES (?, ?, ?, 'GST Credential Shared', 'Portal Credentials Shared', ?, 0, ?)
                 `).run(userId, caId, caId, messageText, now);
             }
 
             return sendSuccess(res, {
-                gstUsername,
+                portalType,
+                username: finalUser,
+                gstUsername: finalUser,
                 sharedStatus: 'Shared',
                 isShared: true,
                 sharedDate: now
-            }, 'GST credentials saved and shared with CA');
+            }, `${portalType.toUpperCase()} credentials saved and shared with CA`);
         } catch (error) {
             console.error('[CA saveGstCredentials Error]', error);
-            return sendError(res, 'Failed to save GST credentials', 500);
+            return sendError(res, 'Failed to save portal credentials', 500);
         }
     },
 
