@@ -37,55 +37,31 @@ app.use(helmet({
 // ── Universal Fail-Proof CORS Middleware ────────────────────────────────────
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+  
   if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Vary', 'Origin');
   } else {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
   
   const reqHeaders = req.headers['access-control-request-headers'];
   if (reqHeaders) {
     res.setHeader('Access-Control-Allow-Headers', reqHeaders);
   } else {
-    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Version, X-Request-Id, Cache-Control, Pragma, *');
+    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Version, X-Request-Id, Cache-Control, Pragma, sentry-trace, baggage');
   }
-  res.setHeader('Access-Control-Expose-Headers', '*');
+  
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, X-API-Version, Authorization');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   next();
 });
-
-const defaultOrigins = [
-  'https://cliksbusiness.com',
-  'https://www.cliksbusiness.com',
-  'https://cliks.beta-softnet.com',
-  'https://account.beta-softnet.com',
-  'http://localhost:5173',
-  'http://localhost:5174',
-  'http://localhost:3000'
-];
-
-let envOrigins = process.env.CORS_ORIGIN 
-  ? process.env.CORS_ORIGIN.split(',').map(s => s.trim()).filter(Boolean)
-  : [];
-
-const corsOptions = {
-  origin: function (origin, callback) {
-    return callback(null, true);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['*'],
-  optionsSuccessStatus: 200
-};
-
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 
 // ── Structured Request Logger + Request ID ──────────────────────────────────────
 // Replaces morgan. Adds: X-Request-Id header, structured JSON logs,
