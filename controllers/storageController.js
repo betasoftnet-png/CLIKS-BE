@@ -91,16 +91,28 @@ const recordStorageFileHelper = async (userId, fileName, fileType, fileSize, sto
 const calculateStorageUsage = async (userId) => {
     await ensureStorageTable();
 
-    const userFiles = await db.prepare('SELECT * FROM user_storage_files WHERE user_id = ?').all(userId);
+    let userFiles = [];
+    if (userId) {
+        userFiles = await db.prepare('SELECT * FROM user_storage_files WHERE user_id = ?').all(userId);
+    }
+    if (!userFiles || userFiles.length === 0) {
+        userFiles = await db.prepare('SELECT * FROM user_storage_files').all();
+    }
 
     try {
-        const docFiles = await db.prepare('SELECT * FROM documents WHERE business_owner_id = ? OR ca_id = ? OR uploaded_by = ?').all(userId, userId, userId);
+        let docFiles = [];
+        if (userId) {
+            docFiles = await db.prepare('SELECT * FROM documents WHERE business_owner_id = ? OR ca_id = ? OR uploaded_by = ?').all(userId, userId, userId);
+        }
+        if (!docFiles || docFiles.length === 0) {
+            docFiles = await db.prepare('SELECT * FROM documents').all();
+        }
         for (const doc of docFiles) {
             const exists = userFiles.some(f => f.file_name === doc.name || f.storage_path === doc.file_path);
             if (!exists) {
                 userFiles.push({
                     id: `doc_${doc.id}`,
-                    user_id: userId,
+                    user_id: doc.uploaded_by || doc.business_owner_id || userId || 1,
                     file_name: doc.name,
                     file_type: doc.file_path && doc.file_path.endsWith('.png') ? 'image/png' : 'application/pdf',
                     file_size: 350000,
@@ -139,13 +151,14 @@ const calculateStorageUsage = async (userId) => {
 
     const moduleBreakdown = MODULE_CONFIGS.map(cfg => {
         const mBytes = moduleBytesMap[cfg.module] || 0;
-        const sharePercent = usedBytes > 0 ? parseFloat(((mBytes / usedBytes) * 100).toFixed(1)) : parseFloat(cfg.defaultShare.replace('%', ''));
+        const sharePercent = usedBytes > 0 ? parseFloat(((mBytes / usedBytes) * 100).toFixed(1)) : 0;
         return {
             module: cfg.module,
             bytes: mBytes,
             formatted: formatBytes(mBytes),
             share: `${sharePercent}%`,
             sharePercent,
+            typicalQuota: cfg.defaultShare,
             files: cfg.files,
             color: cfg.color,
             badgeBg: cfg.badgeBg
