@@ -1423,6 +1423,14 @@ const purchaseController = {
                 status = 'AVAILABLE_LATER';
                 supplierConfirmationStatus = 'AVAILABLE_LATER';
                 statusMsg = notes || (expected_available_date ? `Waiting for supplier — Available on ${expected_available_date}.` : 'Waiting for supplier — Available later.');
+            } else if (response_type === 'PRODUCT_SENT' || response_type === 'SENT') {
+                status = 'PRODUCT_SENT';
+                supplierConfirmationStatus = 'PRODUCT_SENT';
+                statusMsg = 'Supplier sent the product successfully.';
+            } else if (response_type === 'SUPPLIER_DECLINED' || response_type === 'SAY_NO') {
+                status = 'SUPPLIER_DECLINED';
+                supplierConfirmationStatus = 'SUPPLIER_DECLINED';
+                statusMsg = 'Supplier declined the order.';
             }
 
             const itemsJson = reqItems && Array.isArray(reqItems) ? JSON.stringify(reqItems) : null;
@@ -1678,6 +1686,44 @@ const purchaseController = {
                 } catch (e) {}
 
                 return sendSuccess(res, { id: purchase.id, status: newStatus }, 'Partial quantity rejected.');
+            } else if (action === 'ACCEPT_DATE' || action === 'ACCEPT_AVAILABLE_DATE') {
+                const newStatus = 'DATE_ACCEPTED_BY_CUSTOMER';
+                const statusMsg = 'Customer accepted the proposed available date.';
+
+                await db.prepare(`
+                    UPDATE business_purchases 
+                    SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ?
+                    WHERE id = ?
+                `).run(newStatus, newStatus, statusMsg, now, purchase.id);
+
+                try {
+                    const rel = await db.prepare('SELECT generated_sales_invoice_id FROM b2b_invoice_relationships WHERE source_purchase_invoice_id = ?').get(purchase.id);
+                    if (rel && rel.generated_sales_invoice_id) {
+                        await db.prepare("UPDATE business_invoices SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ? WHERE id = ?")
+                            .run(newStatus, newStatus, statusMsg, now, rel.generated_sales_invoice_id);
+                    }
+                } catch (e) {}
+
+                return sendSuccess(res, { id: purchase.id, status: newStatus }, 'Proposed available date accepted.');
+            } else if (action === 'REJECT_DATE' || action === 'DECLINE_DATE') {
+                const newStatus = 'DATE_DECLINED_BY_CUSTOMER';
+                const statusMsg = 'Customer declined the proposed available date.';
+
+                await db.prepare(`
+                    UPDATE business_purchases 
+                    SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ?
+                    WHERE id = ?
+                `).run(newStatus, newStatus, statusMsg, now, purchase.id);
+
+                try {
+                    const rel = await db.prepare('SELECT generated_sales_invoice_id FROM b2b_invoice_relationships WHERE source_purchase_invoice_id = ?').get(purchase.id);
+                    if (rel && rel.generated_sales_invoice_id) {
+                        await db.prepare("UPDATE business_invoices SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ? WHERE id = ?")
+                            .run(newStatus, newStatus, statusMsg, now, rel.generated_sales_invoice_id);
+                    }
+                } catch (e) {}
+
+                return sendSuccess(res, { id: purchase.id, status: newStatus }, 'Proposed available date declined.');
             } else {
                 return sendError(res, 'Invalid action', 400);
             }
