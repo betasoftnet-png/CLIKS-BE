@@ -269,7 +269,8 @@ if (dbType === 'postgres') {
       "ALTER TABLE invoices ADD COLUMN supplier_response_type TEXT",
       "ALTER TABLE invoices ADD COLUMN supplier_status_message TEXT",
       "ALTER TABLE invoices ADD COLUMN expected_available_date TEXT",
-      "ALTER TABLE invoices ADD COLUMN supplier_response_items TEXT"
+      "ALTER TABLE invoices ADD COLUMN supplier_response_items TEXT",
+      "ALTER TABLE warehouse_transfers ADD COLUMN reference TEXT"
     ];
     for (const sql of alterCols) {
       try { rawDb.exec(sql); } catch (e) {}
