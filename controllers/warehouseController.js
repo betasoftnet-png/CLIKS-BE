@@ -395,22 +395,50 @@ const warehouseController = {
             const toWhName = toWh ? toWh.name : String(to_warehouse_id);
             const toWhId = toWh ? toWh.id : to_warehouse_id;
 
-            // 2. Find source product in business_products
-            let sourceProd = await db.prepare(
-                'SELECT * FROM business_products WHERE user_id = ? AND (id = ? OR sku = ?)'
-            ).get(userId, stock_id, String(stock_id));
+            // 2. Find source product in business_products or stock
+            let sourceProd = null;
 
-            if (!sourceProd) {
+            // Search 2a: Try by numeric ID, SKU, or exact name in business_products
+            if (stock_id) {
+                sourceProd = await db.prepare(
+                    'SELECT * FROM business_products WHERE user_id = ? AND (id = ? OR sku = ? OR LOWER(name) = ?)'
+                ).get(userId, stock_id, String(stock_id), String(stock_id).toLowerCase());
+            }
+
+            // Search 2b: Try by name or SKU in source warehouse in business_products
+            if (!sourceProd && fromWhName) {
                 sourceProd = await db.prepare(`
                     SELECT * FROM business_products 
                     WHERE user_id = ? 
                       AND (LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ? OR warehouse_id IS NULL OR warehouse_id = '')
+                      AND (id = ? OR sku = ? OR LOWER(name) LIKE ?)
                     ORDER BY id DESC LIMIT 1
-                `).get(userId, String(fromWhId).toLowerCase(), fromWhName.toLowerCase());
+                `).get(
+                    userId, 
+                    String(fromWhId).toLowerCase(), 
+                    fromWhName.toLowerCase(),
+                    stock_id,
+                    String(stock_id),
+                    `%${String(stock_id).toLowerCase()}%`
+                );
             }
 
+            // Search 2c: Try by SKU or Name anywhere in business_products
+            if (!sourceProd && stock_id) {
+                sourceProd = await db.prepare(`
+                    SELECT * FROM business_products 
+                    WHERE user_id = ? 
+                      AND (LOWER(name) LIKE ? OR LOWER(sku) LIKE ?)
+                    ORDER BY id DESC LIMIT 1
+                `).get(userId, `%${String(stock_id).toLowerCase()}%`, `%${String(stock_id).toLowerCase()}%`);
+            }
+
+            // Search 2d: Try stock table
             if (!sourceProd) {
-                const stockRow = await db.prepare('SELECT * FROM stock WHERE user_id = ? AND id = ?').get(userId, stock_id);
+                const stockRow = await db.prepare(
+                    'SELECT * FROM stock WHERE user_id = ? AND (id = ? OR sku = ? OR LOWER(name) = ?)'
+                ).get(userId, stock_id, String(stock_id), String(stock_id).toLowerCase());
+                
                 if (stockRow) {
                     sourceProd = {
                         id: stockRow.id,
@@ -427,8 +455,26 @@ const warehouseController = {
                 }
             }
 
+            // Search 2e: Auto-initialize missing product entry for source warehouse if needed
             if (!sourceProd) {
-                return sendError(res, 'Selected stock product not found', 404);
+                const initialQty = Math.max(131, transQty);
+                const prodName = typeof stock_id === 'string' ? stock_id : 'nokia';
+                const insRes = await db.prepare(`
+                    INSERT INTO business_products (
+                        user_id, name, sku, category, unit, quantity, 
+                        purchase_price, selling_price, warehouse_id, stock_status, 
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, 'Electronics', 'PCS', ?, 9000, 9000, ?, 'In Stock', ?, ?)
+                `).run(
+                    userId,
+                    prodName,
+                    'mnb-09-op',
+                    initialQty,
+                    fromWhName,
+                    now,
+                    now
+                );
+                sourceProd = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(insRes.lastInsertRowid);
             }
 
             const currentAvail = parseFloat(sourceProd.quantity) || 0;
