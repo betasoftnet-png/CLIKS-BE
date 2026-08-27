@@ -133,6 +133,30 @@ router.get('/global', async (req, res) => {
             console.error('[Search API] Expenses search error:', e.message);
         }
 
+        // 6. Warehouses / Godowns
+        try {
+            const warehouses = await db.prepare(`
+                SELECT id, name, code, location 
+                FROM business_warehouses 
+                WHERE user_id = ? AND (name LIKE ? OR code LIKE ? OR location LIKE ?)
+                LIMIT 5
+            `).all(userId, searchTerm, searchTerm, searchTerm);
+
+            for (const wh of warehouses) {
+                results.push({
+                    type: 'Warehouse',
+                    name: wh.name,
+                    desc: `Godown Location: ${wh.location || 'N/A'} ${wh.code ? `(Code: ${wh.code})` : ''}`,
+                    icon: 'MapPin',
+                    path: `/inventory/warehouse`,
+                    rank: 3,
+                    state: { highlightWarehouseId: wh.id, warehouseName: wh.name }
+                });
+            }
+        } catch (e) {
+            console.error('[Search API] Warehouses search error:', e.message);
+        }
+
         return sendSuccess(res, results, 'Global search results retrieved');
     } catch (err) {
         console.error('[Search API Error]:', err.message);
