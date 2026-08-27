@@ -279,6 +279,41 @@ const returnsController = {
             const resolvedSupplierName = supplier_name || (return_type === 'purchase' ? client_name : null);
             const finalRefundAmount = parseFloat(refund_amount || total_amount || amount || 0) || 0;
 
+            // Validation: Prevent duplicate return of the same product for the same customer if status is DONE / Completed
+            const custToCheck = (resolvedCustName || '').trim();
+            const parsedItemsForValidation = Array.isArray(items) ? items : (typeof items === 'string' ? JSON.parse(items || '[]') : []);
+            if (req.body.product_name && parsedItemsForValidation.length === 0) {
+                parsedItemsForValidation.push({ product_name: req.body.product_name });
+            }
+
+            if (custToCheck && (return_type || 'sales') !== 'purchase' && parsedItemsForValidation.length > 0) {
+                for (const item of parsedItemsForValidation) {
+                    const prodName = (item.product_name || item.name || req.body.product_name || '').trim();
+                    if (!prodName) continue;
+
+                    try {
+                        const existingDoneReturn = await db.prepare(`
+                            SELECT r.* FROM business_returns r
+                            LEFT JOIN business_return_items ri ON r.id = ri.return_id
+                            WHERE r.user_id = ?
+                              AND LOWER(TRIM(r.customer_name)) = LOWER(TRIM(?))
+                              AND (LOWER(TRIM(r.status)) = 'done' OR LOWER(TRIM(r.status)) = 'completed')
+                              AND (
+                                LOWER(TRIM(ri.product_name)) = LOWER(TRIM(?))
+                                OR LOWER(TRIM(r.reason_code)) LIKE LOWER(?)
+                              )
+                            LIMIT 1
+                        `).get(req.user.id, custToCheck, prodName, `%${prodName}%`);
+
+                        if (existingDoneReturn) {
+                            return sendError(res, `This product has already been returned by ${custToCheck}.\n\nCustomer: ${custToCheck}\nProduct: ${prodName}\nStatus: Already Returned`, 400);
+                        }
+                    } catch (checkErr) {
+                        console.warn('[Returns Controller] Duplicate return validation error:', checkErr.message);
+                    }
+                }
+            }
+
             const result = await db.prepare(`
                 INSERT INTO business_returns (
                     user_id, return_number, return_type, return_date, status, invoice_id, purchase_id,
