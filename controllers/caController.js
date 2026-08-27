@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const crypto = require('crypto');
+const storageController = require('./storageController');
 
 const ENCRYPTION_KEY = crypto.createHash('sha256').update(process.env.GST_ENCRYPTION_KEY || 'cliks_gst_secret_key').digest();
 const IV_LENGTH = 16;
@@ -1001,6 +1002,8 @@ const caController = {
                 VALUES (?, ?, ?, ?, ?, ?)
             `).run(docId, nextVersion, attachedFile, `/uploads/${attachedFile}`, req.user.id, now);
 
+            await storageController.recordStorageFileHelper(req.user.id, attachedFile, 'application/pdf', 350000, `/uploads/${attachedFile}`, 'Audit & Tax (FIN-PRO)');
+
             // Reset review status if it was previously corrected
             await db.prepare("DELETE FROM ca_document_reviews WHERE document_id = ?").run(docId);
 
@@ -1283,6 +1286,8 @@ const caController = {
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             `).run(docId, nextVersion, attachedFile, `/uploads/${attachedFile}`, req.user.id, now, phase || null);
 
+            await storageController.recordStorageFileHelper(req.user.id, attachedFile, 'application/pdf', 350000, `/uploads/${attachedFile}`, 'Audit & Tax (FIN-PRO)');
+
             // Reset review status if it was previously corrected
             await db.prepare("DELETE FROM ca_document_reviews WHERE document_id = ?").run(docId);
 
@@ -1347,6 +1352,8 @@ const caController = {
                 INSERT INTO ca_document_versions (document_id, version_number, file_name, file_path, uploaded_by, uploaded_at, phase)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             `).run(docId, nextVersion, attachedFile, `/uploads/${attachedFile}`, req.user.id, now, phase);
+
+            await storageController.recordStorageFileHelper(req.user.id, attachedFile, 'application/pdf', 350000, `/uploads/${attachedFile}`, 'Audit & Tax (FIN-PRO)');
 
             return sendSuccess(res, { taskId: task.id, attachedFile, version: nextVersion, phase }, 'Phase document uploaded successfully');
         } catch (error) {

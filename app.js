@@ -138,6 +138,9 @@ app.use('/api/v1/profile',          auth, require('./routes/profile'));
 // Settings (persistent user preferences)
 app.use('/api/v1/settings',         auth, require('./routes/settings'));
 
+// Storage allocation & usage
+app.use('/api/v1/storage',          auth, require('./routes/storage'));
+
 
 // Home / Summary
 app.use('/api/v1/home',             auth, require('./routes/home'));

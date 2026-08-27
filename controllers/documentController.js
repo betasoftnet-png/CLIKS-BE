@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { logAuditEvent } = require('../utils/auditLogger');
+const storageController = require('./storageController');
 
 const documentController = {
     getDocuments: async (req, res) => {
@@ -101,6 +102,8 @@ const documentController = {
             );
 
             const newDoc = await db.prepare('SELECT * FROM documents WHERE id = ?').get(result.lastInsertRowid);
+
+            await storageController.recordStorageFileHelper(userId, name, 'application/pdf', 350000, filePath, category);
 
             await logAuditEvent(req, {
                 action: 'Document Upload',
