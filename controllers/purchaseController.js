@@ -113,6 +113,7 @@ const purchaseController = {
             }
 
             // 📦 If doc_type === 'RETURN', transactionally update physical inventory stock for the selected warehouse
+            // 📦 If doc_type === 'RETURN', transactionally update physical inventory stock for the selected warehouse
             if (doc_type === 'RETURN' && items && Array.isArray(items)) {
                 const targetWhName = warehouse_id || 'Main Godown';
                 let targetWh = null;
@@ -133,7 +134,7 @@ const purchaseController = {
 
                     if (!pName && !pSku) continue;
 
-                    // 1. Update business_products for selected warehouse
+                    // 1. Update business_products for selected warehouse (SUBTRACT return quantity)
                     let existingProd = null;
                     try {
                         if (pSku) {
@@ -141,7 +142,7 @@ const purchaseController = {
                                 SELECT * FROM business_products
                                 WHERE user_id = ?
                                   AND (LOWER(sku) = ?)
-                                  AND (LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ? OR warehouse_id IS NULL)
+                                  AND (LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ?)
                                 LIMIT 1
                             `).get(req.user.id, pSku.toLowerCase(), whId.toLowerCase(), whName.toLowerCase(), whCode.toLowerCase());
                         }
@@ -150,22 +151,15 @@ const purchaseController = {
                                 SELECT * FROM business_products
                                 WHERE user_id = ?
                                   AND (LOWER(name) = ?)
-                                  AND (LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ? OR warehouse_id IS NULL)
+                                  AND (LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ? OR LOWER(warehouse_id) = ?)
                                 LIMIT 1
                             `).get(req.user.id, pName.toLowerCase(), whId.toLowerCase(), whName.toLowerCase(), whCode.toLowerCase());
-                        }
-                        if (!existingProd && pName) {
-                            existingProd = await db.prepare(`
-                                SELECT * FROM business_products
-                                WHERE user_id = ? AND (LOWER(name) = ? OR (sku IS NOT NULL AND LOWER(sku) = ?))
-                                LIMIT 1
-                            `).get(req.user.id, pName.toLowerCase(), (pSku || pName).toLowerCase());
                         }
                     } catch (e) {}
 
                     if (existingProd) {
                         const currentQty = parseFloat(existingProd.quantity) || 0;
-                        const newQty = currentQty + rQty;
+                        const newQty = Math.max(0, currentQty - rQty);
                         const threshold = parseFloat(existingProd.low_stock_threshold) || 5;
                         const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < threshold ? 'Low Stock' : 'In Stock');
 
@@ -177,24 +171,9 @@ const purchaseController = {
                                 updated_at = ?
                             WHERE id = ? AND user_id = ?
                         `).run(newQty, whName, newStatus, now, existingProd.id, req.user.id);
-                    } else {
-                        const newStatus = rQty <= 0 ? 'Out of Stock' : (rQty < 5 ? 'Low Stock' : 'In Stock');
-                        const prodCategory = item.category || 'General';
-                        const prodUnit = item.unit || item.primary_unit || 'PCS';
-                        const prodPrice = parseFloat(item.purchase_price || item.price) || 0;
-
-                        await db.prepare(`
-                            INSERT INTO business_products (
-                                user_id, name, sku, category, quantity, unit,
-                                purchase_price, selling_price, warehouse_id, stock_status, created_at, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        `).run(
-                            req.user.id, pName, pSku || `SKU-${Date.now().toString().slice(-6)}`, prodCategory, rQty, prodUnit,
-                            prodPrice, prodPrice, whName, newStatus, now, now
-                        );
                     }
 
-                    // 2. Update stock table for selected warehouse location
+                    // 2. Update stock table for selected warehouse location (SUBTRACT return quantity)
                     let existingStock = null;
                     try {
                         if (pSku) {
@@ -202,39 +181,26 @@ const purchaseController = {
                                 SELECT * FROM stock
                                 WHERE user_id = ?
                                   AND (LOWER(sku) = ?)
-                                  AND (LOWER(location) = ? OR LOWER(location) = ? OR location IS NULL)
+                                  AND (LOWER(location) = ? OR LOWER(location) = ? OR LOWER(warehouse) = ? OR LOWER(warehouse) = ?)
                                 LIMIT 1
-                            `).get(req.user.id, pSku.toLowerCase(), whName.toLowerCase(), whId.toLowerCase());
+                            `).get(req.user.id, pSku.toLowerCase(), whName.toLowerCase(), whId.toLowerCase(), whName.toLowerCase(), whId.toLowerCase());
                         }
                         if (!existingStock && pName) {
                             existingStock = await db.prepare(`
                                 SELECT * FROM stock
                                 WHERE user_id = ?
                                   AND (LOWER(name) = ?)
-                                  AND (LOWER(location) = ? OR LOWER(location) = ? OR location IS NULL)
+                                  AND (LOWER(location) = ? OR LOWER(location) = ? OR LOWER(warehouse) = ? OR LOWER(warehouse) = ?)
                                 LIMIT 1
-                            `).get(req.user.id, pName.toLowerCase(), whName.toLowerCase(), whId.toLowerCase());
-                        }
-                        if (!existingStock && pName) {
-                            existingStock = await db.prepare(`
-                                SELECT * FROM stock
-                                WHERE user_id = ? AND (LOWER(name) = ? OR (sku IS NOT NULL AND LOWER(sku) = ?))
-                                LIMIT 1
-                            `).get(req.user.id, pName.toLowerCase(), (pSku || pName).toLowerCase());
+                            `).get(req.user.id, pName.toLowerCase(), whName.toLowerCase(), whId.toLowerCase(), whName.toLowerCase(), whId.toLowerCase());
                         }
                     } catch (e) {}
 
                     if (existingStock) {
-                        await db.prepare('UPDATE stock SET quantity = quantity + ?, location = ?, updated_at = ? WHERE id = ?')
-                            .run(rQty, whName, now, existingStock.id);
-                    } else {
-                        const prodCategory = item.category || 'General';
-                        const prodUnit = item.unit || item.primary_unit || 'PCS';
-                        const prodPrice = parseFloat(item.purchase_price || item.price) || 0;
-                        await db.prepare(`
-                            INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        `).run(req.user.id, pName, pSku || null, prodCategory, prodUnit, prodPrice, rQty, whName, now, now);
+                        const currentStockQty = parseFloat(existingStock.quantity) || 0;
+                        const newStockQty = Math.max(0, currentStockQty - rQty);
+                        await db.prepare('UPDATE stock SET quantity = ?, location = ?, updated_at = ? WHERE id = ?')
+                            .run(newStockQty, whName, now, existingStock.id);
                     }
                 }
 

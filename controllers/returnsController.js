@@ -94,9 +94,11 @@ const syncReturnItemsToWarehouse = async (userId, warehouseId, items, returnReco
                 } catch(e) {}
             }
 
+            const isPurchaseReturn = returnRecord.return_type === 'purchase' || returnRecord.doc_type === 'RETURN';
+
             if (existingWhProduct) {
                 const currentQty = parseFloat(existingWhProduct.quantity) || 0;
-                const newQty = currentQty + rQty;
+                const newQty = isPurchaseReturn ? Math.max(0, currentQty - rQty) : (currentQty + rQty);
                 const threshold = parseFloat(existingWhProduct.low_stock_threshold) || 5;
                 const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty < threshold ? 'Low Stock' : 'In Stock');
 
@@ -108,7 +110,7 @@ const syncReturnItemsToWarehouse = async (userId, warehouseId, items, returnReco
                         updated_at = ? 
                     WHERE id = ? AND user_id = ?
                 `).run(newQty, targetWhName, newStatus, now, existingWhProduct.id, userId);
-            } else {
+            } else if (!isPurchaseReturn) {
                 const newStatus = rQty <= 0 ? 'Out of Stock' : (rQty < 5 ? 'Low Stock' : 'In Stock');
                 await db.prepare(`
                     INSERT INTO business_products (
@@ -134,9 +136,11 @@ const syncReturnItemsToWarehouse = async (userId, warehouseId, items, returnReco
             } catch(e) {}
 
             if (existingStock) {
-                await db.prepare('UPDATE stock SET quantity = quantity + ?, location = ?, updated_at = ? WHERE id = ?')
-                    .run(rQty, targetWhName, now, existingStock.id);
-            } else {
+                const curStockQty = parseFloat(existingStock.quantity) || 0;
+                const newStockQty = isPurchaseReturn ? Math.max(0, curStockQty - rQty) : (curStockQty + rQty);
+                await db.prepare('UPDATE stock SET quantity = ?, location = ?, updated_at = ? WHERE id = ?')
+                    .run(newStockQty, targetWhName, now, existingStock.id);
+            } else if (!isPurchaseReturn) {
                 await db.prepare(`
                     INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
