@@ -119,8 +119,26 @@ const warehouseController = {
     getWarehouses: async (req, res) => {
         try {
             const { search, status, city } = req.query;
+            const userId = req.user.id;
+
+            // Auto-provision default 'GENERAL' warehouse if user has no warehouses
+            const userWhCount = await db.prepare('SELECT COUNT(*) as cnt FROM warehouses WHERE user_id = ?').get(userId);
+            if (!userWhCount || userWhCount.cnt === 0) {
+                const now = new Date().toISOString();
+                try {
+                    await db.prepare(`
+                        INSERT INTO warehouses (
+                            user_id, name, location, code, type, status, address, city, state, pincode, 
+                            contact_person, phone_number, email, capacity_utilization, created_at
+                        ) VALUES (?, 'GENERAL', 'Main Storage Facility', 'WH-GEN-01', 'godown', 'active', 'Central Storage', 'Main City', 'State', '000000', 'Branch Manager', '', '', '0%', ?)
+                    `).run(userId, now);
+                } catch (createErr) {
+                    console.error('[Warehouse Controller] Auto-provision GENERAL error:', createErr);
+                }
+            }
+
             let query = 'SELECT * FROM warehouses WHERE user_id = ?';
-            const params = [req.user.id];
+            const params = [userId];
 
             if (search) {
                 query += ' AND (name LIKE ? OR code LIKE ?)';

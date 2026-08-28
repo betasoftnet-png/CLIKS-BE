@@ -132,6 +132,21 @@ const ssoLogin = async (req, res) => {
   const now = new Date().toISOString();
   await db.prepare('UPDATE users SET is_online = 1, login_at = ?, last_seen_at = ? WHERE id = ?').run(now, now, user.id);
 
+  // Auto-provision default 'GENERAL' warehouse for newly registered user
+  if (user && user.id) {
+    try {
+      const whCount = await db.prepare('SELECT COUNT(*) as cnt FROM warehouses WHERE user_id = ?').get(user.id);
+      if (!whCount || whCount.cnt === 0) {
+        await db.prepare(`
+          INSERT INTO warehouses (
+            user_id, name, location, code, type, status, address, city, state, pincode, 
+            contact_person, phone_number, email, capacity_utilization, created_at
+          ) VALUES (?, 'GENERAL', 'Main Storage Facility', 'WH-GEN-01', 'godown', 'active', 'Central Storage', 'Main City', 'State', '000000', 'Branch Manager', '', '', '0%', ?)
+        `).run(user.id, now);
+      }
+    } catch (whErr) {}
+  }
+
   const safeUser = {
     id: user.id,
     username: user.username,
