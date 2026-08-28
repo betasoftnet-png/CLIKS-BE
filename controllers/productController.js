@@ -11,6 +11,9 @@ const productController = {
         } = req.body || {};
         
         if (!name) return sendError(res, 'Product name is required', 400);
+        if (req.body?.product_type !== 'service' && (!warehouse_id || !String(warehouse_id).trim())) {
+            return sendError(res, 'Create warehouse first', 400);
+        }
         const resolvedHsn = hsn_code || hsn_sac || hsn || null;
 
         const rawHasWarranty = has_warranty || warrantyDetails || 'No';
@@ -31,7 +34,7 @@ const productController = {
                 `).run(
                     req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
-                    batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || 'Main Godown',
+                    batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
                     resolvedHsn, finalHasWarranty, finalWarrantyPeriod, now, now
                 );
             } catch (insertError) {
@@ -49,7 +52,7 @@ const productController = {
                     `).run(
                         req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                         purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
-                        batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || 'Main Godown',
+                        batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
                         resolvedHsn, finalHasWarranty, finalWarrantyPeriod, now, now
                     );
                 } else {
@@ -73,7 +76,7 @@ const productController = {
                 `).run(
                     req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
-                    batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || 'Main Godown',
+                    batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
                     resolvedHsn, now, now
                 );
                 const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(fallbackResult.lastInsertRowid);
