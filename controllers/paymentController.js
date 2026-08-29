@@ -187,7 +187,11 @@ const paymentController = {
                 return sendError(res, responseData.message || 'Cashfree provider error', gatewayResponse.status);
             }
 
-            return sendSuccess(res, responseData, 'Payment provider session established securely');
+            return sendSuccess(res, {
+                ...responseData,
+                mode: isProd ? 'production' : 'sandbox',
+                cf_environment: isProd ? 'production' : 'sandbox'
+            }, 'Payment provider session established securely');
         } catch (error) {
             console.error('[Payment Controller] Backend Cashfree Error:', error);
             return sendError(res, 'Gateway communication failed internally', 500);
