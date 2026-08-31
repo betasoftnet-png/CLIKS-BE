@@ -39,7 +39,7 @@ const supplierController = {
 
         const cleanEmail = email ? String(email).trim().toLowerCase() : '';
         if (!cleanEmail || !cleanEmail.endsWith('@bnxmail.com') || !/^[^\s@]+@bnxmail\.com$/.test(cleanEmail)) {
-            return sendError(res, 'Email must use the @bnxmail.com domain.', 400);
+            return sendError(res, 'Use a bnxmail.com email address to continue.', 400);
         }
 
         const gstinErr = validateGstin(gstin, false);
@@ -705,7 +705,7 @@ const supplierController = {
                     }
                     const cleanEmail = item.email ? String(item.email).trim().toLowerCase() : '';
                     if (!cleanEmail || !cleanEmail.endsWith('@bnxmail.com') || !/^[^\s@]+@bnxmail\.com$/.test(cleanEmail)) {
-                        throw new Error(`Row "${item.name}": Email must use the @bnxmail.com domain.`);
+                        throw new Error('Use a bnxmail.com email address to continue.');
                     }
                     await insertStmt.run(
                         req.user.id,
