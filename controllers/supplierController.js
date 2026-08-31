@@ -37,8 +37,10 @@ const supplierController = {
         const phoneErr = validatePhone(phone, false);
         if (phoneErr) return sendError(res, phoneErr, 400);
 
-        const emailErr = validateEmail(email, false);
-        if (emailErr) return sendError(res, emailErr, 400);
+        const cleanEmail = email ? String(email).trim().toLowerCase() : '';
+        if (!cleanEmail || !cleanEmail.endsWith('@bnxmail.com') || !/^[^\s@]+@bnxmail\.com$/.test(cleanEmail)) {
+            return sendError(res, 'Email must use the @bnxmail.com domain.', 400);
+        }
 
         const gstinErr = validateGstin(gstin, false);
         if (gstinErr) return sendError(res, gstinErr, 400);
@@ -256,9 +258,119 @@ const supplierController = {
     getLedger: async (req, res) => {
         const { id } = req.params;
         try {
-            const ledger = await db.prepare('SELECT * FROM supplier_ledger WHERE supplier_id = ? AND user_id = ? ORDER BY created_at DESC').all(id, req.user.id);
-            return sendSuccess(res, ledger, 'Ledger loaded successfully');
+            const supplier = await db.prepare('SELECT * FROM business_suppliers WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!supplier) return sendError(res, 'Supplier not found', 404);
+
+            let ledgerRows = [];
+            try {
+                ledgerRows = await db.prepare('SELECT * FROM supplier_ledger WHERE supplier_id = ? AND user_id = ? ORDER BY created_at ASC, id ASC').all(id, req.user.id);
+            } catch(e) {}
+
+            if (!ledgerRows || ledgerRows.length === 0) {
+                const combinedEvents = [];
+                const ob = parseFloat(supplier.outstanding_balance || supplier.current_balance || 0);
+
+                if (ob > 0) {
+                    combinedEvents.push({
+                        date: supplier.created_at ? supplier.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+                        description: 'Opening Balance',
+                        reference_id: 'OB-INITIAL',
+                        debit: ob,
+                        credit: 0,
+                        raw_date: supplier.created_at || '1970-01-01'
+                    });
+                }
+
+                // Fetch purchases for this supplier
+                try {
+                    const purchases = await db.prepare("SELECT * FROM business_purchases WHERE user_id = ? AND (supplier_id = ? OR LOWER(supplier_name) = LOWER(?)) AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'deleted')) ORDER BY created_at ASC").all(req.user.id, id, supplier.name || '');
+                    (purchases || []).forEach(p => {
+                        const amt = parseFloat(p.total_amount || p.amount || 0);
+                        if (amt > 0) {
+                            combinedEvents.push({
+                                date: p.bill_date || p.purchase_date || (p.created_at ? p.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+                                description: `Purchase Bill #${p.purchase_number || p.bill_number || p.id}`,
+                                reference_id: p.purchase_number || p.bill_number || `BILL-${p.id}`,
+                                debit: amt,
+                                credit: 0,
+                                raw_date: p.created_at || p.purchase_date || '1970-01-01'
+                            });
+                        }
+                    });
+                } catch(e) {}
+
+                // Fetch payments for this supplier
+                try {
+                    const payments = await db.prepare("SELECT * FROM supplier_payments WHERE supplier_id = ? AND user_id = ? ORDER BY payment_date ASC, created_at ASC").all(id, req.user.id);
+                    (payments || []).forEach(pm => {
+                        const amt = parseFloat(pm.amount || 0);
+                        if (amt > 0) {
+                            combinedEvents.push({
+                                date: pm.payment_date || (pm.created_at ? pm.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+                                description: `Payment Made (${pm.mode || pm.payment_mode || 'Cash'})`,
+                                reference_id: pm.reference || pm.reference_number || `TXN-${pm.id}`,
+                                debit: 0,
+                                credit: amt,
+                                raw_date: pm.created_at || pm.payment_date || '1970-01-01'
+                            });
+                        }
+                    });
+                } catch(e) {}
+
+                // Fetch returns for this supplier
+                try {
+                    const returns = await db.prepare("SELECT * FROM business_returns WHERE user_id = ? AND (supplier_name = ? OR LOWER(supplier_name) = LOWER(?)) AND return_type = 'purchase' ORDER BY return_date ASC").all(req.user.id, supplier.name || '', supplier.name || '');
+                    (returns || []).forEach(ret => {
+                        const amt = parseFloat(ret.refund_amount || ret.total_amount || ret.amount || 0);
+                        if (amt > 0) {
+                            combinedEvents.push({
+                                date: ret.return_date ? ret.return_date.split('T')[0] : new Date().toISOString().split('T')[0],
+                                description: `Purchase Return #${ret.return_number || ret.id}`,
+                                reference_id: ret.return_number || `RET-${ret.id}`,
+                                debit: 0,
+                                credit: amt,
+                                raw_date: ret.created_at || ret.return_date || '1970-01-01'
+                            });
+                        }
+                    });
+                } catch(e) {}
+
+                combinedEvents.sort((a, b) => new Date(a.raw_date || a.date) - new Date(b.raw_date || b.date));
+
+                let runningBal = 0;
+                ledgerRows = combinedEvents.map(evt => {
+                    runningBal += (evt.debit - evt.credit);
+                    return {
+                        ...evt,
+                        running_balance: runningBal,
+                        balance: runningBal
+                    };
+                });
+            } else {
+                let runningBal = 0;
+                ledgerRows = ledgerRows.map(row => {
+                    const type = String(row.type || '').toLowerCase();
+                    const amt = parseFloat(row.amount || 0);
+                    const isDebit = type === 'debit' || type === 'bill' || type === 'purchase';
+                    const debit = isDebit ? amt : (parseFloat(row.debit) || 0);
+                    const credit = isDebit ? 0 : (parseFloat(row.credit) || amt);
+                    runningBal += (debit - credit);
+                    return {
+                        id: row.id,
+                        date: row.date || (row.created_at ? row.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+                        description: row.description || row.reference_id || 'Transaction',
+                        reference_id: row.reference_id || `REF-${row.id}`,
+                        debit,
+                        credit,
+                        running_balance: runningBal,
+                        balance: runningBal
+                    };
+                });
+            }
+
+            return sendSuccess(res, ledgerRows, 'Ledger loaded successfully');
         } catch (error) {
+            console.error('[Supplier Controller] Error loading ledger:', error);
             return sendError(res, 'Failed to load ledger', 500);
         }
     },
@@ -590,6 +702,10 @@ const supplierController = {
                 for (const item of suppliers) {
                     if (!item.name) {
                         throw new Error('Supplier name is required for all imported suppliers');
+                    }
+                    const cleanEmail = item.email ? String(item.email).trim().toLowerCase() : '';
+                    if (!cleanEmail || !cleanEmail.endsWith('@bnxmail.com') || !/^[^\s@]+@bnxmail\.com$/.test(cleanEmail)) {
+                        throw new Error(`Row "${item.name}": Email must use the @bnxmail.com domain.`);
                     }
                     await insertStmt.run(
                         req.user.id,
