@@ -629,6 +629,59 @@ const customerController = {
             console.error('[B2B Respond Error]', error);
             return sendError(res, error.message || 'Failed to respond to connection request', error.statusCode || 500);
         }
+    },
+
+    importCustomers: async (req, res) => {
+        try {
+            const { customers } = req.body;
+            const list = Array.isArray(customers) ? customers : (Array.isArray(req.body) ? req.body : []);
+            if (!list || list.length === 0) {
+                return sendError(res, 'Customers list is required for bulk import', 400);
+            }
+
+            const userId = req.user.id;
+            const now = new Date().toISOString();
+
+            // Self-healing column checks
+            const alters = [
+                'ALTER TABLE business_customers ADD COLUMN phone_number TEXT',
+                'ALTER TABLE business_customers ADD COLUMN pan_number TEXT',
+                'ALTER TABLE business_customers ADD COLUMN billing_address TEXT',
+                'ALTER TABLE business_customers ADD COLUMN alternate_phone TEXT',
+                'ALTER TABLE business_customers ADD COLUMN current_balance REAL DEFAULT 0'
+            ];
+            for (const sql of alters) {
+                try { await db.prepare(sql).run(); } catch (e) {}
+            }
+
+            let insertedCount = 0;
+            for (const item of list) {
+                const name = item.name || item.customer_name || item.company || 'Imported Customer';
+                const email = item.email || null;
+                const phone = item.phone || item.phone_number || item.mobile || null;
+                const company = item.company || item.business_name || null;
+                const gstin = item.gstin || null;
+                const city = item.city || null;
+                const state = item.state || null;
+                const opening_balance = parseFloat(item.opening_balance || item.balance || item.outstanding_balance || 0) || 0;
+                const loyalty_points = parseInt(item.loyalty_points || item.points || 0) || 0;
+                const customer_code = item.customer_code || `CUST-${Date.now().toString().slice(-4)}${Math.floor(Math.random()*100)}`;
+
+                await db.prepare(`
+                    INSERT INTO business_customers (
+                        user_id, name, email, phone, phone_number, company, business_name, gstin, city, state, opening_balance, loyalty_points, status, customer_code, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?)
+                `).run(
+                    userId, name, email, phone, phone, company, company, gstin, city, state, opening_balance, loyalty_points, customer_code, now, now
+                );
+                insertedCount++;
+            }
+
+            return sendSuccess(res, { count: insertedCount }, `${insertedCount} customer(s) imported successfully`);
+        } catch (error) {
+            console.error('[Customer Controller] Error importing customers:', error);
+            return sendError(res, error.message || 'Failed to import customers', 500);
+        }
     }
 };
 
