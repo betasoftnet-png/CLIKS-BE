@@ -152,12 +152,28 @@ const createPerson = async (req, res) => {
   const { name, role_type, relationship, phone, email, company, contact_info, notes } = req.body;
   if (!name || !role_type) return sendError(res, 'Name and role_type are required', 400, 'BAD_REQUEST');
 
+  // 1. BNXMAIL Domain Validation
+  if (email && email.trim()) {
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@bnxmail\.com$/i;
+    if (!emailRegex.test(email.trim())) {
+      return sendError(res, 'Only official @bnxmail.com domain emails are permitted.', 400, 'BAD_REQUEST');
+    }
+  }
+
+  // 2. Unique Phone Number Check
+  if (phone && phone.trim()) {
+    const existingPhone = await db.prepare('SELECT id FROM people WHERE user_id = ? AND phone = ?').get(req.user.id, phone.trim());
+    if (existingPhone) {
+      return sendError(res, 'Phone number must be unique. A contact with this mobile number already exists.', 409, 'CONFLICT');
+    }
+  }
+
   const now = new Date().toISOString();
   const stmt = db.prepare(`
     INSERT INTO people (user_id, name, role_type, relationship, phone, email, company, contact_info, notes, created_at, updated_at) 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = await stmt.run(req.user.id, name, role_type, relationship || null, phone || null, email || null, company || null, contact_info || null, notes || null, now, now);
+  const info = await stmt.run(req.user.id, name, role_type, relationship || null, phone ? phone.trim() : null, email ? email.trim() : null, company || null, contact_info || null, notes || null, now, now);
   
   const newItem = await db.prepare('SELECT * FROM people WHERE id = ?').get(info.lastInsertRowid);
   return sendSuccess(res, newItem, 'Person created', 201);
@@ -173,6 +189,24 @@ const updatePerson = async (req, res) => {
   const person = await db.prepare('SELECT * FROM people WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!person) return sendError(res, 'Person not found', 404, 'NOT_FOUND');
 
+  const { phone, email } = req.body;
+
+  // 1. BNXMAIL Domain Validation if email is updated
+  if (email !== undefined && email !== null && email.trim() !== '') {
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@bnxmail\.com$/i;
+    if (!emailRegex.test(email.trim())) {
+      return sendError(res, 'Only official @bnxmail.com domain emails are permitted.', 400, 'BAD_REQUEST');
+    }
+  }
+
+  // 2. Unique Phone Number Check if phone is updated
+  if (phone !== undefined && phone !== null && phone.trim() !== '') {
+    const existingPhone = await db.prepare('SELECT id FROM people WHERE user_id = ? AND phone = ? AND id != ?').get(req.user.id, phone.trim(), req.params.id);
+    if (existingPhone) {
+      return sendError(res, 'Phone number must be unique. A contact with this mobile number already exists.', 409, 'CONFLICT');
+    }
+  }
+
   const updates = [];
   const params = [];
   const allowedFields = ['name', 'role_type', 'relationship', 'phone', 'email', 'company', 'contact_info', 'notes'];
@@ -180,7 +214,7 @@ const updatePerson = async (req, res) => {
   for (const field of allowedFields) {
     if (req.body[field] !== undefined) {
       updates.push(`${field} = ?`);
-      params.push(req.body[field]);
+      params.push(typeof req.body[field] === 'string' ? req.body[field].trim() : req.body[field]);
     }
   }
 

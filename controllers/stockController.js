@@ -103,7 +103,7 @@ const getStocks = async (req, res) => {
 
 // ── POST / ────────────────────────────────────────────────────────────────────
 const createStock = async (req, res) => {
-  const { name, sub_name, sku, quantity = 0, unit, unit_price, category, location, notes, low_stock_threshold } = req.body;
+  const { name, sub_name, sku, quantity = 0, unit, unit_price, category, location, notes, low_stock_threshold, warehouse_id, warehouse } = req.body;
   if (!name) return sendError(res, 'Name is required', 400, 'BAD_REQUEST');
 
   const now = new Date().toISOString();
@@ -118,11 +118,12 @@ const createStock = async (req, res) => {
   
   const newItem = await db.prepare('SELECT * FROM stock WHERE id = ?').get(info.lastInsertRowid);
   
+  const resolvedWhId = warehouse_id || location || warehouse || null;
   // Log initial stock as a transaction
   await db.prepare(`
-    INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(newItem.id, req.user.id, 'in', quantity, now, now);
+    INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at, warehouse_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(newItem.id, req.user.id, 'in', quantity, now, now, resolvedWhId);
 
   return sendSuccess(res, enrichRow(newItem), 'Stock item created', 201);
 };

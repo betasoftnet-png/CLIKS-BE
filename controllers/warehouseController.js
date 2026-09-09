@@ -1017,10 +1017,15 @@ const warehouseController = {
             const transfers = await db.prepare('SELECT * FROM warehouse_transfers WHERE user_id = ?').all(req.user.id);
             
             const inwards = await db.prepare(`
-                SELECT t.*, s.name as product_name, w.name as warehouse_name 
+                SELECT t.*, 
+                       COALESCE(s.name, bp.name, 'Unknown Item') as product_name, 
+                       COALESCE(w.name, w2.name, w3.name) as warehouse_name
                 FROM stock_transactions t 
                 LEFT JOIN stock s ON t.stock_id = s.id 
-                LEFT JOIN warehouses w ON t.warehouse_id = w.id
+                LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT))
+                LEFT JOIN warehouses w ON (t.warehouse_id = w.id OR CAST(t.warehouse_id AS TEXT) = CAST(w.id AS TEXT) OR LOWER(t.warehouse_id) = LOWER(w.name) OR LOWER(t.warehouse_id) = LOWER(w.code))
+                LEFT JOIN warehouses w2 ON (t.warehouse_id IS NULL AND (LOWER(s.location) = LOWER(w2.name) OR LOWER(s.warehouse) = LOWER(w2.code)))
+                LEFT JOIN warehouses w3 ON (t.warehouse_id IS NULL AND (LOWER(bp.warehouse_id) = LOWER(w3.name) OR CAST(bp.warehouse_id AS TEXT) = CAST(w3.id AS TEXT) OR LOWER(bp.warehouse_id) = LOWER(w3.code)))
                 WHERE t.user_id = ? AND t.type = 'in'
                 ORDER BY t.id DESC
             `).all(req.user.id);

@@ -100,6 +100,24 @@ const billingController = {
 
         if (!client_name) return sendError(res, 'Client name is required', 400);
         
+        let parsedItems = [];
+        if (typeof items === 'string') {
+            try { parsedItems = JSON.parse(items); } catch (e) {}
+        } else if (Array.isArray(items)) {
+            parsedItems = items;
+        }
+
+        if (Array.isArray(parsedItems)) {
+            for (const item of parsedItems) {
+                const p = parseFloat(item.price);
+                const r = parseFloat(item.rate);
+                const up = parseFloat(item.unit_price);
+                if ((!isNaN(p) && p < 0) || (!isNaN(r) && r < 0) || (!isNaN(up) && up < 0)) {
+                    return sendError(res, 'Invoice item price cannot be negative', 400);
+                }
+            }
+        }
+        
         // Double validation logic to handle edge cases where stringified corruption "NaN" might leak in 
         // from external system layers. Normalizes all currency values back to strict pure numeric values.
         const numAmount = parseFloat(amount) || 0;
@@ -342,6 +360,24 @@ const billingController = {
         const numDue = parseFloat(due_amount) || 0;
         const numDiscount = parseFloat(discount_amount) || 0;
         const numRoundOff = parseFloat(round_off) || 0;
+
+        let parsedItems = [];
+        if (typeof items === 'string') {
+            try { parsedItems = JSON.parse(items); } catch (e) {}
+        } else if (Array.isArray(items)) {
+            parsedItems = items;
+        }
+
+        if (Array.isArray(parsedItems)) {
+            for (const item of parsedItems) {
+                const p = parseFloat(item.price);
+                const r = parseFloat(item.rate);
+                const up = parseFloat(item.unit_price);
+                if ((!isNaN(p) && p < 0) || (!isNaN(r) && r < 0) || (!isNaN(up) && up < 0)) {
+                    return sendError(res, 'Invoice item price cannot be negative', 400);
+                }
+            }
+        }
 
         try {
             const invoice = await db.prepare('SELECT id FROM business_invoices WHERE id = ? AND user_id = ?').get(id, req.user.id);

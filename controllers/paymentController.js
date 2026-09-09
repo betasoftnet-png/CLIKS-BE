@@ -20,16 +20,36 @@ initColumns();
 
 const paymentController = {
     receivePayment: async (req, res) => {
-        const { amount, customer_name, invoice_id, payment_mode, reference_number, notes } = req.body;
+        const { amount, customer_name, invoice_id, payment_mode, reference_number, notes, account_id } = req.body;
         if (!amount) return sendError(res, 'Amount is required', 400);
+        const numAmount = parseFloat(amount);
+        if (isNaN(numAmount) || numAmount <= 0) {
+            return sendError(res, 'Payment amount must be a positive number greater than 0', 400);
+        }
         try {
             const now = new Date().toISOString();
             const result = await db.prepare(
                 `INSERT INTO business_payments (user_id, type, amount, party_name, invoice_id, payment_mode, reference_number, notes, status, reconciliation_status, created_at)
                  VALUES (?, 'receive', ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
-            ).run(req.user.id, amount, customer_name || 'General Customer', invoice_id || null, payment_mode || 'Cash', reference_number || null, notes || null, now);
+            ).run(req.user.id, numAmount, customer_name || 'General Customer', invoice_id || null, payment_mode || 'Cash', reference_number || null, notes || null, now);
 
-            return sendSuccess(res, { id: result.lastInsertRowid, amount }, 'Payment received successfully', 201);
+            // Record income entry in accounting table
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'income', ?, ?, 'Customer Payment', ?, ?, 'Completed', ?, ?)
+            `).run(req.user.id, now.split('T')[0], numAmount, payment_mode || 'Cash', `Receipt from ${customer_name || 'Customer'} (Invoice: ${invoice_id || 'Direct'})`, now, now);
+
+            // Increase balance in selected payment account
+            if (account_id) {
+                await db.prepare('UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE (id = ? OR name = ?) AND user_id = ?').run(numAmount, now, account_id, account_id, req.user.id);
+            } else {
+                const firstAccount = await db.prepare('SELECT id FROM accounts WHERE user_id = ? LIMIT 1').get(req.user.id);
+                if (firstAccount) {
+                    await db.prepare('UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE id = ? AND user_id = ?').run(numAmount, now, firstAccount.id, req.user.id);
+                }
+            }
+
+            return sendSuccess(res, { id: result.lastInsertRowid, amount: numAmount }, 'Payment received successfully', 201);
         } catch (error) {
             console.error('[Payment Controller] Error receiving payment:', error);
             return sendError(res, 'Failed to receive payment', 500);
@@ -37,21 +57,24 @@ const paymentController = {
     },
 
     paySupplier: async (req, res) => {
-        const { amount, supplier_name, purchase_id, payment_mode, reference_number, notes } = req.body;
+        const { amount, supplier_name, purchase_id, payment_mode, reference_number, notes, account_id } = req.body;
         if (!amount) return sendError(res, 'Amount is required', 400);
+        const numAmount = parseFloat(amount);
+        if (isNaN(numAmount) || numAmount <= 0) {
+            return sendError(res, 'Supplier payment amount must be a positive number greater than 0', 400);
+        }
         try {
             const now = new Date().toISOString();
             const result = await db.prepare(
                 `INSERT INTO business_payments (user_id, type, amount, party_name, invoice_id, payment_mode, reference_number, notes, status, reconciliation_status, created_at)
                  VALUES (?, 'pay', ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
-            ).run(req.user.id, amount, supplier_name || 'General Supplier', purchase_id || null, payment_mode || 'Bank Transfer', reference_number || null, notes || null, now);
+            ).run(req.user.id, numAmount, supplier_name || 'General Supplier', purchase_id || null, payment_mode || 'Bank Transfer', reference_number || null, notes || null, now);
 
             // Locate credit purchase bill using Bill Number (purchase_id)
             const purchase = await db.prepare("SELECT * FROM business_purchases WHERE user_id = ? AND (purchase_number = ? OR id = ? || 0)").get(req.user.id, purchase_id, purchase_id);
             
             if (purchase) {
-                const amountVal = parseFloat(amount) || 0;
-                const newPaidAmount = (parseFloat(purchase.paid_amount) || 0) + amountVal;
+                const newPaidAmount = (parseFloat(purchase.paid_amount) || 0) + numAmount;
                 const totalToPay = parseFloat(purchase.grand_total) || 0;
 
                 let newPaymentStatus = 'pending';
@@ -64,7 +87,7 @@ const paymentController = {
                     newStatus = 'Partially Paid';
                 }
 
-                // Update the Credit Purchase bill status and paid amount
+                // Update Credit Purchase bill status and paid amount
                 await db.prepare('UPDATE business_purchases SET paid_amount = ?, payment_status = ?, status = ? WHERE id = ?').run(newPaidAmount, newPaymentStatus, newStatus, purchase.id);
 
                 // Update matching Credit Purchase in accounting ledger
@@ -73,35 +96,102 @@ const paymentController = {
                     const updatedStatus = newPaidAmount >= totalToPay ? 'Paid' : 'Partially Paid';
                     await db.prepare("UPDATE accounting SET status = ? WHERE id = ?").run(updatedStatus, creditLedger.id);
                 }
-
-                // Reduce Accounts Payable balance and update Cash/Bank
-                const normalizePaymentMode = (mode) => {
-                    if (!mode) return 'Cash in Hand';
-                    const m = String(mode).toLowerCase();
-                    if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) return 'Cash in Hand';
-                    if (m.includes('hdfc')) return 'HDFC Bank Account';
-                    if (m.includes('icici')) return 'ICICI Bank Account';
-                    if (m.includes('sbi') || m.includes('state bank')) return 'SBI Current Account';
-                    if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) return 'UPI / Razorpay';
-                    if (m === 'bank' || m.includes('bank')) return 'HDFC Bank Account';
-                    return mode;
-                };
-
-                const normalizedMode = normalizePaymentMode(payment_mode);
-                await db.prepare(`
-                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                    VALUES (?, 'expense', ?, ?, 'Supplier Payment', ?, ?, 'Paid', ?, ?)
-                `).run(req.user.id, now.split('T')[0], amountVal, normalizedMode, `Payment for Purchase #${purchase.purchase_number}`, now, now);
             }
 
+            // Record Debit Note / Voucher entry in accounting table
+            await db.prepare(`
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                VALUES (?, 'expense', ?, ?, 'Supplier Payment', ?, ?, 'Paid', ?, ?)
+            `).run(req.user.id, now.split('T')[0], numAmount, payment_mode || 'Bank Transfer', `Payment to ${supplier_name || 'Supplier'} (Ref: ${reference_number || purchase_id || 'Direct'})`, now, now);
+
+            // Deduct balance from selected payment account in accounts table
+            if (account_id) {
+                await db.prepare('UPDATE accounts SET balance = balance - ?, updated_at = ? WHERE (id = ? OR name = ?) AND user_id = ?').run(numAmount, now, account_id, account_id, req.user.id);
+            } else {
+                const firstAccount = await db.prepare('SELECT id FROM accounts WHERE user_id = ? LIMIT 1').get(req.user.id);
+                if (firstAccount) {
+                    await db.prepare('UPDATE accounts SET balance = balance - ?, updated_at = ? WHERE id = ? AND user_id = ?').run(numAmount, now, firstAccount.id, req.user.id);
+                }
+            }
+
+            // Update supplier outstanding balance in business_suppliers table
             if (supplier_name) {
-                await db.prepare("UPDATE business_suppliers SET outstanding_balance = outstanding_balance - ? WHERE name = ? AND user_id = ?").run(amount, supplier_name, req.user.id);
+                await db.prepare("UPDATE business_suppliers SET outstanding_balance = MAX(0, outstanding_balance - ?) WHERE name = ? AND user_id = ?").run(numAmount, supplier_name, req.user.id);
             }
 
-            return sendSuccess(res, { id: result.lastInsertRowid, amount }, 'Payment to supplier recorded successfully', 201);
+            return sendSuccess(res, { id: result.lastInsertRowid, amount: numAmount }, 'Payment to supplier recorded successfully', 201);
         } catch (error) {
             console.error('[Payment Controller] Error paying supplier:', error);
             return sendError(res, 'Failed to process supplier payment', 500);
+        }
+    },
+
+    transferVault: async (req, res) => {
+        const { from_acc_id, to_acc_id, amount } = req.body;
+        if (!from_acc_id || !to_acc_id || amount === undefined || amount === null) {
+            return sendError(res, 'From account, to account, and amount are required', 400);
+        }
+        if (from_acc_id === to_acc_id) {
+            return sendError(res, 'From Account and To Account cannot be identical', 400);
+        }
+
+        const numAmount = parseFloat(amount);
+        if (isNaN(numAmount) || numAmount <= 0) {
+            return sendError(res, 'Transfer amount must be a positive number greater than 0', 400);
+        }
+
+        try {
+            const now = new Date().toISOString();
+            const dateStr = now.split('T')[0];
+
+            // 1. Verify source account exists and has sufficient balance
+            const fromAcc = await db.prepare('SELECT * FROM accounts WHERE (id = ? OR name = ?) AND user_id = ?').get(from_acc_id, from_acc_id, req.user.id);
+            if (!fromAcc) {
+                return sendError(res, 'Source account not found', 404);
+            }
+            if ((parseFloat(fromAcc.balance) || 0) < numAmount) {
+                return sendError(res, `Insufficient balance in ${fromAcc.name || 'source account'}! Available: ${fromAcc.balance}`, 400);
+            }
+
+            // 2. Verify destination account exists
+            const toAcc = await db.prepare('SELECT * FROM accounts WHERE (id = ? OR name = ?) AND user_id = ?').get(to_acc_id, to_acc_id, req.user.id);
+            if (!toAcc) {
+                return sendError(res, 'Destination account not found', 404);
+            }
+
+            // 3. Atomically update balances
+            await db.prepare('UPDATE accounts SET balance = balance - ?, updated_at = ? WHERE id = ? AND user_id = ?').run(numAmount, now, fromAcc.id, req.user.id);
+            await db.prepare('UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE id = ? AND user_id = ?').run(numAmount, now, toAcc.id, req.user.id);
+
+            // 4. Log transaction in transactions table
+            try {
+                await db.prepare(`
+                    INSERT INTO transactions (user_id, account_id, type, amount, category, description, date, created_at, updated_at)
+                    VALUES (?, ?, 'transfer', ?, 'Internal Vault Transfer', ?, ?, ?, ?)
+                `).run(req.user.id, fromAcc.id, numAmount, `Internal Transfer from ${fromAcc.name} to ${toAcc.name}`, dateStr, now, now);
+            } catch (err) {
+                console.warn('[Payment Controller] Could not insert into transactions table:', err.message);
+            }
+
+            // 5. Log in accounting table
+            try {
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'expense', ?, ?, 'Internal Vault Transfer', ?, ?, 'posted', ?, ?)
+                `).run(req.user.id, dateStr, numAmount, fromAcc.name, `Transfer to ${toAcc.name}`, now, now);
+
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'income', ?, ?, 'Internal Vault Transfer', ?, ?, 'posted', ?, ?)
+                `).run(req.user.id, dateStr, numAmount, toAcc.name, `Transfer from ${fromAcc.name}`, now, now);
+            } catch (err) {
+                console.warn('[Payment Controller] Could not insert into accounting table:', err.message);
+            }
+
+            return sendSuccess(res, { from_account: fromAcc.name, to_account: toAcc.name, amount: numAmount }, 'Internal fund transfer settled successfully', 200);
+        } catch (error) {
+            console.error('[Payment Controller] Error in transferVault:', error);
+            return sendError(res, 'Failed to process internal vault transfer', 500);
         }
     },
 
@@ -110,11 +200,35 @@ const paymentController = {
             const ledger = await db.prepare('SELECT * FROM business_payments WHERE user_id = ? ORDER BY id DESC').all(req.user.id);
             const accounts = await db.prepare('SELECT id as bank_account_id, name as bank_account_name, balance as current_balance, type FROM accounts WHERE user_id = ?').all(req.user.id);
             
-            // Derive stats
+            let overdueInvoices = [];
+            try {
+                const todayStr = new Date().toISOString().split('T')[0];
+                overdueInvoices = await db.prepare(`
+                    SELECT 
+                        id, 
+                        invoice_number, 
+                        client_name, 
+                        amount, 
+                        total_amount,
+                        paid_amount,
+                        status, 
+                        due_date, 
+                        created_at 
+                    FROM business_invoices 
+                    WHERE user_id = ? 
+                      AND (status IS NULL OR LOWER(status) NOT IN ('paid', 'completed', 'settled'))
+                      AND due_date IS NOT NULL 
+                      AND due_date < ?
+                    ORDER BY due_date ASC
+                `).all(req.user.id, todayStr);
+            } catch (err) {
+                console.warn('[Payment Controller] Error querying business_invoices:', err.message);
+            }
+
             const receivables = ledger.filter(l => l.type === 'receive');
             const payables = ledger.filter(l => l.type === 'pay');
 
-            return sendSuccess(res, { receivables, payables, accounts }, 'Payment reports fetched successfully');
+            return sendSuccess(res, { receivables, payables, accounts, overdueInvoices }, 'Payment reports fetched successfully');
         } catch (error) {
             console.error('[Payment Controller] Error fetching reports:', error);
             return sendError(res, 'Failed to fetch payment reports', 500);

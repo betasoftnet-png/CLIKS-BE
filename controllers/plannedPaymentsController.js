@@ -33,14 +33,19 @@ const getPlannedPayments = async (req, res) => {
 
 const createPlannedPayment = async (req, res) => {
   const { account_id, name, amount, due_date, frequency, category, status = 'pending', type, person_id } = req.body;
-  if (!name || amount === undefined || !due_date) return sendError(res, 'Name, amount, and due_date are required', 400, 'BAD_REQUEST');
+  if (!name || amount === undefined || amount === null || !due_date) return sendError(res, 'Name, amount, and due_date are required', 400, 'BAD_REQUEST');
+
+  const numAmount = parseFloat(amount);
+  if (isNaN(numAmount) || numAmount <= 0) {
+    return sendError(res, 'Payment amount must be a positive number greater than 0', 400, 'BAD_REQUEST');
+  }
 
   const now = new Date().toISOString();
   const stmt = db.prepare(`
     INSERT INTO planned_payments (user_id, account_id, name, amount, due_date, frequency, category, status, type, person_id, created_at, updated_at) 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = await stmt.run(req.user.id, account_id || null, name, amount, due_date, frequency || null, category || null, status, type || null, person_id || null, now, now);
+  const info = await stmt.run(req.user.id, account_id || null, name, numAmount, due_date, frequency || null, category || null, status, type || null, person_id || null, now, now);
   
   const newItem = await db.prepare('SELECT * FROM planned_payments WHERE id = ?').get(info.lastInsertRowid);
   return sendSuccess(res, newItem, 'Planned payment created', 201);
@@ -56,6 +61,13 @@ const updatePlannedPayment = async (req, res) => {
   const item = await db.prepare('SELECT * FROM planned_payments WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!item) return sendError(res, 'Planned payment not found', 404, 'NOT_FOUND');
 
+  if (req.body.amount !== undefined) {
+    const numAmount = parseFloat(req.body.amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return sendError(res, 'Payment amount must be a positive number greater than 0', 400, 'BAD_REQUEST');
+    }
+  }
+
   const updates = [];
   const params = [];
   const allowedFields = ['account_id', 'name', 'amount', 'due_date', 'frequency', 'category', 'status', 'type', 'person_id'];
@@ -63,7 +75,7 @@ const updatePlannedPayment = async (req, res) => {
   for (const field of allowedFields) {
     if (req.body[field] !== undefined) {
       updates.push(`${field} = ?`);
-      params.push(req.body[field]);
+      params.push(field === 'amount' ? parseFloat(req.body[field]) : req.body[field]);
     }
   }
 
