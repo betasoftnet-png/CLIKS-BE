@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
   favorite_products TEXT, -- Added to persist product launcher favorites
   tier TEXT DEFAULT 'Free Plan',
   subscription_days_remaining INTEGER DEFAULT 0,
+  active_subscriptions TEXT, -- JSON structure for multi-module active subscriptions
   primary_income_source TEXT, -- Rental | Pension | Salaried | Business | Freelancer
   global_budget REAL DEFAULT 20000,
   gst_username TEXT,

@@ -10,6 +10,7 @@ const initColumns = async () => {
   const columns = [
     'tier TEXT DEFAULT \'Free Plan\'',
     'subscription_days_remaining INTEGER DEFAULT 0',
+    'active_subscriptions TEXT',
     'favorite_products TEXT',
     'receive_purchase_data INTEGER DEFAULT 1'
   ];
@@ -25,6 +26,25 @@ const safeUser = (user) => {
   if (!user) return null;
   const { password_hash: _password_hash, ...safe } = user;
   safe.name = user.username; // Map database username to name expected by the frontend
+
+  let parsedSubs = null;
+  if (user.active_subscriptions) {
+    try {
+      parsedSubs = typeof user.active_subscriptions === 'string'
+        ? JSON.parse(user.active_subscriptions)
+        : user.active_subscriptions;
+    } catch (e) {
+      console.warn('Failed to parse active_subscriptions JSON:', e);
+    }
+  }
+
+  safe.active_subscriptions = {
+    business: parsedSubs?.business || { active: true, plan: user.tier || 'Starter Plan' },
+    fin_pro: parsedSubs?.fin_pro || { active: Boolean(user.finpro_plan || user.ca_plan), plan: user.finpro_plan || null },
+    investor: parsedSubs?.investor || { active: Boolean(user.investor_plan || user.betaclub_investor_plan), plan: user.investor_plan || null },
+    poster: parsedSubs?.poster || { active: Boolean(user.poster_plan || user.founder_plan), plan: user.poster_plan || null }
+  };
+
   return safe;
 };
 
@@ -65,10 +85,10 @@ const getProfile = async (req, res) => {
 // ── PATCH / — Update username, email, or avatar ───────────────────────────────
 const updateProfile = async (req, res) => {
   const bodyData = { ...req.query, ...req.body };
-  const { username, email, name, avatar_data, avatar_name, tier, subscription_days_remaining, favorite_products } = bodyData;
+  const { username, email, name, avatar_data, avatar_name, tier, subscription_days_remaining, active_subscriptions, favorite_products } = bodyData;
   const targetUsername = username || name;
 
-  if (!targetUsername && !email && !avatar_data && tier === undefined && subscription_days_remaining === undefined && favorite_products === undefined) {
+  if (!targetUsername && !email && !avatar_data && tier === undefined && subscription_days_remaining === undefined && active_subscriptions === undefined && favorite_products === undefined) {
     return sendError(res, 'Provide at least one field to update', 400, 'BAD_REQUEST');
   }
 
@@ -119,6 +139,11 @@ const updateProfile = async (req, res) => {
   if (table === 'users') {
     if (tier !== undefined) { updates.push('tier = ?'); params.push(tier); }
     if (subscription_days_remaining !== undefined) { updates.push('subscription_days_remaining = ?'); params.push(subscription_days_remaining); }
+    if (active_subscriptions !== undefined) {
+      const activeSubsStr = typeof active_subscriptions === 'object' ? JSON.stringify(active_subscriptions) : active_subscriptions;
+      updates.push('active_subscriptions = ?');
+      params.push(activeSubsStr);
+    }
     if (favorite_products !== undefined) { updates.push('favorite_products = ?'); params.push(favorite_products); }
     updates.push('updated_at = ?');
     params.push(new Date().toISOString());
