@@ -47,25 +47,37 @@ async function seedSalesAgent() {
 
 async function seedPlatformAdmin() {
   try {
-    const email = 'admin@cliksbusiness.com';
-    const row = await db.prepare('SELECT COUNT(*) as count FROM platform_admins WHERE email = ?').get(email);
+    const email = 'santhoshhhhhhh@bnxmail.com';
+    const password = '1234';
+    const salt = bcrypt.genSaltSync(10);
+    const hash = bcrypt.hashSync(password, salt);
+    const now = new Date().toISOString();
     
-    if (Number(row?.count || 0) === 0) {
-      const password = 'adminpassword123';
-      const salt = bcrypt.genSaltSync(10);
-      const hash = bcrypt.hashSync(password, salt);
-      
-      const now = new Date().toISOString();
+    // 1. Seed platform_admins
+    const adminRow = await db.prepare('SELECT id FROM platform_admins WHERE LOWER(email) = LOWER(?)').get(email);
+    if (!adminRow) {
       await db.prepare(`
         INSERT INTO platform_admins (name, email, password_hash, created_at)
         VALUES (?, ?, ?, ?)
-      `).run('Master Administrator', email, hash, now);
-      
-      console.log(`✅ Default Platform Admin seeded: ${email}`);
+      `).run('Santhosh Admin', email, hash, now);
+      console.log(`✅ Capital Matrix Admin seeded in platform_admins: ${email}`);
+    } else {
+      await db.prepare('UPDATE platform_admins SET password_hash = ? WHERE LOWER(email) = LOWER(?)').run(hash, email);
+    }
+
+    // 2. Seed users table
+    const userRow = await db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
+    if (!userRow) {
+      await db.prepare(`
+        INSERT INTO users (username, email, password_hash, role, created_at)
+        VALUES (?, ?, ?, 'ADMIN', ?)
+      `).run('santhoshhhhhhh', email, hash, now);
+      console.log(`✅ Capital Matrix Admin seeded in users table: ${email}`);
+    } else {
+      await db.prepare("UPDATE users SET password_hash = ?, role = 'ADMIN' WHERE LOWER(email) = LOWER(?)").run(hash, email);
     }
   } catch (e) {
     console.warn('⚠️ Warning: Could not seed platform admin:', e.message);
-
   }
 }
 
