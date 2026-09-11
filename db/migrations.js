@@ -2848,8 +2848,67 @@ CREATE TABLE IF NOT EXISTS money_trackers (
         updated_at TEXT
       )
     `).run();
+    // ── Compliance & Masters India Integration Migrations ──────────────────
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS sales_invoices (
+        id ${idType},
+        user_id INTEGER NOT NULL,
+        invoice_number TEXT NOT NULL,
+        client_name TEXT,
+        client_email TEXT,
+        client_gstin TEXT,
+        billing_address TEXT,
+        shipping_address TEXT,
+        amount REAL DEFAULT 0,
+        tax_amount REAL DEFAULT 0,
+        total_amount REAL DEFAULT 0,
+        status TEXT DEFAULT 'Draft',
+        items TEXT,
+        AckNo TEXT,
+        AckDt TEXT,
+        Irn TEXT,
+        SignedQRCode TEXT,
+        signed_invoice TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS delivery_challans (
+        id ${idType},
+        user_id INTEGER NOT NULL,
+        challan_number TEXT NOT NULL,
+        invoice_id TEXT,
+        customer_name TEXT,
+        shipping_address TEXT,
+        vehicle_number TEXT,
+        transport_mode TEXT DEFAULT '1',
+        distance REAL DEFAULT 0,
+        ewayBillNo TEXT,
+        validUpto TEXT,
+        pdf_url TEXT,
+        status TEXT DEFAULT 'Generated',
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `).run();
+
+    // Safely add e-invoicing columns to business_invoices if missing
+    try {
+      await db.prepare("ALTER TABLE business_invoices ADD COLUMN AckNo TEXT").run();
+    } catch (_) {}
+    try {
+      await db.prepare("ALTER TABLE business_invoices ADD COLUMN AckDt TEXT").run();
+    } catch (_) {}
+    try {
+      await db.prepare("ALTER TABLE business_invoices ADD COLUMN Irn TEXT").run();
+    } catch (_) {}
+    try {
+      await db.prepare("ALTER TABLE business_invoices ADD COLUMN SignedQRCode TEXT").run();
+    } catch (_) {}
   } catch (invErr) {
-    console.warn("⚠️ Error initializing inventory and stock tables migration:", invErr.message);
+    console.warn("⚠️ Error initializing inventory, stock, or compliance tables migration:", invErr.message);
   }
 
   console.log('✅ Migrations applied');
