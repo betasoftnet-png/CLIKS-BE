@@ -209,7 +209,9 @@ const adjustQuantity = async (req, res) => {
 
   // Log transaction
   try {
-    const { purchase_bill_ref, received_by, warehouse_id } = req.body;
+    const { purchase_bill_ref, received_by, staff_name, warehouse_id, destination_warehouse_id } = req.body;
+    const finalWhId = warehouse_id || destination_warehouse_id || null;
+    const finalStaff = received_by || staff_name || (req.user ? (req.user.name || req.user.username) : null) || 'Authorized Staff';
     await db.prepare(`
       INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at, purchase_bill_ref, received_by, warehouse_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -221,8 +223,8 @@ const adjustQuantity = async (req, res) => {
       now, 
       now,
       purchase_bill_ref || null,
-      received_by || null,
-      warehouse_id || null
+      finalStaff,
+      finalWhId
     );
   } catch (e) {}
 
@@ -240,14 +242,21 @@ const deleteStock = async (req, res) => {
 
 // ── GET /:id/history ──────────────────────────────────────────────────────────
 const getStockHistory = async (req, res) => {
-  const history = await db.prepare(`
-    SELECT * FROM stock_transactions 
-    WHERE stock_id = ? AND user_id = ? 
-    ORDER BY created_at DESC 
-    LIMIT 50
-  `).all(req.params.id, req.user.id);
-  
-  return sendSuccess(res, history, 'Stock history fetched');
+  try {
+    const history = await db.prepare(`
+      SELECT t.*, 
+             COALESCE(w.name, 'Main Godown') as warehouse_name
+      FROM stock_transactions t 
+      LEFT JOIN warehouses w ON (t.warehouse_id = w.id OR CAST(t.warehouse_id AS TEXT) = CAST(w.id AS TEXT) OR LOWER(t.warehouse_id) = LOWER(w.name))
+      WHERE t.stock_id = ? AND t.user_id = ? 
+      ORDER BY t.created_at DESC 
+      LIMIT 50
+    `).all(req.params.id, req.user.id);
+    
+    return sendSuccess(res, history, 'Stock history fetched');
+  } catch (err) {
+    return sendError(res, 'Failed to fetch stock history', 500);
+  }
 };
 
 module.exports = { getStockStats, getStocks, createStock, getStock, updateStock, adjustQuantity, deleteStock, getStockHistory };

@@ -1016,19 +1016,24 @@ const warehouseController = {
             const warehouses = await db.prepare('SELECT * FROM warehouses WHERE user_id = ?').all(req.user.id);
             const transfers = await db.prepare('SELECT * FROM warehouse_transfers WHERE user_id = ?').all(req.user.id);
             
+            const defaultWh = (warehouses || []).find(w => (w.name || '').toLowerCase().includes('main') || (w.code || '').toLowerCase().includes('main')) || (warehouses && warehouses.length > 0 ? warehouses[0] : null);
+            const defaultWhName = defaultWh ? defaultWh.name : 'Main Godown';
+
             const inwards = await db.prepare(`
                 SELECT t.*, 
                        COALESCE(s.name, bp.name, 'Unknown Item') as product_name, 
-                       COALESCE(w.name, w2.name, w3.name) as warehouse_name
+                       COALESCE(w.name, w2.name, w3.name, ?) as warehouse_name,
+                       COALESCE(t.received_by, u.username, 'Authorized Staff') as received_by
                 FROM stock_transactions t 
                 LEFT JOIN stock s ON t.stock_id = s.id 
                 LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT))
                 LEFT JOIN warehouses w ON (t.warehouse_id = w.id OR CAST(t.warehouse_id AS TEXT) = CAST(w.id AS TEXT) OR LOWER(t.warehouse_id) = LOWER(w.name) OR LOWER(t.warehouse_id) = LOWER(w.code))
-                LEFT JOIN warehouses w2 ON (t.warehouse_id IS NULL AND (LOWER(s.location) = LOWER(w2.name) OR LOWER(s.warehouse) = LOWER(w2.code)))
-                LEFT JOIN warehouses w3 ON (t.warehouse_id IS NULL AND (LOWER(bp.warehouse_id) = LOWER(w3.name) OR CAST(bp.warehouse_id AS TEXT) = CAST(w3.id AS TEXT) OR LOWER(bp.warehouse_id) = LOWER(w3.code)))
+                LEFT JOIN warehouses w2 ON (LOWER(s.location) = LOWER(w2.name) OR LOWER(s.warehouse) = LOWER(w2.code))
+                LEFT JOIN warehouses w3 ON (LOWER(bp.warehouse_id) = LOWER(w3.name) OR CAST(bp.warehouse_id AS TEXT) = CAST(w3.id AS TEXT) OR LOWER(bp.warehouse_id) = LOWER(w3.code))
+                LEFT JOIN users u ON t.user_id = u.id
                 WHERE t.user_id = ? AND t.type = 'in'
                 ORDER BY t.id DESC
-            `).all(req.user.id);
+            `).all(defaultWhName, req.user.id);
 
             return sendSuccess(res, { warehouses, transfers, inwards }, 'Warehouse reports fetched successfully');
         } catch (error) {
