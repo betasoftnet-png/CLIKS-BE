@@ -223,6 +223,10 @@ app.use('/api/v1/calculator',    auth, require('./routes/calculator'));
 app.use('/api/v1/currency',      auth, require('./routes/currency'));
 app.use('/api/v1/ca',            auth, require('./routes/ca'));
 app.use('/api/v1/finpro',        auth, require('./routes/finpro'));
+app.use('/api/v1/tax-audit',     (req, res, next) => {
+    if (req.headers.authorization) return auth(req, res, next);
+    next();
+}, require('./routes/taxAudit'));
 app.use('/api/v1/gst',           auth, require('./routes/gst'));
 app.use('/api/v1/tasks',         auth, require('./routes/tasks'));
 app.use('/api/v1/notifications', auth, require('./routes/notifications'));

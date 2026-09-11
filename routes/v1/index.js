@@ -85,5 +85,6 @@ router.use('/notifications',   auth, require('../notifications'));
 router.use('/presence',        auth, require('../presence'));
 router.use('/gst-credentials', auth, require('../gstCredentials'));
 router.use('/hsn',             auth, require('../hsn'));
+router.use('/tax-audit',       require('../taxAudit'));
 
 module.exports = router;
