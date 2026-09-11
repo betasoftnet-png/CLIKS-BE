@@ -3202,11 +3202,37 @@ const caController = {
                 }
             }
 
-            const mapped = (list || []).map(n => {
+            // Deduplicate notifications by ID and composite content/time key
+            const seenIds = new Set();
+            const seenContent = new Set();
+            const deduplicatedList = (list || []).filter(n => {
+                if (!n) return false;
+                if (n.id != null) {
+                    const idStr = String(n.id);
+                    if (seenIds.has(idStr)) return false;
+                    seenIds.add(idStr);
+                }
+                const msg = (n.message || n.title || '').trim().toLowerCase();
+                const match = msg.match(/#([a-z0-9\-_]+)/i);
+                const invRef = match ? match[1].toLowerCase() : '';
+                const timeSlot = n.created_at ? n.created_at.slice(0, 16) : '';
+                const cKey = invRef ? `${invRef}_${timeSlot}` : `${msg}_${timeSlot}`;
+                if (seenContent.has(cKey)) return false;
+                seenContent.add(cKey);
+                return true;
+            });
+
+            const mapped = deduplicatedList.map(n => {
                 let timeStr = 'Recently';
+                let rawIso = n.created_at || new Date().toISOString();
                 if (n.created_at) {
                     try {
-                        const parsedDate = new Date(n.created_at);
+                        let str = String(n.created_at).trim();
+                        if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(str)) {
+                            str = str.replace(' ', 'T') + 'Z';
+                        }
+                        rawIso = str;
+                        const parsedDate = new Date(str);
                         if (!isNaN(parsedDate.getTime())) {
                             timeStr = parsedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                         }
@@ -3225,7 +3251,9 @@ const caController = {
                     text: n.message || n.title || '',
                     time: timeStr,
                     read: n.is_read === 1 || n.is_read === true || n.is_read === 'true',
-                    createdAt: n.created_at || new Date().toISOString()
+                    created_at: rawIso,
+                    createdAt: rawIso,
+                    timestamp: rawIso
                 };
             });
 

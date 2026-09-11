@@ -1520,10 +1520,18 @@ const purchaseController = {
             if (buyerUserId) {
                 try {
                     const notifyMsg = `Supplier ${sName} confirmed Purchase Order #${pNum}: ${statusMsg}`;
-                    await db.prepare(`
-                        INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
-                        VALUES (?, 'Purchase Order Supplier Response', ?, 'purchase', 0, ?)
-                    `).run(buyerUserId, notifyMsg, now);
+                    const existingNotif = await db.prepare(`
+                        SELECT id FROM notifications 
+                        WHERE user_id = ? AND message = ? AND created_at > datetime('now', '-1 hour')
+                        LIMIT 1
+                    `).get(buyerUserId, notifyMsg);
+
+                    if (!existingNotif) {
+                        await db.prepare(`
+                            INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                            VALUES (?, 'Purchase Order Supplier Response', ?, 'purchase', 0, ?)
+                        `).run(buyerUserId, notifyMsg, now);
+                    }
                 } catch (notifyErr) {
                     console.warn('Failed to insert notification:', notifyErr.message);
                 }
