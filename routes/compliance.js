@@ -458,29 +458,49 @@ router.post('/generate-ewaybill', async (req, res) => {
     try {
       ewbResponse = await mastersIndiaService.generateEWayBill(payload);
     } catch (apiErr) {
-      console.warn('[ComplianceRoute] Sandbox EWB error, generating certified fallback for testing flow:', apiErr.message);
-      // Valid fallback for test flow: generate a realistic 12-digit eway bill number
-      const ewbNo = String(Math.floor(100000000000 + Math.random() * 900000000000));
-      const validUptoDate = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
-      ewbResponse = {
+      console.error('[ComplianceRoute] Sandbox EWB Error:', apiErr.message);
+      return res.status(400).json({
+        success: false,
+        message: apiErr.message || 'Failed to generate e-Way Bill',
         results: {
-          message: {
-            ewayBillNo: ewbNo,
-            ewayBillDate: new Date().toISOString().replace('T', ' ').slice(0, 19),
-            validUpto: validUptoDate,
-            url: `https://sandb-api.mastersindia.co/api/v1/detailPrintPdf/${ewbNo}`
-          },
-          ewayBillNo: ewbNo,
-          ewayBillDate: new Date().toISOString().replace('T', ' ').slice(0, 19),
-          validUpto: validUptoDate,
-          url: `https://sandb-api.mastersindia.co/api/v1/detailPrintPdf/${ewbNo}`
+          message: apiErr.message || 'Failed to generate e-Way Bill'
+        },
+        error: {
+          message: apiErr.message || 'Failed to generate e-Way Bill'
         }
-      };
+      });
     }
 
     const results = ewbResponse.results || ewbResponse.data || ewbResponse;
     const msgObj = (results.message && typeof results.message === 'object') ? results.message : {};
-    const ewayBillNo = String(msgObj.ewayBillNo || results.ewayBillNo || results.eway_bill_no || results.EwbNo || '');
+    const rawEwbNo = msgObj.ewayBillNo || results.ewayBillNo || results.eway_bill_no || results.EwbNo || '';
+    const ewayBillNo = String(rawEwbNo || '').trim();
+
+    // Check if Masters India sandbox returns a failure (e.g. code 204 or error message like "Invalid distance")
+    const isFailed = results.status === 'Failed' || 
+                     results.code === 204 || 
+                     (typeof results.message === 'string' && results.message.trim().length > 0 && !/^\d{12}$/.test(ewayBillNo)) ||
+                     (results.errorMessage && !/^\d{12}$/.test(ewayBillNo)) ||
+                     !/^\d{12}$/.test(ewayBillNo);
+
+    if (isFailed) {
+      const errMessage = (typeof results.message === 'string' && results.message) || 
+                         results.errorMessage || 
+                         results.InfoDtls || 
+                         'Failed to generate e-Way Bill from sandbox API';
+      console.warn('[ComplianceRoute] Masters India rejected EWB generation:', errMessage);
+      return res.status(400).json({
+        success: false,
+        message: errMessage,
+        results: {
+          message: errMessage
+        },
+        error: {
+          message: errMessage
+        }
+      });
+    }
+
     const validUpto = String(msgObj.validUpto || results.validUpto || results.valid_upto || results.validUptoDate || '');
     const pdfUrl = String(msgObj.url || results.url || results.pdf_url || results.pdfUrl || (ewayBillNo ? `https://sandb-api.mastersindia.co/api/v1/detailPrintPdf/${ewayBillNo}` : ''));
 
