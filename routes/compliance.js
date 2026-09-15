@@ -497,6 +497,8 @@ router.post('/generate-ewaybill', async (req, res) => {
       pdfUrl = `https://${pdfUrl}`;
     }
 
+    const validUpto = String(msgObj.validUpto || msgObj.eway_bill_valid_date || msgObj.valid_upto || results.validUpto || results.valid_upto || '');
+
     const nowIso = new Date().toISOString();
 
     // 1. Save into delivery_challans table
