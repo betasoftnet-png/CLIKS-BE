@@ -1,12 +1,15 @@
-const mastersIndiaService = require('../services/mastersIndiaService');
+const axios = require('axios');
 
-async function testExactUserSchema() {
+async function testRoute() {
+  console.log('Testing payload mapping directly against sandbox...');
+  const mastersIndiaService = require('../services/mastersIndiaService');
+
   const payload = {
     userGstin: "05AAABB0639G1Z8",
     supply_type: "outward",
     sub_supply_type: "Supply",
     document_type: "Tax Invoice",
-    document_number: "INV-TEST-" + Math.floor(1000 + Math.random() * 9000),
+    document_number: "INV-" + Math.floor(1000 + Math.random() * 9000),
     document_date: "15/09/2026",
     gstin_of_consignor: "05AAABB0639G1Z8",
     legal_name_of_consignor: "Welton Consignor",
@@ -48,12 +51,8 @@ async function testExactUserSchema() {
     ]
   };
 
-  try {
-    const res = await mastersIndiaService.generateEWayBill(payload);
-    console.log('API Response:', JSON.stringify(res, null, 2));
-  } catch (err) {
-    console.log('Error caught:', err.message);
-  }
+  const res = await mastersIndiaService.generateEWayBill(payload);
+  console.log('Result:', JSON.stringify(res.results?.message || res, null, 2));
 }
 
-testExactUserSchema();
+testRoute().catch(console.error);
