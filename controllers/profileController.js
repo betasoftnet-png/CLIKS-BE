@@ -38,11 +38,35 @@ const safeUser = (user) => {
     }
   }
 
+  const userCreatedAt = user.created_at || new Date().toISOString();
+  const rawBusiness = parsedSubs?.business || { active: true, plan: user.tier || 'Starter Plan' };
+  const rawFinPro = parsedSubs?.fin_pro || (Boolean(user.finpro_plan || user.ca_plan) ? { active: true, plan: user.finpro_plan || user.ca_plan } : null);
+  const rawInvestor = parsedSubs?.investor || (Boolean(user.investor_plan || user.betaclub_investor_plan) ? { active: true, plan: user.investor_plan || user.betaclub_investor_plan } : null);
+  const rawPoster = parsedSubs?.poster || (Boolean(user.poster_plan || user.founder_plan) ? { active: true, plan: user.poster_plan || user.founder_plan } : null);
+
+  const enrichSub = (sub, defaultPlan, defaultDays = 365) => {
+    if (!sub) return { active: false, plan: null };
+    const plan = sub.plan || defaultPlan;
+    const startDate = sub.startDate || sub.updated_at || userCreatedAt;
+    const isMonthly = String(plan).toLowerCase().includes('monthly');
+    const duration = sub.duration_days || (isMonthly ? 30 : defaultDays);
+    const startMs = new Date(startDate).getTime() || Date.now();
+    const expiryDate = sub.expiryDate || sub.valid_until || new Date(startMs + duration * 24 * 60 * 60 * 1000).toISOString();
+    return {
+      ...sub,
+      active: sub.active ?? true,
+      plan,
+      startDate,
+      expiryDate,
+      valid_until: expiryDate
+    };
+  };
+
   safe.active_subscriptions = {
-    business: parsedSubs?.business || { active: true, plan: user.tier || 'Starter Plan' },
-    fin_pro: parsedSubs?.fin_pro || { active: Boolean(user.finpro_plan || user.ca_plan), plan: user.finpro_plan || null },
-    investor: parsedSubs?.investor || { active: Boolean(user.investor_plan || user.betaclub_investor_plan), plan: user.investor_plan || null },
-    poster: parsedSubs?.poster || { active: Boolean(user.poster_plan || user.founder_plan), plan: user.poster_plan || null }
+    business: enrichSub(rawBusiness, user.tier || 'Starter Plan', 365),
+    fin_pro: enrichSub(rawFinPro, 'Fin-Pro Solo', 365),
+    investor: enrichSub(rawInvestor, 'Basic Investor', 365),
+    poster: enrichSub(rawPoster, 'Monthly Innovator', 30)
   };
 
   return safe;
