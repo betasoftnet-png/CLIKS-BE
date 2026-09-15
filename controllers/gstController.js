@@ -57,7 +57,9 @@ const initGstTableAndColumns = async () => {
         'eligible_itc',
         'invoice_match_status',
         'mismatch_reason',
-        'reconciliation_date'
+        'reconciliation_date',
+        'pdf_url',
+        'valid_upto'
     ];
     const isPg = process.env.DB_TYPE === 'postgres';
     for (const col of columns) {
