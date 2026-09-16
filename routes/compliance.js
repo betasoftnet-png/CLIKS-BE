@@ -567,8 +567,11 @@ router.post('/generate-ewaybill', async (req, res) => {
     const mastersRes = ewbResponse?.data ? ewbResponse : { data: ewbResponse };
     const finalEwbNo = mastersRes.data?.results?.message?.ewayBillNo || mastersRes.data?.ewayBillNo || ewayBillNo;
     const finalEwbDate = mastersRes.data?.results?.message?.ewayBillDate || mastersRes.data?.ewayBillDate || formattedDocDt;
-    const finalValidUpto = mastersRes.data?.results?.message?.validUpto || mastersRes.data?.validUpto || validUpto;
-    const finalPdfUrl = mastersRes.data?.results?.message?.url || mastersRes.data?.url || pdfUrl;
+    let rawPdf = mastersRes.data?.results?.message?.url || mastersRes.data?.url || pdfUrl || '';
+    let finalPdfUrl = String(rawPdf).trim();
+    if (finalPdfUrl && !finalPdfUrl.startsWith('http://') && !finalPdfUrl.startsWith('https://')) {
+      finalPdfUrl = `https://${finalPdfUrl}`;
+    }
 
     return res.status(200).json({
       success: true,
@@ -639,10 +642,17 @@ router.get(['/ewaybills', '/ewaybill'], async (req, res) => {
     // Merge and normalize records
     const recordsMap = new Map();
 
+    const sanitizePdfUrl = (u) => {
+      if (!u) return '';
+      const trimmed = String(u).trim();
+      return (trimmed.startsWith('http://') || trimmed.startsWith('https://')) ? trimmed : `https://${trimmed}`;
+    };
+
     for (const c of (challanRows || [])) {
       const ewbNo = c.ewayBillNo || c.eway_bill_no || c.eway_bill_number || null;
       const docNo = c.challan_number || c.invoice_id || `CH-${c.id}`;
       const key = ewbNo ? `EWB-${ewbNo}` : `DOC-${docNo}`;
+      const safeChallanPdf = sanitizePdfUrl(c.pdf_url);
 
       recordsMap.set(key, {
         id: c.id,
@@ -666,8 +676,8 @@ router.get(['/ewaybills', '/ewaybill'], async (req, res) => {
         transport_distance: c.distance || 0,
         validUpto: c.validUpto || c.valid_upto || '',
         valid_upto: c.validUpto || c.valid_upto || '',
-        pdf_url: c.pdf_url,
-        url: c.pdf_url,
+        pdf_url: safeChallanPdf,
+        url: safeChallanPdf,
         status: c.status || 'Active'
       });
     }
@@ -676,6 +686,7 @@ router.get(['/ewaybills', '/ewaybill'], async (req, res) => {
       const ewbNo = g.eway_bill_no || g.eway_bill_number || null;
       const docNo = g.invoice_number || `INV-${g.id}`;
       const key = ewbNo ? `EWB-${ewbNo}` : `DOC-${docNo}`;
+      const safeGstPdf = sanitizePdfUrl(g.pdf_url);
 
       if (!recordsMap.has(key)) {
         recordsMap.set(key, {
@@ -700,8 +711,8 @@ router.get(['/ewaybills', '/ewaybill'], async (req, res) => {
           transport_distance: g.transport_distance || 0,
           validUpto: g.valid_upto || '',
           valid_upto: g.valid_upto || '',
-          pdf_url: g.pdf_url,
-          url: g.pdf_url,
+          pdf_url: safeGstPdf,
+          url: safeGstPdf,
           status: g.status || 'Active'
         });
       }
