@@ -243,8 +243,8 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
           invoice_type, place_of_supply, taxable_value, gst_percentage, 
           cgst, sgst, igst, cgst_amount, sgst_amount, igst_amount, total_tax, 
           reverse_charge, total_invoice, tax_type, irn_number, qr_status, is_eway_bill, is_reconciliation,
-          created_at, updated_at, sender_product_name, receiver_product_name, pdf_url
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, 'Signed', 'false', 'false', ?, ?, ?, ?, ?)
+          created_at, updated_at, product_name, pdf_url
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, 'Signed', 'false', 'false', ?, ?, ?, ?)
       `).run(
         userId,
         docNo,
@@ -270,13 +270,12 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
         nowIso,
         nowIso,
         prodDesc,
-        prodDesc,
         pdfUrl
       );
       savedGstId = insertGst?.lastInsertRowid;
     } catch (saveGstErr) {
-      console.warn('[ComplianceRoute] gst_invoices save error with sender_product_name:', saveGstErr.message);
-      // Fallback: If sender_product_name does not exist in relation, insert without sender_product_name
+      console.warn('[ComplianceRoute] gst_invoices save error with product_name:', saveGstErr.message);
+      // Fallback: If product_name does not exist in relation, insert without product_name
       try {
         const fallbackInsert = await db.prepare(`
           INSERT INTO gst_invoices (
