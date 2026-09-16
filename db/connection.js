@@ -49,6 +49,10 @@ if (dbType === 'postgres') {
 
   db = {
     pool, // Export pool for transaction access
+    query: async (sql, params = []) => {
+      const cleanParams = (params || []).flat().map(p => p === undefined ? null : p);
+      return pool.query(convertQuery(sql), cleanParams);
+    },
     prepare: (sql) => {
       const pgSql = convertQuery(sql);
       return {
@@ -121,6 +125,17 @@ if (dbType === 'postgres') {
         }
       };
     },
+    query: async (sql, params = []) => {
+      const cleanParams = (params || []).flat().map(p => p === undefined ? null : p);
+      let sqliteSql = sql.replace(/\$\d+/g, '?').replace(/NOW\(\)/gi, "datetime('now')");
+      if (/^\s*(SELECT|PRAGMA)/i.test(sqliteSql)) {
+        const rows = sqliteDb.prepare(sqliteSql).all(...cleanParams);
+        return { rows, rowCount: rows.length };
+      } else {
+        const info = sqliteDb.prepare(sqliteSql).run(...cleanParams);
+        return { rows: [{ id: info.lastInsertRowid }], rowCount: info.changes, lastInsertRowid: info.lastInsertRowid };
+      }
+    },
     transaction: (fn) => {
       return async (...args) => {
         sqliteDb.exec('BEGIN');
@@ -135,6 +150,7 @@ if (dbType === 'postgres') {
       };
     }
   };
+
 
   // Run one-time schema optimization & indexing for ultra-fast product & stock queries
   try {
