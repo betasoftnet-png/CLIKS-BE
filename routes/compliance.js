@@ -275,7 +275,47 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
       );
       savedGstId = insertGst?.lastInsertRowid;
     } catch (saveGstErr) {
-      console.warn('[ComplianceRoute] gst_invoices save error:', saveGstErr.message);
+      console.warn('[ComplianceRoute] gst_invoices save error with sender_product_name:', saveGstErr.message);
+      // Fallback: If sender_product_name does not exist in relation, insert without sender_product_name
+      try {
+        const fallbackInsert = await db.prepare(`
+          INSERT INTO gst_invoices (
+            user_id, invoice_number, client_name, customer_name, customer_gstin, customer_state,
+            sender_name, sender_gstin, sender_state, amount, gst_amount, 
+            invoice_type, place_of_supply, taxable_value, gst_percentage, 
+            cgst, sgst, igst, cgst_amount, sgst_amount, igst_amount, total_tax, 
+            reverse_charge, total_invoice, tax_type, irn_number, qr_status, is_eway_bill, is_reconciliation,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, 'Signed', 'false', 'false', ?, ?)
+        `).run(
+          userId,
+          docNo,
+          clientName,
+          clientName,
+          buyerGstin,
+          '09 - Uttar Pradesh',
+          payload.seller_details.legal_name,
+          payload.seller_details.gstin,
+          '05 - Uttarakhand',
+          totalInvoiceVal,
+          igstAmount,
+          req.body.invoice_type || 'B2B',
+          req.body.place_of_supply || '09-Uttar Pradesh',
+          taxableVal,
+          gstRate,
+          0, 0, igstAmount,
+          0, 0, igstAmount,
+          igstAmount,
+          req.body.reverse_charge || 'No',
+          totalInvoiceVal,
+          irn,
+          nowIso,
+          nowIso
+        );
+        savedGstId = fallbackInsert?.lastInsertRowid;
+      } catch (fallbackErr) {
+        console.warn('[ComplianceRoute] gst_invoices fallback save error:', fallbackErr.message);
+      }
     }
 
     // 2. Save / update sales_invoices

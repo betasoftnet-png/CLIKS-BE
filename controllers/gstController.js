@@ -226,7 +226,9 @@ const gstController = {
             const irn = `IRN-${Date.now().toString()}`;
             
             // 1. Insert into gst_invoices
-            const result = await db.prepare(`
+            let result;
+            try {
+              result = await db.prepare(`
                 INSERT INTO gst_invoices (
                     user_id, invoice_number, client_name, customer_name, customer_gstin, customer_state,
                     sender_name, sender_gstin, sender_state, amount, gst_amount, 
@@ -236,7 +238,7 @@ const gstController = {
                     export_under_lut, lut_document_path, lut_file_name, lut_uploaded_at, lut_uploaded_by,
                     sender_product_name, receiver_product_name
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, ?, 'false', 'false', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
+              `).run(
                 req.user.id, invoice_number, client_name, client_name, customer_gstin || null, place_of_supply || '33-Tamil Nadu',
                 sender_name, sender_gstin, sender_state, total, tax,
                 invoice_type || 'B2B', place_of_supply || '33-Tamil Nadu', taxable, pct,
@@ -244,7 +246,31 @@ const gstController = {
                 reverse_charge || 'No', total, irn, 'Signed', now, now,
                 String(export_under_lut || 'false'), lut_document_path || null, lut_file_name || null, lut_uploaded_at || null, lut_uploaded_by || req.user?.username || 'Current User',
                 sender_product_name, receiver_product_name
-            );
+              );
+            } catch (insertGstErr) {
+              if (insertGstErr.message && insertGstErr.message.includes('sender_product_name')) {
+                console.warn('[gstController] Retrying insert without sender_product_name due to schema mismatch:', insertGstErr.message);
+                result = await db.prepare(`
+                  INSERT INTO gst_invoices (
+                      user_id, invoice_number, client_name, customer_name, customer_gstin, customer_state,
+                      sender_name, sender_gstin, sender_state, amount, gst_amount, 
+                      invoice_type, place_of_supply, taxable_value, gst_percentage, 
+                      cgst, sgst, igst, cgst_amount, sgst_amount, igst_amount, total_tax, 
+                      reverse_charge, total_invoice, tax_type, irn_number, qr_status, is_eway_bill, is_reconciliation, created_at, updated_at,
+                      export_under_lut, lut_document_path, lut_file_name, lut_uploaded_at, lut_uploaded_by
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, ?, 'false', 'false', ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                  req.user.id, invoice_number, client_name, client_name, customer_gstin || null, place_of_supply || '33-Tamil Nadu',
+                  sender_name, sender_gstin, sender_state, total, tax,
+                  invoice_type || 'B2B', place_of_supply || '33-Tamil Nadu', taxable, pct,
+                  cgst, sgst, igst, cgst, sgst, igst, tax,
+                  reverse_charge || 'No', total, irn, 'Signed', now, now,
+                  String(export_under_lut || 'false'), lut_document_path || null, lut_file_name || null, lut_uploaded_at || null, lut_uploaded_by || req.user?.username || 'Current User'
+                );
+              } else {
+                throw insertGstErr;
+              }
+            }
 
             // 2. Insert into business_invoices (Sales Register)
             const items = [{

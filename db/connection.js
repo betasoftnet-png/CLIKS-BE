@@ -14,6 +14,41 @@ if (dbType === 'postgres') {
     database: process.env.DB_NAME     || 'books_finance'
   });
 
+  // Auto-run schema migrations for PostgreSQL to ensure missing columns are added automatically
+  (async () => {
+    try {
+      await pool.query(`
+        ALTER TABLE gst_invoices 
+        ADD COLUMN IF NOT EXISTS sender_product_name VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS receiver_product_name VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS product_name VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS hsn_code VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS unit VARCHAR(20),
+        ADD COLUMN IF NOT EXISTS quantity NUMERIC DEFAULT 1,
+        ADD COLUMN IF NOT EXISTS pdf_url TEXT;
+
+        ALTER TABLE invoices 
+        ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS customer_gstin VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS taxable_amount NUMERIC DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS total_amount NUMERIC DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS irn TEXT,
+        ADD COLUMN IF NOT EXISTS ack_no VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS ack_date VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS signed_qr TEXT,
+        ADD COLUMN IF NOT EXISTS pdf_url TEXT;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_inv_num ON invoices(invoice_number);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_inv_num ON gst_invoices(invoice_number);
+      `);
+      console.log('✅ [PostgreSQL Connection] Ensured gst_invoices & invoices schema columns exist');
+    } catch (err) {
+      // Table might not be created yet during first boot before migrations run
+      console.warn('⚠️ [PostgreSQL Connection Init Note]:', err.message);
+    }
+  })();
+
+
   const convertQuery = (sql) => {
     let pgSql = sql;
     
@@ -296,6 +331,13 @@ if (dbType === 'postgres') {
       "ALTER TABLE invoices ADD COLUMN ack_date TEXT",
       "ALTER TABLE invoices ADD COLUMN signed_qr TEXT",
       "ALTER TABLE invoices ADD COLUMN pdf_url TEXT",
+      "ALTER TABLE gst_invoices ADD COLUMN sender_product_name TEXT",
+      "ALTER TABLE gst_invoices ADD COLUMN receiver_product_name TEXT",
+      "ALTER TABLE gst_invoices ADD COLUMN product_name TEXT",
+      "ALTER TABLE gst_invoices ADD COLUMN hsn_code TEXT",
+      "ALTER TABLE gst_invoices ADD COLUMN unit TEXT",
+      "ALTER TABLE gst_invoices ADD COLUMN quantity REAL DEFAULT 1",
+      "ALTER TABLE gst_invoices ADD COLUMN pdf_url TEXT",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_inv_num ON invoices(invoice_number)",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_inv_num ON gst_invoices(invoice_number)",
       "ALTER TABLE warehouse_transfers ADD COLUMN reference TEXT"

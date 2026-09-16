@@ -2128,7 +2128,14 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS goods_quantity NUMERIC;`,
       `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS goods_unit TEXT;`,
       `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS eway_bill_number TEXT;`,
-      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS items TEXT;`
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS items TEXT;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS sender_product_name VARCHAR(255);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS receiver_product_name VARCHAR(255);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS product_name VARCHAR(255);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS hsn_code VARCHAR(50);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS unit VARCHAR(20);`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS quantity NUMERIC DEFAULT 1;`,
+      `ALTER TABLE gst_invoices ADD COLUMN IF NOT EXISTS pdf_url TEXT;`
     ];
     try {
       for (const q of pgAlters) {
