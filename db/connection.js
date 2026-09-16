@@ -287,6 +287,17 @@ if (dbType === 'postgres') {
       "ALTER TABLE invoices ADD COLUMN supplier_status_message TEXT",
       "ALTER TABLE invoices ADD COLUMN expected_available_date TEXT",
       "ALTER TABLE invoices ADD COLUMN supplier_response_items TEXT",
+      "ALTER TABLE invoices ADD COLUMN customer_name TEXT",
+      "ALTER TABLE invoices ADD COLUMN customer_gstin TEXT",
+      "ALTER TABLE invoices ADD COLUMN taxable_amount REAL DEFAULT 0",
+      "ALTER TABLE invoices ADD COLUMN total_amount REAL DEFAULT 0",
+      "ALTER TABLE invoices ADD COLUMN irn TEXT",
+      "ALTER TABLE invoices ADD COLUMN ack_no TEXT",
+      "ALTER TABLE invoices ADD COLUMN ack_date TEXT",
+      "ALTER TABLE invoices ADD COLUMN signed_qr TEXT",
+      "ALTER TABLE invoices ADD COLUMN pdf_url TEXT",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_inv_num ON invoices(invoice_number)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_inv_num ON gst_invoices(invoice_number)",
       "ALTER TABLE warehouse_transfers ADD COLUMN reference TEXT"
     ];
     for (const sql of alterCols) {
