@@ -367,7 +367,15 @@ router.post('/generate-ewaybill', async (req, res) => {
       taxable_value
     } = req.body;
 
-    const invoiceNumber = rawInvNo || rawInvNo2 || req.body.document_number || challanNumber || `INV-${Date.now()}`;
+    const documentNumber = 
+      req.body.document_number || 
+      req.body.invoice_number || 
+      req.body.docNo || 
+      rawInvNo || 
+      rawInvNo2 || 
+      challanNumber || 
+      `CLK-${Date.now()}`;
+    const invoiceNumber = documentNumber;
     const invoiceDate = docDate || invoice_date || req.body.document_date;
     const formattedDocDt = formatDateDDMMYYYY(invoiceDate);
 
@@ -415,7 +423,7 @@ router.post('/generate-ewaybill', async (req, res) => {
       supply_type: "outward",
       sub_supply_type: "Supply",
       document_type: "Tax Invoice",
-      document_number: invoiceNumber,
+      document_number: documentNumber,
       document_date: formattedDocDt,
       gstin_of_consignor: "05AAABB0639G1Z8",
       legal_name_of_consignor: "Welton Consignor",
@@ -503,7 +511,7 @@ router.post('/generate-ewaybill', async (req, res) => {
 
     // 1. Save into delivery_challans table
     try {
-      const existingChallan = await db.prepare('SELECT id FROM delivery_challans WHERE challan_number = ? AND user_id = ?').get(docNo, req.user.id);
+      const existingChallan = await db.prepare('SELECT id FROM delivery_challans WHERE challan_number = ? AND user_id = ?').get(documentNumber, req.user.id);
       if (existingChallan) {
         await db.prepare(`
           UPDATE delivery_challans 
@@ -514,7 +522,7 @@ router.post('/generate-ewaybill', async (req, res) => {
         await db.prepare(`
           INSERT INTO delivery_challans (user_id, challan_number, invoice_id, customer_name, shipping_address, vehicle_number, transport_mode, distance, ewayBillNo, validUpto, pdf_url, status, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'EWB Active', ?, ?)
-        `).run(req.user.id, docNo, invoiceNumber || '', customerName || '', shippingAddress || '', cleanVehicle, effectiveTransportMode, parseFloat(transDistance), ewayBillNo, validUpto, pdfUrl, nowIso, nowIso);
+        `).run(req.user.id, documentNumber, documentNumber || '', customerName || '', shippingAddress || '', cleanVehicle, effectiveTransportMode, parseFloat(transDistance), ewayBillNo, validUpto, pdfUrl, nowIso, nowIso);
       }
     } catch (saveErr) {
       console.warn('[ComplianceRoute] delivery_challans save error:', saveErr.message);
@@ -522,7 +530,7 @@ router.post('/generate-ewaybill', async (req, res) => {
 
     // 2. Save into gst_invoices table so BusinessGST.jsx immediately displays it in e-Way Logistics tab
     try {
-      const existingGst = await db.prepare('SELECT id FROM gst_invoices WHERE (eway_bill_number = ? OR invoice_number = ?) AND user_id = ? AND is_eway_bill = ?').get(ewayBillNo, docNo, req.user.id, 'true');
+      const existingGst = await db.prepare('SELECT id FROM gst_invoices WHERE (eway_bill_number = ? OR invoice_number = ?) AND user_id = ? AND is_eway_bill = ?').get(ewayBillNo, documentNumber, req.user.id, 'true');
       if (existingGst) {
         await db.prepare(`
           UPDATE gst_invoices
@@ -544,37 +552,44 @@ router.post('/generate-ewaybill', async (req, res) => {
             pdf_url, valid_upto
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, 'true', 'false', ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
-          req.user.id, docNo, customerName || '', customerName || '',
+          req.user.id, documentNumber, customerName || '', customerName || '',
           transporterName || '', cleanVehicle,
           parseFloat(transDistance) || 0, dispatchLocation || '',
           shippingAddress || '',
           ewayBillNo, effectiveTransportMode, transporterGstin || null,
-          totVal, nowIso, nowIso, invoiceNumber || docNo, pdfUrl, validUpto
+          totVal, nowIso, nowIso, documentNumber, pdfUrl, validUpto
         );
       }
     } catch (saveGstErr) {
       console.warn('[ComplianceRoute] gst_invoices save error:', saveGstErr.message);
     }
 
-    return sendSuccess(res, {
+    const mastersRes = ewbResponse?.data ? ewbResponse : { data: ewbResponse };
+    const finalEwbNo = mastersRes.data?.results?.message?.ewayBillNo || mastersRes.data?.ewayBillNo || ewayBillNo;
+    const finalEwbDate = mastersRes.data?.results?.message?.ewayBillDate || mastersRes.data?.ewayBillDate || formattedDocDt;
+    const finalValidUpto = mastersRes.data?.results?.message?.validUpto || mastersRes.data?.validUpto || validUpto;
+    const finalPdfUrl = mastersRes.data?.results?.message?.url || mastersRes.data?.url || pdfUrl;
+
+    return res.status(200).json({
+      success: true,
       results: {
         message: {
-          ewayBillNo: ewayBillNo,
-          ewayBillDate: msgObj.ewayBillDate || results.ewayBillDate || formattedDocDt,
-          validUpto: validUpto,
-          url: pdfUrl
+          ewayBillNo: finalEwbNo,
+          ewayBillDate: finalEwbDate,
+          validUpto: finalValidUpto,
+          url: finalPdfUrl
         }
       },
-      challanNumber: docNo,
-      ewayBillNo: ewayBillNo,
-      ewayBillDate: msgObj.ewayBillDate || results.ewayBillDate || formattedDocDt,
-      validUpto: validUpto,
-      url: pdfUrl,
-      pdfUrl: pdfUrl,
+      challanNumber: documentNumber,
+      ewayBillNo: finalEwbNo,
+      ewayBillDate: finalEwbDate,
+      validUpto: finalValidUpto,
+      url: finalPdfUrl,
+      pdfUrl: finalPdfUrl,
       vehicleNumber: cleanVehicle,
       distance: transDistance,
       status: 'EWB Active'
-    }, 'E-Way Bill generated successfully');
+    });
 
   } catch (error) {
     console.error('[ComplianceRoute] generate-ewaybill Fatal Error:', error.message);
