@@ -1,19 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const paymentController = require('../controllers/paymentController');
-const { auth } = require('../middleware/auth');
+const { auth, businessOnly, requireBusinessAccount } = require('../middleware/auth');
 
 router.use(auth);
-
-const businessOnly = (req, res, next) => {
-    if (req.user && req.user.role === 'business') {
-        next();
-    } else {
-        res.status(403).json({ success: false, message: 'Access denied. Business account required.' });
-    }
-};
-
 router.use(businessOnly);
+
 
 router.post('/receive', paymentController.receivePayment);
 router.post('/pay', paymentController.paySupplier);

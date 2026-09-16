@@ -154,13 +154,16 @@ const ssoLogin = async (req, res) => {
     parent_email: originalSubEmail ? user.email : undefined,
     is_sub_id: !!originalSubEmail,
     permissions: originalSubPermissions ? originalSubPermissions : undefined,
-    role: user.role,
+    role: (user.role === 'admin' || user.role === 'business_admin') ? 'business_admin' : (user.role || 'business'),
+    account_type: 'business',
+    accountType: 'BUSINESS',
     tier: user.tier,
     subscription_days_remaining: user.subscription_days_remaining,
     receive_purchase_data: user.receive_purchase_data,
     created_at: user.created_at
   };
   return sendSuccess(res, { accessToken, refreshToken, user: safeUser }, 'SSO login successful', 200);
+
 };
 
 // ── POST /auth/refresh ───────────────────────────────────────────────────────

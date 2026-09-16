@@ -185,8 +185,9 @@ app.use('/api/v1/split-expenses',   auth, require('./routes/splitExpense'));
 app.get('/api/v1/business/subscription/:email', require('./controllers/profileController').getSubscriptionDetails);
 app.use('/api/v1/business',         auth, require('./routes/business'));
 app.use('/api/v1/inventory',        auth, require('./routes/inventory'));
-app.use('/api/v1/billing',          auth, require('./routes/billing'));
+app.use(['/api/v1/billing', '/api/v1/invoices'], auth, require('./routes/billing'));
 app.use('/api/v1/pos',              auth, require('./routes/pos'));
+
 app.use('/api/v1/crm',              auth, require('./routes/customers'));
 app.use('/api/v1/customers',        auth, require('./routes/customers'));
 app.use('/api/v1/customer',         auth, require('./routes/customerPurchases'));

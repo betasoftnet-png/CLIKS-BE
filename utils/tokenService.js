@@ -24,11 +24,18 @@ class TokenService {
    * Generates JWT paired with a hashed refresh token mapped to the DB
    */
   static async issueTokens(user) {
+    const effectiveRole = (user.role === 'admin' || user.role === 'business_admin')
+      ? 'business_admin'
+      : (user.role || 'business');
+
     const payload = { 
       id: user.id, 
       username: user.username, 
       email: user.email, 
-      role: user.role || 'user' 
+      role: effectiveRole,
+      account_type: 'business',
+      accountType: 'BUSINESS',
+      business: true
     };
 
     const isBnx = this.isBnxMail(user?.email);
@@ -68,11 +75,18 @@ class TokenService {
   }
 
   static async issueEnhancedTokens(user) {
+    const effectiveRole = (user.role === 'admin' || user.role === 'business_admin')
+      ? 'business_admin'
+      : (user.role || 'business');
+
     const payload = { 
       id: user.id, 
       username: user.username, 
       email: user.email, 
-      role: user.role || 'user' 
+      role: effectiveRole,
+      account_type: 'business',
+      accountType: 'BUSINESS',
+      business: true
     };
 
     if (user.originalSubEmail) {
@@ -83,6 +97,7 @@ class TokenService {
         payload.permissions = user.subPermissions;
       }
     }
+
 
     const isBnx = this.isBnxMail(user?.email);
     const expiresIn = isBnx ? '30d' : ACCESS_EXPIRES_IN;

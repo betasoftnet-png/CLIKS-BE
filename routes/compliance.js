@@ -591,10 +591,136 @@ router.post('/generate-ewaybill', async (req, res) => {
       status: 'EWB Active'
     });
 
-  } catch (error) {
+    } catch (error) {
     console.error('[ComplianceRoute] generate-ewaybill Fatal Error:', error.message);
     return sendError(res, error.message || 'Failed to generate E-Way Bill', 500);
   }
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// 4. GET /api/v1/compliance/ewaybills (and /ewaybill)
+// ────────────────────────────────────────────────────────────────────────────
+router.get(['/ewaybills', '/ewaybill'], async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?.userId;
+    if (!userId) {
+      return res.status(200).json({ success: true, data: [], results: { ewayBills: [] } });
+    }
+
+    // 1. Fetch records from delivery_challans
+    let challanRows = [];
+    try {
+      challanRows = await db.prepare(`
+        SELECT * FROM delivery_challans 
+        WHERE user_id = ? 
+        ORDER BY id DESC
+      `).all(userId);
+    } catch (e) {
+      console.warn('[ComplianceRoute] delivery_challans fetch warning:', e.message);
+    }
+
+    // 2. Fetch records from gst_invoices marked as eway bills
+    let gstRows = [];
+    try {
+      gstRows = await db.prepare(`
+        SELECT * FROM gst_invoices 
+        WHERE user_id = ? 
+          AND (
+            is_eway_bill = 'true' 
+            OR (eway_bill_no IS NOT NULL AND eway_bill_no != '')
+            OR (eway_bill_number IS NOT NULL AND eway_bill_number != '')
+          )
+        ORDER BY id DESC
+      `).all(userId);
+    } catch (e) {
+      console.warn('[ComplianceRoute] gst_invoices eway fetch warning:', e.message);
+    }
+
+    // Merge and normalize records
+    const recordsMap = new Map();
+
+    for (const c of (challanRows || [])) {
+      const ewbNo = c.ewayBillNo || c.eway_bill_no || c.eway_bill_number || null;
+      const docNo = c.challan_number || c.invoice_id || `CH-${c.id}`;
+      const key = ewbNo ? `EWB-${ewbNo}` : `DOC-${docNo}`;
+
+      recordsMap.set(key, {
+        id: c.id,
+        invoice_number: c.invoice_id || c.challan_number,
+        document_number: c.challan_number || c.invoice_id,
+        challanNumber: c.challan_number,
+        ewayBillNo: ewbNo,
+        eway_bill_no: ewbNo,
+        eway_bill_number: ewbNo,
+        ewayBillDate: c.eway_bill_date || c.created_at,
+        created_at: c.created_at,
+        customer_name: c.customer_name || 'Valued Client',
+        client_name: c.customer_name || 'Valued Client',
+        shipping_address: c.shipping_address,
+        dispatch_location: c.dispatch_location || '',
+        delivery_location: c.shipping_address || '',
+        vehicle_number: c.vehicle_number || '—',
+        vehicleNumber: c.vehicle_number || '—',
+        transport_mode: c.transport_mode || '1',
+        distance: c.distance || 0,
+        transport_distance: c.distance || 0,
+        validUpto: c.validUpto || c.valid_upto || '',
+        valid_upto: c.validUpto || c.valid_upto || '',
+        pdf_url: c.pdf_url,
+        url: c.pdf_url,
+        status: c.status || 'Active'
+      });
+    }
+
+    for (const g of (gstRows || [])) {
+      const ewbNo = g.eway_bill_no || g.eway_bill_number || null;
+      const docNo = g.invoice_number || `INV-${g.id}`;
+      const key = ewbNo ? `EWB-${ewbNo}` : `DOC-${docNo}`;
+
+      if (!recordsMap.has(key)) {
+        recordsMap.set(key, {
+          id: g.id,
+          invoice_number: g.invoice_number,
+          document_number: g.invoice_number,
+          challanNumber: g.invoice_number,
+          ewayBillNo: ewbNo,
+          eway_bill_no: ewbNo,
+          eway_bill_number: ewbNo,
+          ewayBillDate: g.eway_bill_date || g.created_at,
+          created_at: g.created_at,
+          customer_name: g.customer_name || g.client_name || 'Valued Client',
+          client_name: g.client_name || g.customer_name || 'Valued Client',
+          shipping_address: g.delivery_location || g.shipping_address,
+          dispatch_location: g.dispatch_location || '',
+          delivery_location: g.delivery_location || g.shipping_address || '',
+          vehicle_number: g.vehicle_number || '—',
+          vehicleNumber: g.vehicle_number || '—',
+          transport_mode: g.transport_mode || '1',
+          distance: g.transport_distance || 0,
+          transport_distance: g.transport_distance || 0,
+          validUpto: g.valid_upto || '',
+          valid_upto: g.valid_upto || '',
+          pdf_url: g.pdf_url,
+          url: g.pdf_url,
+          status: g.status || 'Active'
+        });
+      }
+    }
+
+    const ewayList = Array.from(recordsMap.values());
+    return res.status(200).json({
+      success: true,
+      data: ewayList,
+      results: {
+        message: ewayList,
+        ewayBills: ewayList
+      }
+    });
+  } catch (error) {
+    console.error('[ComplianceRoute] get ewaybills error:', error.message);
+    return res.status(200).json({ success: true, data: [], results: { ewayBills: [] } });
+  }
+});
+
 module.exports = router;
+

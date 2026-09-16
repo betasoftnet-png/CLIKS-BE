@@ -57,8 +57,12 @@ const adminLogin = async (req, res) => {
     username: admin.name || admin.username || 'Santhosh Admin',
     email: admin.email,
     role: 'ADMIN', // Vital for platform API RBAC routing middleware
+    account_type: 'business',
+    accountType: 'BUSINESS',
+    business: true,
     isPlatformCore: true
   };
+
 
   const isBnx = Boolean(admin?.email && String(admin.email).toLowerCase().trim().endsWith('@bnxmail.com'));
   const accessToken = jwt.sign(
