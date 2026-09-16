@@ -91,76 +91,96 @@ router.get('/verify-gstin/:gstin', async (req, res) => {
 // ────────────────────────────────────────────────────────────────────────────
 router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, res) => {
   try {
-    const today = new Date();
-    const defaultDocDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
-    const docDate = req.body.document_details?.document_date || req.body.document_date || formatDateDDMMYYYY(req.body.invoice_date || req.body.docDate) || defaultDocDate;
-    const docNo = req.body.document_details?.document_number || req.body.document_number || req.body.invoice_number || req.body.invoiceNumber || `CLK-INV-${Math.floor(1000 + Math.random() * 9000)}`;
+    const taxableAmount = Number(req.body.taxable_value || req.body.taxable_amount || 1000);
+    const gstRate = Number(req.body.gst_rate || req.body.gst_percentage || 18);
+    const isInterState = (req.body.seller_details?.state_code || "05") !== (req.body.buyer_details?.place_of_supply || "09");
 
-    const taxableVal = Number(req.body.taxable_value || req.body.taxable_amount || req.body.amount || 1000);
-    const gstRate = 18;
-    const igstAmount = Number((taxableVal * 0.18).toFixed(2));
-    const totalInvoiceVal = Number((taxableVal * 1.18).toFixed(2));
-
-    const rawHsn = String(req.body.hsn_code || "1001").trim();
-    // Masters India Sandbox requires 6-digit HSN (e.g. 100199 for Wheat)
-    const cleanHsn = rawHsn.length >= 6 ? rawHsn : (rawHsn === "1001" ? "100199" : rawHsn.padEnd(6, '0'));
-
-    const sellerGstin = req.body.seller_details?.gstin || req.body.seller_gstin || req.body.sender_gstin || req.body.user_gstin || "05AAAPG7885R002";
-    const sellerStateCode = req.body.seller_details?.state_code || req.body.seller_state_code || req.body.sender_state_code || String(sellerGstin).slice(0, 2) || "05";
-    const buyerGstin = req.body.buyer_details?.gstin || req.body.buyer_gstin || req.body.customer_gstin || "09AAAPG7885R002";
-    const buyerStateCode = req.body.buyer_details?.state_code || req.body.buyer_state_code || String(buyerGstin).slice(0, 2) || "09";
-    const posStateCode = req.body.buyer_details?.place_of_supply || (req.body.place_of_supply ? String(req.body.place_of_supply).slice(0, 2) : buyerStateCode);
+    const igstAmount = isInterState ? Number(((taxableAmount * gstRate) / 100).toFixed(2)) : 0;
+    const cgstAmount = !isInterState ? Number(((taxableAmount * (gstRate / 2)) / 100).toFixed(2)) : 0;
+    const sgstAmount = !isInterState ? Number(((taxableAmount * (gstRate / 2)) / 100).toFixed(2)) : 0;
+    const totalInvoiceValue = Number((taxableAmount + igstAmount + cgstAmount + sgstAmount).toFixed(2));
 
     const payload = {
-      user_gstin: sellerGstin,
+      user_gstin: req.body.seller_details?.gstin || "05AAAPG7885R002",
       data_source: "erp",
       transaction_details: {
-        supply_type: req.body.transaction_details?.supply_type || "B2B",
-        charge_type: req.body.transaction_details?.charge_type || "N",
-        igst_on_intra: req.body.transaction_details?.igst_on_intra || "N"
+        supply_type: "B2B",
+        charge_type: "N",
+        igst_on_intra: "N",
+        ecommerce_gstin: ""
       },
       document_details: {
         document_type: "INV",
-        document_number: docNo,
-        document_date: docDate
+        document_number: req.body.document_number || `CLK-INV-${Date.now().toString().slice(-4)}`,
+        document_date: "16/09/2026"
       },
       seller_details: {
-        gstin: sellerGstin,
-        legal_name: req.body.seller_details?.legal_name || req.body.seller_name || req.body.sender_name || "Welton Consignor",
-        address1: req.body.seller_details?.address1 || req.body.seller_address || req.body.sender_address || "Dehradun Central",
-        location: req.body.seller_details?.location || req.body.seller_location || req.body.sender_location || "Dehradun",
-        pincode: Number(req.body.seller_details?.pincode || req.body.seller_pincode || req.body.sender_pincode || 248001),
-        state_code: sellerStateCode
+        gstin: req.body.seller_details?.gstin || "05AAAPG7885R002",
+        legal_name: req.body.seller_details?.legal_name || "Welton Consignor",
+        trade_name: "Welton Consignor",
+        address1: "Dehradun Central Road",
+        address2: "",
+        location: "Dehradun",
+        pincode: 248001,
+        state_code: "05",
+        phone_number: 9876543210,
+        email: "seller@cliks.com"
       },
       buyer_details: {
-        gstin: buyerGstin,
-        legal_name: req.body.buyer_details?.legal_name || req.body.buyer_name || req.body.client_name || req.body.customer_name || "Sthuthya Consignee",
-        place_of_supply: posStateCode,
-        address1: req.body.buyer_details?.address1 || req.body.buyer_address || "Noida Sector 62",
-        location: req.body.buyer_details?.location || req.body.buyer_location || "Noida",
-        pincode: Number(req.body.buyer_details?.pincode || req.body.buyer_pincode || 201301),
-        state_code: buyerStateCode
+        gstin: req.body.buyer_details?.gstin || "09AAAPG7885R002",
+        legal_name: req.body.buyer_details?.legal_name || "Sthuthya Consignee",
+        trade_name: "Sthuthya Consignee",
+        address1: "Noida Sector 62",
+        address2: "",
+        location: "Noida",
+        pincode: 201301,
+        place_of_supply: "09",
+        state_code: "09",
+        phone_number: "9876543211",
+        email: "buyer@cliks.com"
       },
-      item_list: [{
-        item_serial_number: "1",
-        product_description: req.body.product_name || req.body.receiver_product_name || req.body.sender_product_name || "Wheat",
-        is_service: "N",
-        hsn_code: cleanHsn,
-        quantity: Number(req.body.quantity || 1),
-        unit: req.body.unit || "BOX",
-        unit_price: taxableVal,
-        total_amount: taxableVal,
-        assessable_value: taxableVal,
-        gst_rate: 18,
-        igst_amount: igstAmount,
-        cgst_amount: 0,
-        sgst_amount: 0,
-        total_item_value: totalInvoiceVal
-      }],
       value_details: {
-        total_assessable_value: taxableVal,
-        total_invoice_value: totalInvoiceVal
-      }
+        total_assessable_value: taxableAmount,
+        total_cgst_value: cgstAmount,
+        total_sgst_value: sgstAmount,
+        total_igst_value: igstAmount,
+        total_cess_value: 0,
+        total_cess_value_of_state: 0,
+        total_discount: 0,
+        total_other_charge: 0,
+        total_invoice_value: totalInvoiceValue,
+        round_off_amount: 0,
+        total_invoice_value_additional_currency: 0
+      },
+      item_list: [
+        {
+          item_serial_number: "1",
+          product_description: req.body.product_description || req.body.product_name || req.body.receiver_product_name || req.body.sender_product_name || "Wheat desc",
+          is_service: "N",
+          hsn_code: String(req.body.hsn_code || "1001"),
+          bar_code: "",
+          quantity: Number(req.body.quantity || 1),
+          free_quantity: 0,
+          unit: req.body.unit || "BOX",
+          unit_price: taxableAmount,
+          total_amount: taxableAmount,
+          pre_tax_value: 0,
+          discount: 0,
+          other_charge: 0,
+          assessable_value: taxableAmount,
+          gst_rate: gstRate,
+          igst_amount: igstAmount,
+          cgst_amount: cgstAmount,
+          sgst_amount: sgstAmount,
+          cess_rate: 0,
+          cess_amount: 0,
+          cess_nonadvol_amount: 0,
+          state_cess_rate: 0,
+          state_cess_amount: 0,
+          state_cess_nonadvol_amount: 0,
+          total_item_value: totalInvoiceValue
+        }
+      ]
     };
 
     console.log('>>> [E-INVOICE] Calling Masters India API with docNo:', docNo);
@@ -220,18 +240,18 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
           pdf_url = EXCLUDED.pdf_url;
       `, [
         userId,
-        req.body.document_number || docNo || "CLK-INV-1300",
+        payload.document_details.document_number,
         clientName,
         buyerGstin,
-        req.body.taxable_value || taxableVal || 1000,
-        totalVal,
+        taxableAmount,
+        totalInvoiceValue,
         irn,
         String(ackNo),
         ackDt,
-        signedQr,
+        signedQrCode,
         pdfUrl
       ]);
-      console.log('>>> [E-INVOICE] Successfully upserted into invoices table for docNo:', docNo);
+      console.log('>>> [E-INVOICE] Successfully upserted into invoices table for docNo:', payload.document_details.document_number);
     } catch (saveInvErr) {
       console.warn('[ComplianceRoute] invoices table save error:', saveInvErr.message);
     }
@@ -250,7 +270,7 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, 'Signed', 'false', 'false', ?, ?, ?, ?)
       `).run(
         userId,
-        docNo,
+        payload.document_details.document_number,
         clientName,
         clientName,
         buyerGstin,
@@ -258,17 +278,17 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
         payload.seller_details.legal_name,
         payload.seller_details.gstin,
         '05 - Uttarakhand',
-        totalInvoiceVal,
-        igstAmount,
+        totalInvoiceValue,
+        igstAmount || (cgstAmount + sgstAmount),
         req.body.invoice_type || 'B2B',
         req.body.place_of_supply || '09-Uttar Pradesh',
-        taxableVal,
+        taxableAmount,
         gstRate,
-        0, 0, igstAmount,
-        0, 0, igstAmount,
-        igstAmount,
+        cgstAmount, sgstAmount, igstAmount,
+        cgstAmount, sgstAmount, igstAmount,
+        igstAmount || (cgstAmount + sgstAmount),
         req.body.reverse_charge || 'No',
-        totalInvoiceVal,
+        totalInvoiceValue,
         irn,
         nowIso,
         nowIso,
@@ -291,7 +311,7 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exclusive', ?, 'Signed', 'false', 'false', ?, ?)
         `).run(
           userId,
-          docNo,
+          payload.document_details.document_number,
           clientName,
           clientName,
           buyerGstin,
@@ -299,17 +319,17 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
           payload.seller_details.legal_name,
           payload.seller_details.gstin,
           '05 - Uttarakhand',
-          totalInvoiceVal,
-          igstAmount,
+          totalInvoiceValue,
+          igstAmount || (cgstAmount + sgstAmount),
           req.body.invoice_type || 'B2B',
           req.body.place_of_supply || '09-Uttar Pradesh',
-          taxableVal,
+          taxableAmount,
           gstRate,
-          0, 0, igstAmount,
-          0, 0, igstAmount,
-          igstAmount,
+          cgstAmount, sgstAmount, igstAmount,
+          cgstAmount, sgstAmount, igstAmount,
+          igstAmount || (cgstAmount + sgstAmount),
           req.body.reverse_charge || 'No',
-          totalInvoiceVal,
+          totalInvoiceValue,
           irn,
           nowIso,
           nowIso
@@ -329,10 +349,10 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
         ) VALUES (?, ?, ?, ?, ?, 'IRN Active', ?, ?, ?, ?, ?, ?, ?)
       `).run(
         userId,
-        docNo,
+        payload.document_details.document_number,
         clientName,
         buyerGstin,
-        totalInvoiceVal,
+        totalInvoiceValue,
         String(ackNo),
         String(ackDt),
         irn,
@@ -348,8 +368,8 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
     // 3. Return unified response for frontend hydration
     const returnData = {
       id: savedGstId || Date.now(),
-      invoice_number: docNo,
-      document_number: docNo,
+      invoice_number: payload.document_details.document_number,
+      document_number: payload.document_details.document_number,
       irn: irn,
       irn_number: irn,
       AckNo: ackNo,
@@ -359,23 +379,24 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
       date: ackDt,
       SignedQRCode: signedQrCode,
       signed_qr_code: signedQrCode,
-      EinvoicePdf: einvoicePdf,
-      einvoice_pdf_url: einvoicePdf,
-      pdf_url: einvoicePdf,
+      EinvoicePdf: pdfUrl,
+      einvoice_pdf_url: pdfUrl,
+      pdf_url: pdfUrl,
       status: 'Generated',
       invoice_type: req.body.invoice_type || 'B2B',
       customer_name: clientName,
       client_name: clientName,
       customer_gstin: buyerGstin,
-      taxable_amount: taxableVal,
-      taxable_value: taxableVal,
-      amount: taxableVal,
-      total_tax: igstAmount,
-      tax_amount: igstAmount,
+      taxable_amount: taxableAmount,
+      taxable_value: taxableAmount,
+      amount: taxableAmount,
+      total_tax: igstAmount || (cgstAmount + sgstAmount),
+      tax_amount: igstAmount || (cgstAmount + sgstAmount),
       igst_amount: igstAmount,
-      cgst_amount: 0,
-      sgst_amount: 0,
-      total_amount: totalInvoiceVal,
+      cgst_amount: cgstAmount,
+      sgst_amount: sgstAmount,
+      total_amount: totalInvoiceValue,
+      total_invoice: totalInvoiceValue,
       gst_percentage: gstRate,
       product_name: prodDesc,
       sender_product_name: prodDesc,
