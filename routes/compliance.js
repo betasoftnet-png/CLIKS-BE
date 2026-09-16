@@ -93,8 +93,8 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
   try {
     const today = new Date();
     const defaultDocDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
-    const docDate = req.body.document_date || formatDateDDMMYYYY(req.body.invoice_date || req.body.docDate) || defaultDocDate;
-    const docNo = req.body.document_number || req.body.invoice_number || req.body.invoiceNumber || `CLK-INV-${Math.floor(1000 + Math.random() * 9000)}`;
+    const docDate = req.body.document_details?.document_date || req.body.document_date || formatDateDDMMYYYY(req.body.invoice_date || req.body.docDate) || defaultDocDate;
+    const docNo = req.body.document_details?.document_number || req.body.document_number || req.body.invoice_number || req.body.invoiceNumber || `CLK-INV-${Math.floor(1000 + Math.random() * 9000)}`;
 
     const taxableVal = Number(req.body.taxable_value || req.body.taxable_amount || req.body.amount || 1000);
     const gstRate = 18;
@@ -105,13 +105,19 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
     // Masters India Sandbox requires 6-digit HSN (e.g. 100199 for Wheat)
     const cleanHsn = rawHsn.length >= 6 ? rawHsn : (rawHsn === "1001" ? "100199" : rawHsn.padEnd(6, '0'));
 
+    const sellerGstin = req.body.seller_details?.gstin || req.body.seller_gstin || req.body.sender_gstin || req.body.user_gstin || "05AAAPG7885R002";
+    const sellerStateCode = req.body.seller_details?.state_code || req.body.seller_state_code || req.body.sender_state_code || String(sellerGstin).slice(0, 2) || "05";
+    const buyerGstin = req.body.buyer_details?.gstin || req.body.buyer_gstin || req.body.customer_gstin || "09AAAPG7885R002";
+    const buyerStateCode = req.body.buyer_details?.state_code || req.body.buyer_state_code || String(buyerGstin).slice(0, 2) || "09";
+    const posStateCode = req.body.buyer_details?.place_of_supply || (req.body.place_of_supply ? String(req.body.place_of_supply).slice(0, 2) : buyerStateCode);
+
     const payload = {
-      user_gstin: "05AAAPG7885R002",
+      user_gstin: sellerGstin,
       data_source: "erp",
       transaction_details: {
-        supply_type: "B2B",
-        charge_type: "N",
-        igst_on_intra: "N"
+        supply_type: req.body.transaction_details?.supply_type || "B2B",
+        charge_type: req.body.transaction_details?.charge_type || "N",
+        igst_on_intra: req.body.transaction_details?.igst_on_intra || "N"
       },
       document_details: {
         document_type: "INV",
@@ -119,25 +125,25 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
         document_date: docDate
       },
       seller_details: {
-        gstin: req.body.seller_gstin || req.body.sender_gstin || req.body.user_gstin || "05AAAPG7885R002",
-        legal_name: req.body.seller_name || req.body.sender_name || "Welton Consignor",
-        address1: req.body.seller_address || req.body.sender_address || "Dehradun Central",
-        location: req.body.seller_location || req.body.sender_location || "Dehradun",
-        pincode: Number(req.body.seller_pincode || req.body.sender_pincode || 248001),
-        state_code: req.body.seller_state_code || req.body.sender_state_code || (req.body.seller_gstin ? String(req.body.seller_gstin).slice(0, 2) : "05")
+        gstin: sellerGstin,
+        legal_name: req.body.seller_details?.legal_name || req.body.seller_name || req.body.sender_name || "Welton Consignor",
+        address1: req.body.seller_details?.address1 || req.body.seller_address || req.body.sender_address || "Dehradun Central",
+        location: req.body.seller_details?.location || req.body.seller_location || req.body.sender_location || "Dehradun",
+        pincode: Number(req.body.seller_details?.pincode || req.body.seller_pincode || req.body.sender_pincode || 248001),
+        state_code: sellerStateCode
       },
       buyer_details: {
-        gstin: req.body.buyer_gstin || req.body.customer_gstin || "09AAAPG7885R002",
-        legal_name: req.body.buyer_name || req.body.client_name || req.body.customer_name || "Sthuthya Consignee",
-        place_of_supply: req.body.place_of_supply ? String(req.body.place_of_supply).slice(0, 2) : "09",
-        address1: req.body.buyer_address || "Noida Sector 62",
-        location: req.body.buyer_location || "Noida",
-        pincode: Number(req.body.buyer_pincode || 201301),
-        state_code: req.body.buyer_state_code || "09"
+        gstin: buyerGstin,
+        legal_name: req.body.buyer_details?.legal_name || req.body.buyer_name || req.body.client_name || req.body.customer_name || "Sthuthya Consignee",
+        place_of_supply: posStateCode,
+        address1: req.body.buyer_details?.address1 || req.body.buyer_address || "Noida Sector 62",
+        location: req.body.buyer_details?.location || req.body.buyer_location || "Noida",
+        pincode: Number(req.body.buyer_details?.pincode || req.body.buyer_pincode || 201301),
+        state_code: buyerStateCode
       },
       item_list: [{
         item_serial_number: "1",
-        product_description: req.body.product_name || req.body.sender_product_name || req.body.receiver_product_name || "Wheat",
+        product_description: req.body.product_name || req.body.receiver_product_name || req.body.sender_product_name || "Wheat",
         is_service: "N",
         hsn_code: cleanHsn,
         quantity: Number(req.body.quantity || 1),
@@ -153,9 +159,6 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
       }],
       value_details: {
         total_assessable_value: taxableVal,
-        total_igst_value: igstAmount,
-        total_cgst_value: 0,
-        total_sgst_value: 0,
         total_invoice_value: totalInvoiceVal
       }
     };
@@ -164,30 +167,30 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
     const einvResponse = await mastersIndiaService.generateIRN(payload);
     const results = einvResponse.results || einvResponse.data || einvResponse;
 
-    if (results.status === 'Failed' || results.code === 204) {
-      const errMsg = results.errorMessage || (typeof results.message === 'string' && results.message) || 'Failed to generate e-Invoice from Masters India';
+    if (einvResponse.status === 'Failed' || einvResponse.code === 204 || einvResponse.errorMessage || results.status === 'Failed' || results.code === 204 || results.errorMessage) {
+      const errMsg = einvResponse.errorMessage || results.errorMessage || (typeof results.message === 'string' && results.message) || results.ErrorMessage || 'Failed to generate e-Invoice from Masters India';
       console.warn('[ComplianceRoute] Masters India rejected e-Invoice:', errMsg);
       return res.status(400).json({
         success: false,
         message: errMsg,
+        errorMessage: errMsg,
         results: { message: errMsg },
         error: { message: errMsg }
       });
     }
 
-    const einvMsg = (results.message && typeof results.message === 'object') ? results.message : results;
-    const irn = einvMsg.Irn || einvMsg.irn || '';
-    const ackNo = einvMsg.AckNo || einvMsg.ack_no || '';
-    const ackDt = einvMsg.AckDt || einvMsg.ack_date || '';
-    const signedQr = einvMsg.SignedQRCode || einvMsg.signed_qr_code || '';
-    const signedInvoice = einvMsg.SignedInvoice || einvMsg.signed_invoice || '';
-    const pdfUrl = einvMsg.EinvoicePdf || einvMsg.QRCodeUrl || null;
+    const resMsg = results.message || results || {};
+    const pdfUrl = resMsg.EinvoicePdf || resMsg.QRCodeUrl || null;
+    const irn = resMsg.Irn || resMsg.irn || '';
+    const ackNo = resMsg.AckNo || resMsg.ack_no || '';
+    const ackDt = resMsg.AckDt || resMsg.ack_date || '';
+    const signedQrCode = resMsg.SignedQRCode || resMsg.signed_qr_code || '';
+    const signedInvoice = resMsg.SignedInvoice || resMsg.signed_invoice || '';
     const totalVal = Number(req.body.taxable_value || taxableVal || 1000) * 1.18;
 
     const nowIso = new Date().toISOString();
     const userId = req.user?.id || req.user?.userId || 1;
-    const clientName = req.body.customer_name || req.body.client_name || payload.buyer_details.legal_name || "Sthuthya Consignee";
-    const buyerGstin = req.body.customer_gstin || payload.buyer_details.gstin || "09AAAPG7885R002";
+    const clientName = req.body.buyer_details?.legal_name || req.body.customer_name || req.body.client_name || payload.buyer_details.legal_name || "Sthuthya Consignee";
     const prodDesc = payload.item_list[0].product_description;
 
     // 1. Save to invoices DB table so GET queries return it:
@@ -374,32 +377,30 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
       sgst_amount: 0,
       total_amount: totalInvoiceVal,
       gst_percentage: gstRate,
+      product_name: prodDesc,
       sender_product_name: prodDesc,
       receiver_product_name: prodDesc,
       results: {
-        message: {
-          Irn: irn,
-          AckNo: ackNo,
-          AckDt: ackDt,
-          SignedQRCode: signedQrCode,
-          SignedInvoice: signedInvoice,
-          EinvoicePdf: einvoicePdf,
-          QRCodeUrl: qrCodeUrl,
-          Status: 'ACT'
-        }
+        message: resMsg
       }
     };
 
     return res.status(200).json({
       success: true,
+      results: { message: resMsg },
+      pdf_url: pdfUrl,
       data: returnData,
-      results: returnData.results,
       ...returnData
     });
 
   } catch (error) {
     console.error('[ComplianceRoute] generate-einvoice Fatal Error:', error.message);
-    return sendError(res, error.message || 'Failed to generate e-Invoice', 500);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to generate e-Invoice',
+      errorMessage: error.message || 'Failed to generate e-Invoice',
+      error: { message: error.message }
+    });
   }
 });
 
