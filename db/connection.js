@@ -127,12 +127,13 @@ if (dbType === 'postgres') {
     },
     query: async (sql, params = []) => {
       const cleanParams = (params || []).flat().map(p => p === undefined ? null : p);
-      let sqliteSql = sql.replace(/\$\d+/g, '?').replace(/NOW\(\)/gi, "datetime('now')");
-      if (/^\s*(SELECT|PRAGMA)/i.test(sqliteSql)) {
-        const rows = sqliteDb.prepare(sqliteSql).all(...cleanParams);
-        return { rows, rowCount: rows.length };
+      let sqliteSql = sql.replace(/\$\d+/g, '?').replace(/NOW\(\)/gi, "datetime('now')").trim();
+      const cleanSql = sqliteSql.replace(/;\s*$/, '');
+      if (/^\s*(SELECT|PRAGMA)/i.test(cleanSql) || /RETURNING/i.test(cleanSql)) {
+        const rows = sqliteDb.prepare(cleanSql).all(...cleanParams);
+        return { rows, rowCount: rows.length, lastInsertRowid: rows[0]?.id };
       } else {
-        const info = sqliteDb.prepare(sqliteSql).run(...cleanParams);
+        const info = sqliteDb.prepare(cleanSql).run(...cleanParams);
         return { rows: [{ id: info.lastInsertRowid }], rowCount: info.changes, lastInsertRowid: info.lastInsertRowid };
       }
     },

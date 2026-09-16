@@ -497,20 +497,25 @@ router.post('/generate-ewaybill', async (req, res) => {
     }
 
     const mastersRes = ewbResponse?.data ? ewbResponse : { data: ewbResponse };
-    const ewayNo = mastersRes.data?.results?.message?.ewayBillNo || mastersRes.data?.ewayBillNo || ewayBillNo;
+    const ewayMsg = mastersRes.data?.results?.message || mastersRes.data || {};
+    const ewayNo = ewayMsg.ewayBillNo || mastersRes.data?.results?.message?.ewayBillNo || mastersRes.data?.ewayBillNo || ewayBillNo;
+    const validUpto = ewayMsg.validUpto || mastersRes.data?.results?.message?.validUpto || mastersRes.data?.validUpto || req.body.valid_upto || null;
+    const rawUrl = ewayMsg.url || mastersRes.data?.results?.message?.url || mastersRes.data?.url || null;
+    const pdfUrl = rawUrl ? (String(rawUrl).trim().startsWith('http') ? String(rawUrl).trim() : `https://${String(rawUrl).trim()}`) : null;
+
     const finalEwbNo = String(ewayNo || '');
-    const finalEwbDate = mastersRes.data?.results?.message?.ewayBillDate || mastersRes.data?.ewayBillDate || formattedDocDt;
-    const validUpto = mastersRes.data?.results?.message?.validUpto || mastersRes.data?.validUpto || req.body.valid_upto || null;
+    const finalEwbDate = ewayMsg.ewayBillDate || mastersRes.data?.results?.message?.ewayBillDate || mastersRes.data?.ewayBillDate || formattedDocDt;
     const finalValidUpto = validUpto;
-    const rawUrl = mastersRes.data?.results?.message?.url || mastersRes.data?.url;
-    const pdfUrl = rawUrl ? (String(rawUrl).trim().startsWith('http') ? String(rawUrl).trim() : `https://${String(rawUrl).trim()}`) : (finalEwbNo ? `https://sandb-api.mastersindia.co/api/v1/detailPrintPdf/${finalEwbNo}` : null);
-    const finalPdfUrl = pdfUrl;
+    const finalPdfUrl = pdfUrl || (finalEwbNo ? `https://sandb-api.mastersindia.co/api/v1/detailPrintPdf/${finalEwbNo}` : null);
 
-    const nowIso = new Date().toISOString();
+    console.log('>>> [EWB-SAVE] Inserting E-Way Bill to DB:', {
+      userId: req.user?.id,
+      ewayNo,
+      validUpto
+    });
 
-    // 1. Save into delivery_challans table
     try {
-      await db.query(`
+      const insertResult = await db.query(`
         INSERT INTO delivery_challans (
           user_id,
           eway_bill_no,
@@ -524,6 +529,7 @@ router.post('/generate-ewaybill', async (req, res) => {
           pdf_url,
           created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        RETURNING *;
       `, [
         req.user?.id || 1,
         String(ewayNo),
@@ -536,8 +542,11 @@ router.post('/generate-ewaybill', async (req, res) => {
         validUpto,
         pdfUrl
       ]);
-    } catch (saveErr) {
-      console.warn('[ComplianceRoute] delivery_challans save error:', saveErr.message);
+
+      console.log('>>> [EWB-SAVE] Successfully saved row ID:', insertResult.rows[0]?.id);
+    } catch (dbErr) {
+      console.error('>>> [EWB-SAVE-ERROR] Failed to save E-Way Bill to database:', dbErr.message);
+      // Log full error to prevent silent failures
     }
 
     // 2. Save into gst_invoices table so BusinessGST.jsx immediately displays it in e-Way Logistics tab
