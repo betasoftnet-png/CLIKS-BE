@@ -40,8 +40,25 @@ if (dbType === 'postgres') {
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_inv_num ON invoices(invoice_number);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_inv_num ON gst_invoices(invoice_number);
+
+        CREATE TABLE IF NOT EXISTS eway_bills (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER,
+          business_id INTEGER,
+          eway_bill_no VARCHAR(50) UNIQUE,
+          carrier_name VARCHAR(255),
+          vehicle_no VARCHAR(50),
+          distance_km NUMERIC,
+          from_place VARCHAR(255),
+          to_place VARCHAR(255),
+          status VARCHAR(50) DEFAULT 'GENERATED',
+          pdf_url TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_eway_bills_no ON eway_bills(eway_bill_no);
+        CREATE INDEX IF NOT EXISTS idx_eway_bills_user_biz ON eway_bills(user_id, business_id);
       `);
-      console.log('✅ [PostgreSQL Connection] Ensured gst_invoices & invoices schema columns exist');
+      console.log('✅ [PostgreSQL Connection] Ensured gst_invoices, invoices & eway_bills schema columns exist');
     } catch (err) {
       // Table might not be created yet during first boot before migrations run
       console.warn('⚠️ [PostgreSQL Connection Init Note]:', err.message);
@@ -295,6 +312,23 @@ if (dbType === 'postgres') {
       CREATE INDEX IF NOT EXISTS idx_bp_cat ON business_products(category);
       CREATE INDEX IF NOT EXISTS idx_stock_user ON stock(user_id);
       CREATE INDEX IF NOT EXISTS idx_inv_user ON inventory(user_id);
+
+      CREATE TABLE IF NOT EXISTS eway_bills (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        business_id INTEGER,
+        eway_bill_no TEXT UNIQUE,
+        carrier_name TEXT,
+        vehicle_no TEXT,
+        distance_km REAL,
+        from_place TEXT,
+        to_place TEXT,
+        status TEXT DEFAULT 'GENERATED',
+        pdf_url TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_eway_bills_no ON eway_bills(eway_bill_no);
+      CREATE INDEX IF NOT EXISTS idx_eway_bills_user_biz ON eway_bills(user_id, business_id);
     `);
 
     const alterCols = [

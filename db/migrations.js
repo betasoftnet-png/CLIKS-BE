@@ -2436,8 +2436,26 @@ CREATE TABLE IF NOT EXISTS money_trackers (
           FOREIGN KEY(invoice_id) REFERENCES ca_professional_invoices(id)
         )
       `);
+      db.raw.exec(`
+        CREATE TABLE IF NOT EXISTS eway_bills (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER,
+          business_id INTEGER,
+          eway_bill_no TEXT UNIQUE,
+          carrier_name TEXT,
+          vehicle_no TEXT,
+          distance_km REAL,
+          from_place TEXT,
+          to_place TEXT,
+          status TEXT DEFAULT 'GENERATED',
+          pdf_url TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_eway_bills_no ON eway_bills(eway_bill_no);
+        CREATE INDEX IF NOT EXISTS idx_eway_bills_user_biz ON eway_bills(user_id, business_id);
+      `);
     } catch (e) {
-      console.warn('⚠️ Could not create CA Billing tables:', e.message);
+      console.warn('⚠️ Could not create CA Billing / Eway tables:', e.message);
     }
 
     console.log('✅ Verified/Updated table columns in SQLite');
@@ -2485,9 +2503,25 @@ CREATE TABLE IF NOT EXISTS money_trackers (
           status TEXT DEFAULT 'Success',
           paid_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS eway_bills (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER,
+          business_id INTEGER,
+          eway_bill_no VARCHAR(50) UNIQUE,
+          carrier_name VARCHAR(255),
+          vehicle_no VARCHAR(50),
+          distance_km NUMERIC,
+          from_place VARCHAR(255),
+          to_place VARCHAR(255),
+          status VARCHAR(50) DEFAULT 'GENERATED',
+          pdf_url TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_eway_bills_no ON eway_bills(eway_bill_no);
+        CREATE INDEX IF NOT EXISTS idx_eway_bills_user_biz ON eway_bills(user_id, business_id);
       `);
     } catch (e) {
-      console.warn('⚠️ Could not create CA Billing tables (Postgres):', e.message);
+      console.warn('⚠️ Could not create CA Billing / Eway tables (Postgres):', e.message);
     }
   }
 

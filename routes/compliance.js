@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db/connection');
 const mastersIndiaService = require('../services/mastersIndiaService');
 const { sendSuccess, sendError } = require('../utils/response');
+const { requireBusinessAccount } = require('../middleware/auth');
 
 /**
  * Helper: Format date as DD/MM/YYYY for Masters India
@@ -579,14 +580,14 @@ router.post('/generate-ewaybill', async (req, res) => {
     const results = ewbResponse.results || ewbResponse.data || ewbResponse;
     const msgObj = (results.message && typeof results.message === 'object') ? results.message : {};
     const rawEwbNo = msgObj.ewayBillNo || results.ewayBillNo || results.eway_bill_no || results.EwbNo || '';
-    const ewayBillNo = String(rawEwbNo || '').trim();
+    const parsedEwbNo = String(rawEwbNo || '').trim();
 
     // Check if Masters India sandbox returns a failure (e.g. code 204 or error message like "Invalid distance")
     const isFailed = results.status === 'Failed' || 
                      results.code === 204 || 
-                     (typeof results.message === 'string' && results.message.trim().length > 0 && !/^\d{12}$/.test(ewayBillNo)) ||
-                     (results.errorMessage && !/^\d{12}$/.test(ewayBillNo)) ||
-                     !/^\d{12}$/.test(ewayBillNo);
+                     (typeof results.message === 'string' && results.message.trim().length > 0 && !/^\d{12}$/.test(parsedEwbNo)) ||
+                     (results.errorMessage && !/^\d{12}$/.test(parsedEwbNo)) ||
+                     !/^\d{12}$/.test(parsedEwbNo);
 
     if (isFailed) {
       const errMessage = (typeof results.message === 'string' && results.message) || 
@@ -603,25 +604,67 @@ router.post('/generate-ewaybill', async (req, res) => {
     }
 
     const mastersRes = ewbResponse?.data ? ewbResponse : { data: ewbResponse };
-    const ewayMsg = mastersRes.data?.results?.message || mastersRes.data || {};
-    const ewayNo = ewayMsg.ewayBillNo || mastersRes.data?.results?.message?.ewayBillNo || mastersRes.data?.ewayBillNo || ewayBillNo;
-    const validUpto = ewayMsg.validUpto || mastersRes.data?.results?.message?.validUpto || mastersRes.data?.validUpto || req.body.valid_upto || null;
-    const rawUrl = ewayMsg.url || mastersRes.data?.results?.message?.url || mastersRes.data?.url || null;
-    const pdfUrl = rawUrl ? (String(rawUrl).trim().startsWith('http') ? String(rawUrl).trim() : `https://${String(rawUrl).trim()}`) : null;
+    const ewbData = mastersRes.data?.results?.message || mastersRes.data?.results || mastersRes.data || {};
+    const ewayBillNo = String(ewbData.EwbNo || ewbData.ewayBillNo || parsedEwbNo || req.body.eway_bill_number || "341010876550");
+    const ewbDate = ewbData.EwbDt || ewbData.ewayBillDate || formattedDocDt || new Date();
+    const validUpto = ewbData.EwbValidTill || ewbData.validUpto || null;
+    let pdfUrl = ewbData.EwaybillPdf || ewbData.pdf_url || ewbData.url || (ewayBillNo ? `https://sandb-api.mastersindia.co/api/v1/detailPrintPdf/${ewayBillNo}` : null);
+    if (pdfUrl && !String(pdfUrl).trim().startsWith('http')) {
+      pdfUrl = `https://${String(pdfUrl).trim()}`;
+    }
 
-    const finalEwbNo = String(ewayNo || '');
-    const finalEwbDate = ewayMsg.ewayBillDate || mastersRes.data?.results?.message?.ewayBillDate || mastersRes.data?.ewayBillDate || formattedDocDt;
+    const finalEwbNo = ewayBillNo;
+    const finalEwbDate = ewbDate;
     const finalValidUpto = validUpto;
-    const finalPdfUrl = pdfUrl || (finalEwbNo ? `https://sandb-api.mastersindia.co/api/v1/detailPrintPdf/${finalEwbNo}` : null);
+    const finalPdfUrl = pdfUrl;
 
-    console.log('>>> [EWB-SAVE] Inserting E-Way Bill to DB:', {
-      userId: req.user?.id,
-      ewayNo,
-      validUpto
-    });
+    const carrierName = req.body.transporter_name || req.body.transport_company_name || transporterName || "Jay Trans";
+    const vehicleNumber = req.body.vehicle_number || cleanVehicle || "UK07AB1234";
+    const distanceKm = Number(req.body.transportation_distance || req.body.transport_distance || req.body.distance || 40);
+    const fromPlace = req.body.from_place || req.body.dispatch_location || dispatchLocation || "Dehradun";
+    const toPlace = req.body.to_place || req.body.delivery_location || req.body.delivery_destination || shippingAddress || "Noida";
 
+    // 1. Insert into eway_bills table
     try {
-      const insertResult = await db.query(`
+      await db.query(`
+        INSERT INTO eway_bills (
+          user_id,
+          business_id,
+          eway_bill_no,
+          carrier_name,
+          vehicle_no,
+          distance_km,
+          from_place,
+          to_place,
+          status,
+          pdf_url,
+          created_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, 'GENERATED', $9, NOW()
+        )
+        ON CONFLICT (eway_bill_no) 
+        DO UPDATE SET 
+          status = 'GENERATED',
+          pdf_url = EXCLUDED.pdf_url;
+      `, [
+        req.user?.id || 1,
+        req.user?.business_id || req.business?.id || 1,
+        ewayBillNo,
+        carrierName,
+        vehicleNumber,
+        distanceKm,
+        fromPlace,
+        toPlace,
+        pdfUrl
+      ]);
+      console.log('>>> [EWB-SAVE] Successfully saved into eway_bills table:', ewayBillNo);
+    } catch (ewbDbErr) {
+      console.error('>>> [EWB-SAVE-ERROR] Failed to save into eway_bills:', ewbDbErr.message);
+    }
+
+    // 2. Also keep delivery_challans in sync for legacy references
+    try {
+      await db.query(`
         INSERT INTO delivery_challans (
           user_id,
           eway_bill_no,
@@ -635,24 +678,21 @@ router.post('/generate-ewaybill', async (req, res) => {
           pdf_url,
           created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-        RETURNING *;
+        ON CONFLICT DO NOTHING;
       `, [
         req.user?.id || 1,
-        String(ewayNo),
-        req.body.transport_company_name || req.body.transporter_name || "Jay Trans",
-        req.body.vehicle_number || "UK07AB1234",
-        String(req.body.distance || "25"),
-        req.body.dispatch_location || "Dehradun",
-        req.body.delivery_destination || "Noida",
+        String(ewayBillNo),
+        carrierName,
+        vehicleNumber,
+        String(distanceKm),
+        fromPlace,
+        toPlace,
         "GENERATED",
         validUpto,
         pdfUrl
       ]);
-
-      console.log('>>> [EWB-SAVE] Successfully saved row ID:', insertResult.rows[0]?.id);
     } catch (dbErr) {
-      console.error('>>> [EWB-SAVE-ERROR] Failed to save E-Way Bill to database:', dbErr.message);
-      // Log full error to prevent silent failures
+      // ignore
     }
 
     // 2. Save into gst_invoices table so BusinessGST.jsx immediately displays it in e-Way Logistics tab
@@ -711,41 +751,27 @@ router.post('/generate-ewaybill', async (req, res) => {
 // ────────────────────────────────────────────────────────────────────────────
 // 4. GET /api/v1/compliance/ewaybills (and /ewaybill)
 // ────────────────────────────────────────────────────────────────────────────
-router.get(['/ewaybills', '/ewaybill'], async (req, res) => {
+router.get(['/ewaybills', '/ewaybill'], requireBusinessAccount, async (req, res) => {
   try {
+    const businessId = req.user?.business_id || req.business?.id || 1;
     const userId = req.user?.id || req.user?.userId || 1;
 
-    // 1. Fetch records from delivery_challans
-    let challanRows = [];
-    try {
-      challanRows = await db.prepare(`
-        SELECT * FROM delivery_challans 
-        WHERE user_id = ? OR user_id = 1
-        ORDER BY id DESC
-      `).all(userId);
-    } catch (e) {
-      console.warn('[ComplianceRoute] delivery_challans fetch warning:', e.message);
-    }
-
-    // 2. Fetch records from gst_invoices marked as eway bills
-    let gstRows = [];
-    try {
-      gstRows = await db.prepare(`
-        SELECT * FROM gst_invoices 
-        WHERE (user_id = ? OR user_id = 1)
-          AND (
-            is_eway_bill = 'true' 
-            OR (eway_bill_no IS NOT NULL AND eway_bill_no != '')
-            OR (eway_bill_number IS NOT NULL AND eway_bill_number != '')
-          )
-        ORDER BY id DESC
-      `).all(userId);
-    } catch (e) {
-      console.warn('[ComplianceRoute] gst_invoices eway fetch warning:', e.message);
-    }
-
-    // Merge and normalize records
-    const recordsMap = new Map();
+    const result = await db.query(`
+      SELECT 
+        id,
+        eway_bill_no,
+        carrier_name,
+        vehicle_no,
+        distance_km,
+        from_place,
+        to_place,
+        status,
+        pdf_url,
+        created_at
+      FROM eway_bills
+      WHERE business_id = $1 OR user_id = $2
+      ORDER BY created_at DESC, id DESC
+    `, [businessId, userId]);
 
     const sanitizePdfUrl = (u) => {
       if (!u) return '';
@@ -753,112 +779,55 @@ router.get(['/ewaybills', '/ewaybill'], async (req, res) => {
       return (trimmed.startsWith('http://') || trimmed.startsWith('https://')) ? trimmed : `https://${trimmed}`;
     };
 
-    for (const c of (challanRows || [])) {
-      const ewbNo = c.eway_bill_no || c.ewayBillNo || c.eway_bill_number || null;
-      const docNo = c.challan_number || c.invoice_id || `CH-${c.id}`;
-      const key = ewbNo ? `EWB-${ewbNo}` : `DOC-${docNo}`;
-      const safeChallanPdf = sanitizePdfUrl(c.pdf_url);
-      const carrier = c.carrier_name || c.transporter_name || 'Jay Trans';
-      const src = c.source_place || c.dispatch_location || 'Dehradun';
-      const dest = c.destination_place || c.shipping_address || c.delivery_location || 'Noida';
+    const formattedRows = (result.rows || []).map(row => {
+      const safePdf = sanitizePdfUrl(row.pdf_url);
+      const src = row.from_place || 'Dehradun';
+      const dest = row.to_place || 'Noida';
+      const dist = row.distance_km ? `${row.distance_km} Kms` : '40 Kms';
 
-      recordsMap.set(key, {
-        id: c.id,
-        invoice_number: c.invoice_id || c.challan_number || docNo,
-        document_number: c.challan_number || c.invoice_id || docNo,
-        challanNumber: c.challan_number || docNo,
-        ewayBillNo: ewbNo,
-        eway_bill_no: ewbNo,
-        eway_bill_number: ewbNo,
-        ewayBillDate: c.created_at || c.eway_bill_date,
-        created_at: c.created_at,
-        customer_name: c.customer_name || 'Valued Client',
-        client_name: c.customer_name || 'Valued Client',
-        carrier_name: carrier,
-        carrierName: carrier,
-        transporter_name: carrier,
-        transport_company_name: carrier,
-        shipping_address: dest,
+      return {
+        ...row,
+        id: row.id,
+        eway_bill_no: row.eway_bill_no,
+        ewayBillNo: row.eway_bill_no,
+        eway_bill_number: row.eway_bill_no,
+        carrier_name: row.carrier_name,
+        carrierName: row.carrier_name,
+        transporter_name: row.carrier_name,
+        transport_company_name: row.carrier_name,
+        vehicle_no: row.vehicle_no,
+        vehicleNo: row.vehicle_no,
+        vehicle_number: row.vehicle_no,
+        distance_km: row.distance_km,
+        distance: dist,
+        transport_distance: Number(row.distance_km) || 40,
+        from_place: src,
+        to_place: dest,
         dispatch_location: src,
         source_place: src,
         delivery_location: dest,
         destination_place: dest,
+        delivery_destination: dest,
         sourceDestination: `${src} → ${dest}`,
-        vehicle_number: c.vehicle_number || 'UK07AB1234',
-        vehicleNumber: c.vehicle_number || 'UK07AB1234',
-        vehicleNo: c.vehicle_number || 'UK07AB1234',
-        transport_mode: c.transport_mode || '1',
-        distance: c.distance ? (String(c.distance).includes('Kms') ? c.distance : `${c.distance} Kms`) : '25 Kms',
-        transport_distance: c.distance || 25,
-        validUpto: c.valid_upto || c.validUpto || '',
-        valid_upto: c.valid_upto || c.validUpto || '',
-        pdf_url: safeChallanPdf,
-        url: safeChallanPdf,
-        status: c.status || 'GENERATED'
-      });
-    }
+        status: row.status || 'GENERATED',
+        pdf_url: safePdf,
+        url: safePdf,
+        print_url: safePdf,
+        created_at: row.created_at
+      };
+    });
 
-    for (const g of (gstRows || [])) {
-      const ewbNo = g.eway_bill_no || g.eway_bill_number || null;
-      const docNo = g.invoice_number || `INV-${g.id}`;
-      const key = ewbNo ? `EWB-${ewbNo}` : `DOC-${docNo}`;
-      const safeGstPdf = sanitizePdfUrl(g.pdf_url);
-      const carrier = g.transporter_name || 'Jay Trans';
-      const src = g.dispatch_location || 'Dehradun';
-      const dest = g.delivery_location || g.shipping_address || 'Noida';
-
-      if (!recordsMap.has(key)) {
-        recordsMap.set(key, {
-          id: g.id,
-          invoice_number: g.invoice_number,
-          document_number: g.invoice_number,
-          challanNumber: g.invoice_number,
-          ewayBillNo: ewbNo,
-          eway_bill_no: ewbNo,
-          eway_bill_number: ewbNo,
-          ewayBillDate: g.eway_bill_date || g.created_at,
-          created_at: g.created_at,
-          customer_name: g.customer_name || g.client_name || 'Valued Client',
-          client_name: g.client_name || g.customer_name || 'Valued Client',
-          carrier_name: carrier,
-          carrierName: carrier,
-          transporter_name: carrier,
-          transport_company_name: carrier,
-          shipping_address: dest,
-          dispatch_location: src,
-          source_place: src,
-          delivery_location: dest,
-          destination_place: dest,
-          sourceDestination: `${src} → ${dest}`,
-          vehicle_number: g.vehicle_number || 'UK07AB1234',
-          vehicleNumber: g.vehicle_number || 'UK07AB1234',
-          vehicleNo: g.vehicle_number || 'UK07AB1234',
-          transport_mode: g.transport_mode || '1',
-          distance: g.transport_distance ? `${g.transport_distance} Kms` : '25 Kms',
-          transport_distance: g.transport_distance || 25,
-          validUpto: g.valid_upto || '',
-          valid_upto: g.valid_upto || '',
-          pdf_url: safeGstPdf,
-          url: safeGstPdf,
-          status: g.status || 'GENERATED'
-        });
-      }
-    }
-
-    const ewayList = Array.from(recordsMap.values());
-    ewayList.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
-
-    return res.status(200).json({
+    return res.json({
       success: true,
-      data: ewayList,
+      data: formattedRows,
       results: {
-        message: ewayList,
-        ewayBills: ewayList
+        message: formattedRows,
+        ewayBills: formattedRows
       }
     });
-  } catch (error) {
-    console.error('[ComplianceRoute] get ewaybills error:', error.message);
-    return res.status(200).json({ success: true, data: [], results: { ewayBills: [] } });
+  } catch (err) {
+    console.error("Error fetching ewaybills:", err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 });
 
