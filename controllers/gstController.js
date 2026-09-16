@@ -173,9 +173,9 @@ const gstController = {
                 if (!customer_gstin || !customer_gstin.trim()) {
                     return sendError(res, 'Customer GSTIN is required for B2B Invoice', 400);
                 }
-                const gstinRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
+                const gstinRegex = /^[0-9]{2}[A-Z0-9]{13}$/i;
                 if (!gstinRegex.test(customer_gstin.trim())) {
-                    return sendError(res, 'Invalid Customer GSTIN format. Must be a 15-digit alphanumeric code matching standard GSTIN layout (e.g. 33ABCDE1234F1Z5)', 400);
+                    return sendError(res, 'Invalid Customer GSTIN format. Must be a 15-digit alphanumeric code (e.g. 05AAAPG7885R002 or 33ABCDE1234F1Z5)', 400);
                 }
             }
             const taxable = parseFloat(taxable_value) || 0;
