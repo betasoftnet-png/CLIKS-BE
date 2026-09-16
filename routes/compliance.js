@@ -567,11 +567,18 @@ router.post('/generate-ewaybill', async (req, res) => {
     const mastersRes = ewbResponse?.data ? ewbResponse : { data: ewbResponse };
     const finalEwbNo = mastersRes.data?.results?.message?.ewayBillNo || mastersRes.data?.ewayBillNo || ewayBillNo;
     const finalEwbDate = mastersRes.data?.results?.message?.ewayBillDate || mastersRes.data?.ewayBillDate || formattedDocDt;
+    const finalValidUpto = 
+      mastersRes.data?.results?.message?.validUpto || 
+      mastersRes.data?.validUpto || 
+      validUpto ||
+      req.body.valid_upto || 
+      null;
     let rawPdf = mastersRes.data?.results?.message?.url || mastersRes.data?.url || pdfUrl || '';
     let finalPdfUrl = String(rawPdf).trim();
     if (finalPdfUrl && !finalPdfUrl.startsWith('http://') && !finalPdfUrl.startsWith('https://')) {
       finalPdfUrl = `https://${finalPdfUrl}`;
     }
+
 
     return res.status(200).json({
       success: true,
