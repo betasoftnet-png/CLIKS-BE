@@ -5,6 +5,49 @@ const mastersIndiaService = require('../services/mastersIndiaService');
 const { sendSuccess, sendError } = require('../utils/response');
 const { requireBusinessAccount } = require('../middleware/auth');
 
+// Ensure eway_bills table exists on startup/query
+(async () => {
+  try {
+    if (db.raw) {
+      db.raw.exec(`
+        CREATE TABLE IF NOT EXISTS eway_bills (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER,
+          business_id INTEGER,
+          eway_bill_no TEXT UNIQUE,
+          carrier_name TEXT,
+          vehicle_no TEXT,
+          distance_km REAL,
+          from_place TEXT,
+          to_place TEXT,
+          status TEXT DEFAULT 'GENERATED',
+          pdf_url TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    } else {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS eway_bills (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER,
+          business_id INTEGER,
+          eway_bill_no VARCHAR(50) UNIQUE,
+          carrier_name VARCHAR(255),
+          vehicle_no VARCHAR(50),
+          distance_km NUMERIC,
+          from_place VARCHAR(100),
+          to_place VARCHAR(100),
+          status VARCHAR(50) DEFAULT 'GENERATED',
+          pdf_url TEXT,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+      `);
+    }
+  } catch (err) {
+    console.warn('[ComplianceRoute] Ensure eway_bills table note:', err.message);
+  }
+})();
+
 /**
  * Helper: Format date as DD/MM/YYYY for Masters India
  */
@@ -604,57 +647,33 @@ router.post('/generate-ewaybill', async (req, res) => {
     }
 
     const mastersRes = ewbResponse?.data ? ewbResponse : { data: ewbResponse };
-    const ewbData = mastersRes.data?.results?.message || mastersRes.data?.results || mastersRes.data || {};
-    const ewayBillNo = String(ewbData.EwbNo || ewbData.ewayBillNo || parsedEwbNo || req.body.eway_bill_number || "341010876550");
-    const ewbDate = ewbData.EwbDt || ewbData.ewayBillDate || formattedDocDt || new Date();
-    const validUpto = ewbData.EwbValidTill || ewbData.validUpto || null;
-    let pdfUrl = ewbData.EwaybillPdf || ewbData.pdf_url || ewbData.url || (ewayBillNo ? `https://sandb-api.mastersindia.co/api/v1/detailPrintPdf/${ewayBillNo}` : null);
-    if (pdfUrl && !String(pdfUrl).trim().startsWith('http')) {
-      pdfUrl = `https://${String(pdfUrl).trim()}`;
-    }
+    const ewbRes = mastersRes.data?.results?.message || mastersRes.data?.results || mastersRes.data || {};
+    const ewayBillNo = String(ewbRes.EwbNo || ewbRes.ewayBillNo || req.body.eway_bill_number || parsedEwbNo || Date.now());
+    const pdfUrl = ewbRes.EwaybillPdf || ewbRes.pdf_url || ewbRes.url || (ewayBillNo ? `https://sandb-api.mastersindia.co/api/v1/detailPrintPdf/${ewayBillNo}` : null);
+    const ewbDate = ewbRes.EwbDt || ewbRes.ewayBillDate || formattedDocDt || new Date();
+    const validUpto = ewbRes.EwbValidTill || ewbRes.validUpto || null;
 
     const finalEwbNo = ewayBillNo;
     const finalEwbDate = ewbDate;
     const finalValidUpto = validUpto;
     const finalPdfUrl = pdfUrl;
 
-    const carrierName = req.body.transporter_name || req.body.transport_company_name || transporterName || "Jay Trans";
-    const vehicleNumber = req.body.vehicle_number || cleanVehicle || "UK07AB1234";
-    const distanceKm = Number(req.body.transportation_distance || req.body.transport_distance || req.body.distance || 40);
-    const fromPlace = req.body.from_place || req.body.dispatch_location || dispatchLocation || "Dehradun";
-    const toPlace = req.body.to_place || req.body.delivery_location || req.body.delivery_destination || shippingAddress || "Noida";
-
-    // 1. Insert into eway_bills table
     try {
       await db.query(`
         INSERT INTO eway_bills (
-          user_id,
-          business_id,
-          eway_bill_no,
-          carrier_name,
-          vehicle_no,
-          distance_km,
-          from_place,
-          to_place,
-          status,
-          pdf_url,
-          created_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, 'GENERATED', $9, NOW()
-        )
+          user_id, business_id, eway_bill_no, carrier_name, vehicle_no, distance_km, from_place, to_place, status, pdf_url, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'GENERATED', $9, NOW())
         ON CONFLICT (eway_bill_no) 
-        DO UPDATE SET 
-          status = 'GENERATED',
-          pdf_url = EXCLUDED.pdf_url;
+        DO UPDATE SET status = 'GENERATED', pdf_url = EXCLUDED.pdf_url;
       `, [
         req.user?.id || 1,
         req.user?.business_id || req.business?.id || 1,
         ewayBillNo,
-        carrierName,
-        vehicleNumber,
-        distanceKm,
-        fromPlace,
-        toPlace,
+        req.body.transporter_name || req.body.carrier_name || req.body.transport_company_name || transporterName || "Jay Trans",
+        req.body.vehicle_number || req.body.vehicle_no || cleanVehicle || "UK07AB1234",
+        Number(req.body.transportation_distance || req.body.distance_km || req.body.transport_distance || req.body.distance || 40),
+        req.body.from_place || req.body.dispatch_location || dispatchLocation || "Dehradun",
+        req.body.to_place || req.body.delivery_destination || req.body.delivery_location || shippingAddress || "Noida",
         pdfUrl
       ]);
       console.log('>>> [EWB-SAVE] Successfully saved into eway_bills table:', ewayBillNo);
