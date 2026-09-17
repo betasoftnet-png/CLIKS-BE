@@ -85,7 +85,38 @@ exports.getPitches = async (req, res) => {
             }
         });
 
-        res.json({ success: true, data: merged });
+        // 4. Optional query filter for sector and search
+        let filtered = merged;
+        const { search, sector } = req.query;
+        if (sector && sector !== 'ALL' && sector !== 'All Sectors') {
+            const secLower = sector.trim().toLowerCase();
+            filtered = filtered.filter(p => {
+                const pSec = (p.sector || p.industry || '').trim().toLowerCase();
+                return pSec === secLower || pSec.includes(secLower);
+            });
+        }
+        if (search && search.trim()) {
+            const q = search.trim().toLowerCase();
+            filtered = filtered.filter(p => {
+                const combined = [
+                    p.venture_name,
+                    p.title,
+                    p.business_name,
+                    p.sector,
+                    p.industry,
+                    p.headline_pitch,
+                    p.headline,
+                    p.pitch_summary,
+                    p.description,
+                    p.problem,
+                    p.solution,
+                    p.location
+                ].filter(Boolean).join(' ').toLowerCase();
+                return combined.includes(q);
+            });
+        }
+
+        res.json({ success: true, data: filtered });
     } catch (error) {
         console.error('Error fetching pitches:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch business pitches' });
