@@ -2078,6 +2078,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       );`,
       `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS founder_phone VARCHAR(50);`,
       `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS founder_email VARCHAR(255);`,
+      `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS description TEXT;`,
       `ALTER TABLE planned_payments ADD COLUMN IF NOT EXISTS type VARCHAR(50);`,
       `ALTER TABLE planned_payments ADD COLUMN IF NOT EXISTS person_id INTEGER;`,
       `CREATE TABLE IF NOT EXISTS business_wallets (
@@ -2259,6 +2260,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE gst_invoices ADD COLUMN goods_unit TEXT',
       'ALTER TABLE venture_pitches ADD COLUMN founder_phone TEXT',
       'ALTER TABLE venture_pitches ADD COLUMN founder_email TEXT',
+      'ALTER TABLE venture_pitches ADD COLUMN description TEXT',
       'ALTER TABLE users ADD COLUMN tier TEXT DEFAULT \'Free Plan\'',
       'ALTER TABLE users ADD COLUMN subscription_days_remaining INTEGER DEFAULT 0',
       'ALTER TABLE users ADD COLUMN primary_income_source TEXT',
