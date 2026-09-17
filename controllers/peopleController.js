@@ -29,41 +29,177 @@ const getAllTransactions = async (req, res) => {
   return sendSuccess(res, result.rows, 'All people transactions fetched', 200, result.meta);
 };
 
-// Global People Reminders
-const getAllReminders = async (req, res) => {
-  const { page, limit, sort = 'due_date', order = 'asc', search, status } = req.query;
-  let query = `
-    SELECT pr.*, p.name as person_name 
-    FROM people_reminders pr 
-    JOIN people p ON pr.person_id = p.id 
-    WHERE pr.user_id = ?
-  `;
-  const params = [req.user.id];
+const RepaymentAlert = require('../models/RepaymentAlert');
 
-  if (status) { query += ' AND pr.status = ?'; params.push(status); }
-  if (search) { 
-    query += ' AND (pr.title LIKE ? OR pr.message LIKE ? OR p.name LIKE ?)'; 
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`); 
+// Global People Reminders / Repayment Alerts
+const getAllReminders = async (req, res) => {
+  const { search, status } = req.query;
+  await RepaymentAlert.ensureTable();
+
+  // 1. Primary query: repayment_alerts table
+  const alerts = await RepaymentAlert.getAll(req.user.id);
+
+  // 2. Also retrieve any legacy people_reminders (using LEFT JOIN so contacts without strict foreign matches are not lost)
+  let legacyAlerts = [];
+  try {
+    const legacyRows = await db.prepare(`
+      SELECT pr.*, p.name as person_name, p.phone as contact_phone 
+      FROM people_reminders pr 
+      LEFT JOIN people p ON pr.person_id = p.id 
+      WHERE pr.user_id = ?
+    `).all(req.user.id);
+
+    legacyAlerts = (legacyRows || []).map(r => ({
+      id: r.id,
+      user_id: r.user_id,
+      contact_id: r.person_id,
+      person_id: r.person_id,
+      target_contact: r.person_name || 'Contact',
+      person_name: r.person_name || 'Contact',
+      contact_phone: r.contact_phone || null,
+      maturity_date: r.due_date,
+      due_date: r.due_date,
+      memo_label: r.title || 'Repayment Alert',
+      title: r.title || 'Repayment Alert',
+      claim_cap: Number(r.amount) || 0,
+      amount: Number(r.amount) || 0,
+      status: r.status || 'Pending',
+      created_at: r.created_at
+    }));
+  } catch (e) {}
+
+  // Merge avoiding duplicates
+  const combined = [...alerts];
+  for (const leg of legacyAlerts) {
+    const exists = combined.some(a => 
+      (a.id === leg.id && a.target_contact === leg.target_contact) ||
+      (String(a.contact_id) === String(leg.contact_id) && a.maturity_date === leg.maturity_date && a.memo_label === leg.memo_label)
+    );
+    if (!exists) {
+      combined.push(leg);
+    }
   }
 
-  const allowedSorts = ['created_at', 'updated_at', 'due_date', 'status'];
-  const sortCol = allowedSorts.includes(sort) ? sort : 'due_date';
-  const sortDir = order.toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+  // Sort by maturity_date / due_date ASC
+  combined.sort((a, b) => new Date(a.maturity_date || a.due_date) - new Date(b.maturity_date || b.due_date));
 
-  query += ` ORDER BY pr.${sortCol} ${sortDir}`;
+  let filtered = combined;
+  if (status) {
+    filtered = filtered.filter(a => (a.status || '').toLowerCase() === status.toLowerCase());
+  }
+  if (search) {
+    const s = search.toLowerCase();
+    filtered = filtered.filter(a =>
+      (a.memo_label && a.memo_label.toLowerCase().includes(s)) ||
+      (a.target_contact && a.target_contact.toLowerCase().includes(s)) ||
+      (a.title && a.title.toLowerCase().includes(s)) ||
+      (a.person_name && a.person_name.toLowerCase().includes(s))
+    );
+  }
 
-  const result = await paginate(query, params, page, limit, db);
+  return sendSuccess(res, filtered, 'All people repayment alerts fetched', 200, {
+    total: filtered.length,
+    page: 1,
+    limit: filtered.length
+  });
+};
 
-  const stats = await db.prepare(`
-    SELECT 
-      SUM(CASE WHEN date(due_date) = date('now') AND status != 'settled' THEN 1 ELSE 0 END) as due_today,
-      SUM(CASE WHEN date(due_date) > date('now') AND status != 'settled' THEN 1 ELSE 0 END) as upcoming,
-      SUM(CASE WHEN date(due_date) < date('now') AND status != 'settled' THEN 1 ELSE 0 END) as overdue
-    FROM people_reminders
-    WHERE user_id = ?
-  `).get(req.user.id);
+// Create Repayment Alert (PostgreSQL persistence)
+const createRepaymentAlert = async (req, res) => {
+  const {
+    target_contact,
+    person_name,
+    contact_id,
+    person_id,
+    contact_phone,
+    maturity_date,
+    due_date,
+    memo_label,
+    title,
+    claim_cap,
+    amount,
+    status = 'Pending'
+  } = req.body;
 
-  return sendSuccess(res, result.rows, 'All people reminders fetched', 200, { ...result.meta, stats });
+  const resolvedMaturityDate = maturity_date || due_date;
+  const resolvedMemo = memo_label || title || 'Repayment Alert';
+  const resolvedContactId = contact_id || person_id || null;
+  const rawCap = claim_cap !== undefined ? claim_cap : (amount !== undefined ? amount : 0);
+
+  if (!resolvedMaturityDate) {
+    return sendError(res, 'Maturity / Due Date is required', 400, 'BAD_REQUEST');
+  }
+
+  // 12-digit cap validation (max 999999999999.99)
+  const parsedCap = Number(rawCap) || 0;
+  if (isNaN(parsedCap) || parsedCap < 0 || parsedCap > 999999999999.99) {
+    return sendError(res, 'Claim cap must be between 0 and 999,999,999,999.99', 400, 'BAD_REQUEST');
+  }
+
+  let resolvedTargetContact = target_contact || person_name || null;
+  let resolvedPhone = contact_phone || null;
+
+  if (resolvedContactId && (!resolvedTargetContact || !resolvedPhone)) {
+    try {
+      const contact = await db.prepare('SELECT name, phone FROM people WHERE id = ? AND user_id = ?').get(resolvedContactId, req.user.id);
+      if (contact) {
+        if (!resolvedTargetContact) resolvedTargetContact = contact.name;
+        if (!resolvedPhone) resolvedPhone = contact.phone;
+      }
+    } catch (e) {}
+  }
+
+  if (!resolvedTargetContact) {
+    resolvedTargetContact = 'Contact';
+  }
+
+  const alert = await RepaymentAlert.create({
+    user_id: req.user.id,
+    business_id: req.user.business_id || null,
+    contact_id: resolvedContactId,
+    target_contact: resolvedTargetContact,
+    contact_phone: resolvedPhone,
+    maturity_date: resolvedMaturityDate,
+    memo_label: resolvedMemo,
+    claim_cap: parsedCap,
+    status
+  });
+
+  // Also write to legacy people_reminders if person_id is available
+  if (resolvedContactId) {
+    try {
+      const now = new Date().toISOString();
+      await db.prepare(`
+        INSERT INTO people_reminders (person_id, user_id, title, message, amount, due_date, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(resolvedContactId, req.user.id, resolvedMemo, resolvedMemo, parsedCap, resolvedMaturityDate, status.toLowerCase(), now, now);
+    } catch (e) {}
+  }
+
+  return sendSuccess(res, alert, 'Repayment alert created', 201);
+};
+
+// Delete Repayment Alert
+const deleteRepaymentAlert = async (req, res) => {
+  const { id } = req.params;
+  await RepaymentAlert.delete(id, req.user.id);
+  try {
+    await db.prepare('DELETE FROM people_reminders WHERE id = ? AND user_id = ?').run(id, req.user.id);
+  } catch (e) {}
+  return sendSuccess(res, { deleted: true }, 'Repayment alert removed');
+};
+
+// Update Repayment Alert Status
+const updateRepaymentAlert = async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  if (status) {
+    await RepaymentAlert.updateStatus(id, req.user.id, status);
+    try {
+      await db.prepare('UPDATE people_reminders SET status = ? WHERE id = ? AND user_id = ?').run(status.toLowerCase(), id, req.user.id);
+    } catch (e) {}
+  }
+  return sendSuccess(res, { id, status }, 'Repayment alert updated');
 };
 
 // Global People Records
@@ -246,4 +382,16 @@ const deletePerson = async (req, res) => {
   return res.status(204).end();
 };
 
-module.exports = { getAllTransactions, getAllReminders, getAllRecords, getPeople, createPerson, getPerson, updatePerson, deletePerson };
+module.exports = {
+  getAllTransactions,
+  getAllReminders,
+  createRepaymentAlert,
+  deleteRepaymentAlert,
+  updateRepaymentAlert,
+  getAllRecords,
+  getPeople,
+  createPerson,
+  getPerson,
+  updatePerson,
+  deletePerson
+};

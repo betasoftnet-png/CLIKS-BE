@@ -71,8 +71,23 @@ if (dbType === 'postgres') {
           review_status VARCHAR(50) DEFAULT 'Published',
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS repayment_alerts (
+          id SERIAL PRIMARY KEY,
+          user_id VARCHAR(255) NOT NULL,
+          business_id VARCHAR(255),
+          contact_id VARCHAR(255),
+          target_contact VARCHAR(255) NOT NULL,
+          contact_phone VARCHAR(50),
+          maturity_date DATE NOT NULL,
+          memo_label VARCHAR(255) NOT NULL,
+          claim_cap NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+          status VARCHAR(50) DEFAULT 'Pending',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_repayment_alerts_user ON repayment_alerts(user_id);
       `);
-      console.log('✅ [PostgreSQL Connection] Ensured gst_invoices, invoices, eway_bills & founder_pitches schema columns exist');
+      console.log('✅ [PostgreSQL Connection] Ensured gst_invoices, invoices, eway_bills, founder_pitches & repayment_alerts schema exist');
     } catch (err) {
       // Table might not be created yet during first boot before migrations run
       console.warn('⚠️ [PostgreSQL Connection Init Note]:', err.message);
@@ -343,6 +358,21 @@ if (dbType === 'postgres') {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_eway_bills_no ON eway_bills(eway_bill_no);
       CREATE INDEX IF NOT EXISTS idx_eway_bills_user_biz ON eway_bills(user_id, business_id);
+
+      CREATE TABLE IF NOT EXISTS repayment_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        business_id TEXT,
+        contact_id TEXT,
+        target_contact TEXT NOT NULL,
+        contact_phone TEXT,
+        maturity_date TEXT NOT NULL,
+        memo_label TEXT NOT NULL,
+        claim_cap REAL NOT NULL DEFAULT 0.00,
+        status TEXT DEFAULT 'Pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_repayment_alerts_user ON repayment_alerts(user_id);
     `);
 
     const alterCols = [

@@ -1,6 +1,18 @@
 const express = require('express');
 const router = express.Router();
-const { getAllTransactions, getAllReminders, getAllRecords, getPeople, createPerson, getPerson, updatePerson, deletePerson } = require('../controllers/peopleController');
+const {
+  getAllTransactions,
+  getAllReminders,
+  createRepaymentAlert,
+  deleteRepaymentAlert,
+  updateRepaymentAlert,
+  getAllRecords,
+  getPeople,
+  createPerson,
+  getPerson,
+  updatePerson,
+  deletePerson
+} = require('../controllers/peopleController');
 const asyncHandler = require('../utils/asyncHandler');
 
 // ── Global aggregated views (must be declared before /:id) ────────────────────
@@ -8,8 +20,18 @@ const asyncHandler = require('../utils/asyncHandler');
 // GET /people/transactions  — List all people transactions across all contacts
 router.get('/transactions', asyncHandler(getAllTransactions));
 
-// GET /people/reminders     — List all people reminders across all contacts (with overdue stats)
+// Repayment Alerts (Central PostgreSQL persistence)
+// GET    /people/reminders     — List all people repayment alerts across all contacts
 router.get('/reminders', asyncHandler(getAllReminders));
+
+// POST   /people/reminders     — Dispatch / create a new repayment alert
+router.post('/reminders', asyncHandler(createRepaymentAlert));
+
+// DELETE /people/reminders/:id — Delete / dismiss a repayment alert
+router.delete('/reminders/:id', asyncHandler(deleteRepaymentAlert));
+
+// PATCH  /people/reminders/:id — Update repayment alert status (e.g. Settled / Dispatched)
+router.patch('/reminders/:id', asyncHandler(updateRepaymentAlert));
 
 // GET /people/records       — List all people records across all contacts
 router.get('/records', asyncHandler(getAllRecords));

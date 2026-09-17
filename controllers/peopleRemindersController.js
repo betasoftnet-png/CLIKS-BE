@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { paginate } = require('../utils/pagination');
+const RepaymentAlert = require('../models/RepaymentAlert');
 
 // Middleware: Verify person ownership
 const verifyPerson = async (req, res, next) => {
@@ -51,6 +52,25 @@ const createReminder = async (req, res) => {
   const info = await stmt.run(req.params.personId, req.user.id, title, messageText, parsedAmount, due_date, status, now, now);
 
   const newItem = await db.prepare('SELECT * FROM people_reminders WHERE id = ?').get(info.lastInsertRowid);
+
+  // Dual-persist to RepaymentAlert table
+  try {
+    const person = await db.prepare('SELECT name, phone FROM people WHERE id = ? AND user_id = ?').get(req.params.personId, req.user.id);
+    await RepaymentAlert.create({
+      user_id: req.user.id,
+      business_id: req.user.business_id || null,
+      contact_id: req.params.personId,
+      target_contact: person ? person.name : 'Contact',
+      contact_phone: person ? person.phone : null,
+      maturity_date: due_date,
+      memo_label: title,
+      claim_cap: parsedAmount || 0,
+      status: status || 'Pending'
+    });
+  } catch (err) {
+    console.error('RepaymentAlert dual-write note:', err.message);
+  }
+
   return sendSuccess(res, newItem, 'Person reminder created', 201);
 };
 
@@ -106,6 +126,9 @@ const deleteReminder = async (req, res) => {
   if (!item) return sendError(res, 'Person reminder not found', 404, 'NOT_FOUND');
 
   await db.prepare('DELETE FROM people_reminders WHERE id = ? AND person_id = ? AND user_id = ?').run(req.params.id, req.params.personId, req.user.id);
+  try {
+    await RepaymentAlert.delete(req.params.id, req.user.id);
+  } catch (err) {}
   return res.status(204).end();
 };
 
