@@ -93,9 +93,9 @@ app.use(sanitizer);
 
 // ── Body Parsing ──────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '15mb' }));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use('/api/v1/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), { fallthrough: false }));
+app.use('/api/v1/uploads', express.static(path.join(__dirname, 'uploads'), { fallthrough: false }));
+app.use('/api/uploads', express.static(path.join(__dirname, 'uploads'), { fallthrough: false }));
 
 // ── API Documentation (Swagger) ────────────────────────────────────────────────
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
