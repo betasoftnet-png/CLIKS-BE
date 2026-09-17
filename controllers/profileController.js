@@ -65,8 +65,8 @@ const safeUser = (user) => {
   safe.active_subscriptions = {
     business: enrichSub(rawBusiness, user.tier || 'Starter Plan', 365),
     fin_pro: enrichSub(rawFinPro, 'Fin-Pro Solo', 365),
-    investor: enrichSub(rawInvestor, 'Basic Investor', 365),
-    poster: enrichSub(rawPoster, 'Monthly Innovator', 30)
+    investor: { active: false, plan: null },
+    poster: { active: false, plan: null }
   };
 
   return safe;
