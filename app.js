@@ -34,34 +34,53 @@ app.use(helmet({
   crossOriginOpenerPolicy: false,
 }));
 */
-// ── Universal Fail-Proof CORS Middleware ────────────────────────────────────
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  
-  if (origin) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Vary', 'Origin');
-  } else {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  }
+// ── CORS Configuration ──────────────────────────────────────────────────────
+const allowedOrigins = [
+  'https://cliksbusiness.com',
+  'https://www.cliksbusiness.com',
+  'https://cliks.beta-softnet.com',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:8000',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173'
+];
 
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  
-  const reqHeaders = req.headers['access-control-request-headers'];
-  if (reqHeaders) {
-    res.setHeader('Access-Control-Allow-Headers', reqHeaders);
-  } else {
-    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Version, X-Request-Id, Cache-Control, Pragma, sentry-trace, baggage');
-  }
-  
-  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, X-API-Version, Authorization');
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, postman)
+    if (!origin) return callback(null, true);
+    if (
+      allowedOrigins.indexOf(origin) !== -1 ||
+      origin.endsWith('.cliksbusiness.com') ||
+      origin.endsWith('.beta-softnet.com')
+    ) {
+      return callback(null, true);
+    } else {
+      return callback(new Error('Blocked by CORS for origin: ' + origin));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'X-API-Version',
+    'X-Request-Id',
+    'Cache-Control',
+    'Pragma',
+    'sentry-trace',
+    'baggage'
+  ],
+  exposedHeaders: ['Content-Length', 'Content-Range', 'X-API-Version', 'Authorization']
+};
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  next();
-});
+app.use(cors(corsOptions));
+// Explicit OPTIONS preflight handling across all routes
+app.options('*', cors(corsOptions));
 
 // ── Structured Request Logger + Request ID ──────────────────────────────────────
 // Replaces morgan. Adds: X-Request-Id header, structured JSON logs,
