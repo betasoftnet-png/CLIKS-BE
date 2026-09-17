@@ -1811,6 +1811,21 @@ CREATE TABLE IF NOT EXISTS venture_pitches (
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
+-- Founder Pitches (Central Database)
+CREATE TABLE IF NOT EXISTS founder_pitches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT,
+  founder_name TEXT NOT NULL,
+  founder_email TEXT NOT NULL,
+  venture_name TEXT NOT NULL,
+  sector TEXT NOT NULL,
+  headline_pitch TEXT NOT NULL,
+  description TEXT NOT NULL,
+  pitch_deck_url TEXT,
+  review_status TEXT DEFAULT 'Published',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Global Customer Support Agent Registry
 CREATE TABLE IF NOT EXISTS support_agents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2079,6 +2094,19 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS founder_phone VARCHAR(50);`,
       `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS founder_email VARCHAR(255);`,
       `ALTER TABLE venture_pitches ADD COLUMN IF NOT EXISTS description TEXT;`,
+      `CREATE TABLE IF NOT EXISTS founder_pitches (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255),
+        founder_name VARCHAR(255) NOT NULL,
+        founder_email VARCHAR(255) NOT NULL,
+        venture_name VARCHAR(255) NOT NULL,
+        sector VARCHAR(100) NOT NULL,
+        headline_pitch TEXT NOT NULL,
+        description TEXT NOT NULL,
+        pitch_deck_url TEXT,
+        review_status VARCHAR(50) DEFAULT 'Published',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );`,
       `ALTER TABLE planned_payments ADD COLUMN IF NOT EXISTS type VARCHAR(50);`,
       `ALTER TABLE planned_payments ADD COLUMN IF NOT EXISTS person_id INTEGER;`,
       `CREATE TABLE IF NOT EXISTS business_wallets (

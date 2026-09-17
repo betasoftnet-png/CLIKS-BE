@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { auth, allowRoles } = require('../middleware/auth');
+const pitchController = require('../controllers/pitchController');
 const { 
   getUsers, 
   deleteUser, 
@@ -32,6 +33,9 @@ router.use(allowRoles('admin'));
 
 // GET    /admin/users              — List all registered users
 router.get('/users', getUsers);
+
+// GET    /admin/ventures/pitches   — Query all founder pitches from PostgreSQL
+router.get('/ventures/pitches', pitchController.getPitches);
 
 // DELETE /admin/users/:id          — Delete a user by ID
 router.delete('/users/:id', deleteUser);

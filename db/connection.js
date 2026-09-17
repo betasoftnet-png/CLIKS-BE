@@ -57,8 +57,22 @@ if (dbType === 'postgres') {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_eway_bills_no ON eway_bills(eway_bill_no);
         CREATE INDEX IF NOT EXISTS idx_eway_bills_user_biz ON eway_bills(user_id, business_id);
+
+        CREATE TABLE IF NOT EXISTS founder_pitches (
+          id SERIAL PRIMARY KEY,
+          user_id VARCHAR(255),
+          founder_name VARCHAR(255) NOT NULL,
+          founder_email VARCHAR(255) NOT NULL,
+          venture_name VARCHAR(255) NOT NULL,
+          sector VARCHAR(100) NOT NULL,
+          headline_pitch TEXT NOT NULL,
+          description TEXT NOT NULL,
+          pitch_deck_url TEXT,
+          review_status VARCHAR(50) DEFAULT 'Published',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
       `);
-      console.log('✅ [PostgreSQL Connection] Ensured gst_invoices, invoices & eway_bills schema columns exist');
+      console.log('✅ [PostgreSQL Connection] Ensured gst_invoices, invoices, eway_bills & founder_pitches schema columns exist');
     } catch (err) {
       // Table might not be created yet during first boot before migrations run
       console.warn('⚠️ [PostgreSQL Connection Init Note]:', err.message);
