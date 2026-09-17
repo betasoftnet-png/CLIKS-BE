@@ -138,7 +138,7 @@ exports.createPitch = async (req, res) => {
         const fEmail = founder_email || req.user?.email || 'founder@cliksbusiness.com';
         const fName = founder_name || req.user?.username || req.user?.business_name || vName;
         const pDeckUrl = pitch_deck_url || '';
-        const rStatus = review_status || 'Published';
+        const rStatus = review_status || 'Under Review';
         const now = new Date().toISOString();
 
         // 1. Insert into PostgreSQL founder_pitches table
@@ -159,7 +159,7 @@ exports.createPitch = async (req, res) => {
         try {
             await db.prepare(
                 `INSERT INTO venture_pitches (user_id, business_name, industry, funding_target, raised_amount, equity_offered, headline, pitch_deck_url, use_of_funds, description, founder_phone, founder_email, is_verified, listing_status, created_at)
-                 VALUES (?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, 1, 'ACTIVE', ?)`
+                 VALUES (?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, 0, 'PENDING_REVIEW', ?)`
             ).run([
                 Number(userId) || 1,
                 vName,
@@ -178,12 +178,35 @@ exports.createPitch = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: 'Venture listing successfully persisted to central database.',
+            message: 'Venture listing successfully persisted to central database with Under Review status.',
             data: savedPitch
         });
     } catch (error) {
         console.error('Error creating founder pitch:', error);
         res.status(500).json({ success: false, message: 'Failed to submit business pitch to database' });
+    }
+};
+
+exports.reviewPitch = async (req, res) => {
+    const { id } = req.params;
+    const { review_status, status, admin_remarks } = req.body;
+    const newStatus = review_status || status || 'Published';
+    try {
+        // Update founder_pitches
+        await db.prepare(
+            'UPDATE founder_pitches SET review_status = ? WHERE id = ?'
+        ).run([newStatus, id]).catch(() => {});
+
+        const isApproved = newStatus.toLowerCase() === 'published' || newStatus.toLowerCase() === 'accepted';
+        // Update venture_pitches
+        await db.prepare(
+            'UPDATE venture_pitches SET listing_status = ?, is_verified = ? WHERE id = ?'
+        ).run([isApproved ? 'ACTIVE' : newStatus, isApproved ? 1 : 0, id]).catch(() => {});
+
+        res.json({ success: true, message: `Pitch status updated to ${newStatus}` });
+    } catch (error) {
+        console.error('Error reviewing pitch:', error);
+        res.status(500).json({ success: false, message: 'Failed to update pitch status' });
     }
 };
 

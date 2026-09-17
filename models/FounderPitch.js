@@ -2,27 +2,28 @@ const db = require('../db/connection');
 
 let tableEnsured = false;
 
+const isPostgres = (process.env.DB_TYPE || '').toLowerCase() === 'postgres';
+
 async function ensureTable() {
   if (tableEnsured) return;
   try {
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS founder_pitches (
-        id SERIAL PRIMARY KEY,
-        user_id VARCHAR(255),
-        founder_name VARCHAR(255) NOT NULL,
-        founder_email VARCHAR(255) NOT NULL,
-        venture_name VARCHAR(255) NOT NULL,
-        sector VARCHAR(100) NOT NULL,
-        headline_pitch TEXT NOT NULL,
-        description TEXT NOT NULL,
-        pitch_deck_url TEXT,
-        review_status VARCHAR(50) DEFAULT 'Published',
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    tableEnsured = true;
-  } catch (pgErr) {
-    try {
+    if (isPostgres) {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS founder_pitches (
+          id SERIAL PRIMARY KEY,
+          user_id VARCHAR(255),
+          founder_name VARCHAR(255) NOT NULL,
+          founder_email VARCHAR(255) NOT NULL,
+          venture_name VARCHAR(255) NOT NULL,
+          sector VARCHAR(100) NOT NULL,
+          headline_pitch TEXT NOT NULL,
+          description TEXT NOT NULL,
+          pitch_deck_url TEXT,
+          review_status VARCHAR(50) DEFAULT 'Published',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    } else {
       await db.query(`
         CREATE TABLE IF NOT EXISTS founder_pitches (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,10 +39,10 @@ async function ensureTable() {
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
-      tableEnsured = true;
-    } catch (sqErr) {
-      console.error('FounderPitch table initialization warning:', sqErr.message);
     }
+    tableEnsured = true;
+  } catch (err) {
+    console.error('FounderPitch table initialization note:', err.message);
   }
 }
 

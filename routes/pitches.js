@@ -13,6 +13,8 @@ router.get('/quota-status', optionalAuth, (req, res) => {
 
 // Pitch submissions and verification
 router.post('/', optionalAuth, pitchController.createPitch);
-router.post('/:id/verify', auth, pitchController.verifyPitch);
+router.post('/:id/verify', optionalAuth, pitchController.verifyPitch);
+router.put('/:id/review', optionalAuth, pitchController.reviewPitch);
+router.patch('/:id/status', optionalAuth, pitchController.reviewPitch);
 
 module.exports = router;

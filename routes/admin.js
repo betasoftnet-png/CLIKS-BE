@@ -36,6 +36,7 @@ router.get('/users', getUsers);
 
 // GET    /admin/ventures/pitches   — Query all founder pitches from PostgreSQL
 router.get('/ventures/pitches', pitchController.getPitches);
+router.put('/ventures/pitches/:id/review', pitchController.reviewPitch);
 
 // DELETE /admin/users/:id          — Delete a user by ID
 router.delete('/users/:id', deleteUser);
