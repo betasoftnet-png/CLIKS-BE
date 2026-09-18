@@ -45,7 +45,7 @@ async function startServer() {
     const server = http.createServer(app);
     initSocketServer(server);
 
-    server.listen(PORT, () => {
+    server.listen(PORT, '127.0.0.1' , () => {
       logger.info(`🚀 Books & Finance API (Socket.IO Realtime Enabled)`);
       logger.info(`   ENV  : ${process.env.NODE_ENV || 'development'}`);
       logger.info(`   URL  : http://localhost:${PORT}/api/v1`);
