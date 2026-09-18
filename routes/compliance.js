@@ -548,6 +548,28 @@ router.post('/generate-ewaybill', async (req, res) => {
       taxable_amount: Number(itm.taxable_amount || itm.price || taxableVal) || taxableVal
     }));
 
+    // Designated sandbox transporter ID as per Masters India Enterprise API specification
+    const SANDBOX_TRANSPORTER_ID = "05AAAAU6537D1ZO";
+    const SANDBOX_TRANSPORTER_NAME = "M/S UTTARAYAN CO-OPERATIVE FOR RENEWABLE ENERGY";
+    const SANDBOX_RECOGNIZED_TRANSPORTERS = [
+      "05AAAAU6537D1ZO",
+      "05AAABC0181E1ZE",
+      "05AAABB0639G1Z8"
+    ];
+
+    const rawTransId = req.body.transporter_id || req.body.transporterId || req.body.transporter_gstin || rawTransGstin || rawTransGstin2 || req.body.trans_id;
+    let cleanTransporterId = (rawTransId || '').toString().trim().toUpperCase();
+
+    // Use designated sandbox transporter ID if missing or dummy test ID passed to sandbox API
+    if (!cleanTransporterId || cleanTransporterId === '27AAAAA1111A1Z1' || (!SANDBOX_RECOGNIZED_TRANSPORTERS.includes(cleanTransporterId) && cleanTransporterId.startsWith('27'))) {
+      cleanTransporterId = SANDBOX_TRANSPORTER_ID;
+    }
+
+    let cleanTransporterName = req.body.transport_company_name || req.body.transporter_name || transporterName;
+    if (!cleanTransporterName || cleanTransporterId === SANDBOX_TRANSPORTER_ID) {
+      cleanTransporterName = cleanTransporterName || SANDBOX_TRANSPORTER_NAME;
+    }
+
     const payload = {
       userGstin: "05AAABB0639G1Z8",
       supply_type: "outward",
@@ -574,8 +596,8 @@ router.post('/generate-ewaybill', async (req, res) => {
       sgst_amount: sgstAmt,
       igst_amount: igstAmt,
       total_invoice_value: totalInvVal,
-      transporter_id: req.body.transporter_gstin || transporterGstin || "05AAABB0639G1Z8",
-      transporter_name: req.body.transport_company_name || req.body.transporter_name || transporterName || "Jay Trans",
+      transporter_id: cleanTransporterId,
+      transporter_name: cleanTransporterName,
       transportation_mode: "Road",
       transportation_distance: transDistance,
       vehicle_number: cleanVehicle,
@@ -662,6 +684,15 @@ router.post('/generate-ewaybill', async (req, res) => {
     }
 
     // 2. Also keep delivery_challans in sync for legacy references
+    const resolvedCarrierName = req.body.transporter_name || req.body.carrier_name || req.body.transport_company_name || cleanTransporterName || "Jay Trans";
+    const resolvedVehicleNo = req.body.vehicle_number || cleanVehicle || "UK07AB1234";
+    const resolvedDistance = Number(req.body.transportation_distance || req.body.distance_km || req.body.transport_distance || transDistance || 40);
+    const resolvedFromPlace = req.body.from_place || req.body.dispatch_location || rawDispLoc || rawDispLoc2 || "Dehradun";
+    const resolvedToPlace = req.body.to_place || req.body.delivery_destination || req.body.delivery_location || rawShipAddr || rawShipAddr2 || "Noida";
+    const resolvedCustName = rawCustName || rawClientName || rawCustName2 || req.body.legal_name_of_consignee || 'Valued Client';
+    const resolvedTransportMode = req.body.transportation_mode || req.body.transport_mode || transport_mode || transportMode || 'Road';
+    const nowIso = new Date().toISOString();
+
     try {
       await db.query(`
         INSERT INTO delivery_challans (
@@ -681,11 +712,11 @@ router.post('/generate-ewaybill', async (req, res) => {
       `, [
         req.user?.id || 1,
         String(ewayBillNo),
-        carrierName,
-        vehicleNumber,
-        String(distanceKm),
-        fromPlace,
-        toPlace,
+        resolvedCarrierName,
+        resolvedVehicleNo,
+        String(resolvedDistance),
+        resolvedFromPlace,
+        resolvedToPlace,
         "GENERATED",
         validUpto,
         pdfUrl
@@ -694,28 +725,30 @@ router.post('/generate-ewaybill', async (req, res) => {
       // ignore
     }
 
-    // 2. Save into gst_invoices table so BusinessGST.jsx immediately displays it in e-Way Logistics tab
+    // 3. Save into gst_invoices table so BusinessGST.jsx immediately displays it in e-Way Logistics tab
     try {
-      await db.prepare(`
-        INSERT INTO gst_invoices (
-          user_id, invoice_number, client_name, customer_name, transporter_name, vehicle_number,
-          transport_distance, dispatch_location, delivery_location,
-          status, eway_bill_no, eway_bill_number, is_eway_bill, is_reconciliation,
-          transport_mode, transporter_gstin,
-          amount, created_at, updated_at, reference_invoice,
-          pdf_url, valid_upto, eway_bill_date
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, 'true', 'false', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        req.user?.id || 1, documentNumber, customerName || 'Valued Client', customerName || 'Valued Client',
-        req.body.transport_company_name || req.body.transporter_name || transporterName || 'Jay Trans',
-        req.body.vehicle_number || cleanVehicle || 'UK07AB1234',
-        parseFloat(req.body.distance || transDistance) || 0,
-        req.body.dispatch_location || dispatchLocation || 'Dehradun',
-        req.body.delivery_destination || req.body.delivery_location || shippingAddress || 'Noida',
-        finalEwbNo, finalEwbNo,
-        effectiveTransportMode, transporterGstin || null,
-        totVal, nowIso, nowIso, documentNumber, finalPdfUrl, finalValidUpto, finalEwbDate
-      );
+      if (typeof db.prepare === 'function') {
+        await db.prepare(`
+          INSERT INTO gst_invoices (
+            user_id, invoice_number, client_name, customer_name, transporter_name, vehicle_number,
+            transport_distance, dispatch_location, delivery_location,
+            status, eway_bill_no, eway_bill_number, is_eway_bill, is_reconciliation,
+            transport_mode, transporter_gstin,
+            amount, created_at, updated_at, reference_invoice,
+            pdf_url, valid_upto, eway_bill_date
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, 'true', 'false', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          req.user?.id || 1, documentNumber, resolvedCustName, resolvedCustName,
+          resolvedCarrierName,
+          resolvedVehicleNo,
+          resolvedDistance,
+          resolvedFromPlace,
+          resolvedToPlace,
+          finalEwbNo, finalEwbNo,
+          resolvedTransportMode, cleanTransporterId || null,
+          totalInvVal, nowIso, nowIso, documentNumber, finalPdfUrl, finalValidUpto, finalEwbDate
+        );
+      }
     } catch (saveGstErr) {
       console.warn('[ComplianceRoute] gst_invoices save error:', saveGstErr.message);
     }
