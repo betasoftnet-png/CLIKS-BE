@@ -229,18 +229,53 @@ const updateSplitExpense = async (req, res) => {
 
 const uploadAttachment = async (req, res) => {
   try {
+    const uploadDir = path.join(__dirname, '../uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    if (req.is('multipart/form-data')) {
+      const formidable = require('formidable');
+      const form = formidable({
+        uploadDir,
+        keepExtensions: true,
+        maxFileSize: 25 * 1024 * 1024
+      });
+
+      return form.parse(req, (err, fields, files) => {
+        if (err) {
+          console.error('Multipart upload error:', err);
+          return sendError(res, 'File upload failed: ' + err.message, 500);
+        }
+
+        const fileObj = files.file || files.attachment || Object.values(files)[0];
+        const uploadedFile = Array.isArray(fileObj) ? fileObj[0] : fileObj;
+
+        if (!uploadedFile) {
+          return sendError(res, 'No file uploaded', 400, 'BAD_REQUEST');
+        }
+
+        const origName = uploadedFile.originalFilename || uploadedFile.newFilename || 'attachment';
+        const safeFilename = Date.now() + '_' + path.basename(origName).replace(/[^a-zA-Z0-9.-]/g, '_');
+        const targetPath = path.join(uploadDir, safeFilename);
+
+        try {
+          fs.renameSync(uploadedFile.filepath, targetPath);
+        } catch {
+          fs.copyFileSync(uploadedFile.filepath, targetPath);
+          try { fs.unlinkSync(uploadedFile.filepath); } catch (_) {}
+        }
+
+        return sendSuccess(res, { filename: safeFilename, url: `/uploads/${safeFilename}` }, 'File uploaded successfully');
+      });
+    }
+
     const { name, content } = req.body;
     if (!name || !content) {
       return sendError(res, 'Filename and content are required', 400, 'BAD_REQUEST');
     }
 
     const safeFilename = Date.now() + '_' + path.basename(name).replace(/[^a-zA-Z0-9.-]/g, '_');
-    const uploadDir = path.join(__dirname, '../uploads');
-    
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-
     const filePath = path.join(uploadDir, safeFilename);
     const fileBuffer = Buffer.from(content, 'base64');
     fs.writeFileSync(filePath, fileBuffer);
