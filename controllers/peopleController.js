@@ -23,7 +23,7 @@ const getAllTransactions = async (req, res) => {
   const sortCol = allowedSorts.includes(sort) ? sort : 'date';
   const sortDir = order.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
-  query += ` ORDER BY pt.${sortCol} ${sortDir}`;
+  query += ` ORDER BY pt.${sortCol} ${sortDir}, pt.created_at DESC, pt.id DESC`;
 
   const result = await paginate(query, params, page, limit, db);
   return sendSuccess(res, result.rows, 'All people transactions fetched', 200, result.meta);
@@ -237,7 +237,7 @@ const getAllRecords = async (req, res) => {
 };
 
 const getPeople = async (req, res) => {
-  const { page, limit, sort = 'name', order = 'asc', search, role_type } = req.query;
+  const { page, limit, sort = 'updated_at', order = 'desc', search, role_type } = req.query;
   
   let query = `
     SELECT p.*,
@@ -259,10 +259,10 @@ const getPeople = async (req, res) => {
   query += ' GROUP BY p.id';
 
   const allowedSorts = ['created_at', 'updated_at', 'name', 'company', 'net_balance'];
-  const sortCol = allowedSorts.includes(sort) ? sort : 'name';
-  const sortDir = order.toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+  const sortCol = allowedSorts.includes(sort) ? sort : 'updated_at';
+  const sortDir = order.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
-  query += ` ORDER BY ${sortCol} ${sortDir}`;
+  query += ` ORDER BY ${sortCol} ${sortDir}, p.created_at DESC, p.id DESC`;
 
   const result = await paginate(query, params, page, limit, db);
 

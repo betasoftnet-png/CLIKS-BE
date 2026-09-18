@@ -21,7 +21,7 @@ const getTransactions = async (req, res) => {
   const sortCol = allowedSorts.includes(sort) ? sort : 'date';
   const sortDir = order.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
-  query += ` ORDER BY ${sortCol} ${sortDir}`;
+  query += ` ORDER BY ${sortCol} ${sortDir}, created_at DESC, id DESC`;
 
   const result = await paginate(query, params, page, limit, db);
   return sendSuccess(res, result.rows, 'People transactions fetched', 200, result.meta);
@@ -38,6 +38,11 @@ const createTransaction = async (req, res) => {
   `);
   const info = await stmt.run(req.params.personId, req.user.id, type, amount, date, description || null, category || null, now, now);
   
+  // Also touch the parent person's updated_at so contact becomes latest active
+  try {
+    await db.prepare('UPDATE people SET updated_at = ? WHERE id = ? AND user_id = ?').run(now, req.params.personId, req.user.id);
+  } catch (touchErr) {}
+
   const newItem = await db.prepare('SELECT * FROM people_transactions WHERE id = ?').get(info.lastInsertRowid);
   return sendSuccess(res, newItem, 'Person transaction created', 201);
 };
