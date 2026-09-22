@@ -153,6 +153,24 @@ const createRepaymentAlert = async (req, res) => {
     resolvedTargetContact = 'Contact';
   }
 
+  // Idempotency check: Reject duplicate concurrent requests within 3 seconds for the same contact/date/memo/cap
+  if (resolvedContactId) {
+    try {
+      const recent = await db.prepare(`
+        SELECT * FROM people_reminders
+        WHERE person_id = ? AND user_id = ? AND title = ? AND due_date = ?
+        ORDER BY id DESC LIMIT 1
+      `).get(resolvedContactId, req.user.id, resolvedMemo, resolvedMaturityDate);
+
+      if (recent && recent.created_at) {
+        const diffMs = Date.now() - new Date(recent.created_at).getTime();
+        if (diffMs >= 0 && diffMs < 3000) {
+          return sendSuccess(res, recent, 'Repayment alert created (idempotent)', 200);
+        }
+      }
+    } catch (e) {}
+  }
+
   const alert = await RepaymentAlert.create({
     user_id: req.user.id,
     business_id: req.user.business_id || null,

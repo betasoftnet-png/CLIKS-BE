@@ -44,6 +44,22 @@ const createReminder = async (req, res) => {
   }
   console.log('DEBUG [createReminder] parsedAmount:', parsedAmount);
 
+  // Idempotency check: Reject duplicate concurrent requests within 3 seconds for the same person/title/due_date
+  try {
+    const recent = await db.prepare(`
+      SELECT * FROM people_reminders
+      WHERE person_id = ? AND user_id = ? AND title = ? AND due_date = ?
+      ORDER BY id DESC LIMIT 1
+    `).get(req.params.personId, req.user.id, title, due_date);
+
+    if (recent && recent.created_at) {
+      const diffMs = Date.now() - new Date(recent.created_at).getTime();
+      if (diffMs >= 0 && diffMs < 3000) {
+        return sendSuccess(res, recent, 'People reminder created (idempotent)', 200);
+      }
+    }
+  } catch (e) {}
+
   const now = new Date().toISOString();
   const stmt = db.prepare(`
     INSERT INTO people_reminders (person_id, user_id, title, message, amount, due_date, status, created_at, updated_at)
