@@ -32,7 +32,7 @@ const getPlannedPayments = async (req, res) => {
 };
 
 const createPlannedPayment = async (req, res) => {
-  const { account_id, name, amount, due_date, frequency, category, status = 'pending', type, person_id } = req.body;
+  const { account_id, name, amount, due_date, frequency, category, status = 'pending', type, person_id, description, notes, remark } = req.body;
   if (!name || amount === undefined || amount === null || !due_date) return sendError(res, 'Name, amount, and due_date are required', 400, 'BAD_REQUEST');
 
   const numAmount = parseFloat(amount);
@@ -40,12 +40,13 @@ const createPlannedPayment = async (req, res) => {
     return sendError(res, 'Payment amount must be a positive number greater than 0', 400, 'BAD_REQUEST');
   }
 
+  const resolvedDescription = description || notes || remark || null;
   const now = new Date().toISOString();
   const stmt = db.prepare(`
-    INSERT INTO planned_payments (user_id, account_id, name, amount, due_date, frequency, category, status, type, person_id, created_at, updated_at) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO planned_payments (user_id, account_id, name, description, amount, due_date, frequency, category, status, type, person_id, created_at, updated_at) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = await stmt.run(req.user.id, account_id || null, name, numAmount, due_date, frequency || null, category || null, status, type || null, person_id || null, now, now);
+  const info = await stmt.run(req.user.id, account_id || null, name, resolvedDescription, numAmount, due_date, frequency || null, category || null, status, type || null, person_id || null, now, now);
   
   const newItem = await db.prepare('SELECT * FROM planned_payments WHERE id = ?').get(info.lastInsertRowid);
   return sendSuccess(res, newItem, 'Planned payment created', 201);
@@ -70,7 +71,7 @@ const updatePlannedPayment = async (req, res) => {
 
   const updates = [];
   const params = [];
-  const allowedFields = ['account_id', 'name', 'amount', 'due_date', 'frequency', 'category', 'status', 'type', 'person_id'];
+  const allowedFields = ['account_id', 'name', 'description', 'amount', 'due_date', 'frequency', 'category', 'status', 'type', 'person_id'];
   
   for (const field of allowedFields) {
     if (req.body[field] !== undefined) {
