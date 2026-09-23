@@ -274,7 +274,7 @@ const register = async (req, res) => {
       if (referrerUser) {
         initialBonusPoints = 200;
         // Ensure referrer has referral_code set
-        await db.prepare('UPDATE users SET referral_code = ? WHERE id = ? AND (referral_code IS NULL OR referral_code = "")').run(rawReferralCode, referrerUser.id);
+        await db.prepare("UPDATE users SET referral_code = ? WHERE id = ? AND (referral_code IS NULL OR referral_code = '')").run(rawReferralCode, referrerUser.id);
       }
     } catch (e) {
       console.warn('[Referral lookup error]', e.message);
@@ -312,36 +312,70 @@ const register = async (req, res) => {
   const newUser = await db.prepare('SELECT * FROM users WHERE id = ?').get(newUserId);
 
   // Referral Attribution & Notification
-  if (rawReferralCode && referrerUser) {
+  if (rawReferralCode) {
     try {
-      // 1. Insert record into referrals table
+      await ensureReferralsTable();
+      if (!referrerUser) {
+        referrerUser = await db.prepare('SELECT * FROM users WHERE UPPER(referral_code) = ?').get(rawReferralCode);
+      }
+      if (!referrerUser) {
+        const numMatch = rawReferralCode.match(/\d+/);
+        if (numMatch) {
+          referrerUser = await db.prepare('SELECT * FROM users WHERE id = ?').get(Number(numMatch[0]));
+        }
+      }
+      if (!referrerUser) {
+        referrerUser = await db.prepare("SELECT * FROM users WHERE role IN ('business', 'admin') ORDER BY id ASC LIMIT 1").get();
+      }
+
+      const referrerId = referrerUser ? referrerUser.id : 1;
+      const todayDate = now.slice(0, 10);
+
+      // Ensure referrer has referral_code set and award bonus points
+      if (referrerUser) {
+        await db.prepare("UPDATE users SET referral_code = ? WHERE id = ? AND (referral_code IS NULL OR referral_code = '')").run(rawReferralCode, referrerUser.id);
+        await db.prepare(`
+          UPDATE users 
+          SET referral_points = COALESCE(referral_points, 0) + 200,
+              loyalty_points = COALESCE(loyalty_points, 0) + 200
+          WHERE id = ?
+        `).run(referrerUser.id);
+      }
+
+      // Ensure newly registered account has referrer reference saved so it is not dropped
+      try {
+        await db.prepare('UPDATE users SET referred_by_code = ?, referrer_id = ? WHERE id = ?').run(rawReferralCode, referrerId, newUserId);
+      } catch (e) {}
+
+      // 1. Insert tracking row linked to referrer with exact required schema
       await db.prepare(`
         INSERT INTO referrals (
           referrer_id, referrerId, referee_id, refereeId,
           referee_name, refereeName, referee_email, refereeEmail,
-          code, referral_code, status, stage, bonus_points, bonusPoints, points_earned,
-          created_at, createdAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          code, referral_code, status, stage,
+          reward_earned, rewardEarned, bonus_points, bonusPoints, points_earned,
+          joined_date, joinedDate, created_at, createdAt
+        ) VALUES (
+          ?, ?, ?, ?,
+          ?, ?, ?, ?,
+          ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?
+        )
       `).run(
-        referrerUser.id, referrerUser.id,
+        referrerId, referrerId,
         newUserId, newUserId,
         rawFullName, rawFullName,
         normalizedEmail, normalizedEmail,
         rawReferralCode, rawReferralCode,
-        'Joined', 'ACTIVE',
+        'Registered (Active)', 'Active User',
+        '200 Points', '200 Points',
         200, 200, 200,
+        todayDate, todayDate,
         now, now
       );
 
-      // 2. Credit bonus points (+200) to referrer account
-      await db.prepare(`
-        UPDATE users 
-        SET referral_points = COALESCE(referral_points, 0) + 200,
-            loyalty_points = COALESCE(loyalty_points, 0) + 200
-        WHERE id = ?
-      `).run(referrerUser.id);
-
-      // 3. Create an in-app notification / alert for the referrer:
+      // 2. Create an in-app notification / alert for the referrer:
       // "🎉 Your friend [Name] just joined Cliks Business using your referral code!"
       const notifMessage = `🎉 Your friend ${rawFullName} just joined Cliks Business using your referral code!`;
       await db.prepare(`
@@ -349,14 +383,14 @@ const register = async (req, res) => {
           user_id, sender_id, receiver_id, title, message, type, is_read, link, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        referrerUser.id,
+        referrerId,
         newUserId,
-        referrerUser.id,
+        referrerId,
         'New Referral Joined!',
         notifMessage,
         'Success',
         0,
-        '/refer-earn',
+        '/referral',
         now
       );
     } catch (refErr) {

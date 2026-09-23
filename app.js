@@ -258,7 +258,7 @@ app.use('/api/v1/gst-credentials', auth, require('./routes/gstCredentials'));
 app.use('/api/v1/vendors',          auth, require('./routes/vendors'));
 app.use('/api/v1/bank-accounts',    auth, require('./routes/bankAccounts'));
 app.use('/api/v1/audit-logs',       auth, require('./routes/auditLogs'));
-app.use(['/api/v1/referrals', '/referrals'], auth, require('./routes/referrals'));
+app.use(['/api/v1/referrals', '/referrals', '/api/referrals'], require('./routes/referrals'));
 app.use('/api/v1/documents',        auth, require('./routes/documents'));
 
 
