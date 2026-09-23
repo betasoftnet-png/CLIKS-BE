@@ -86,6 +86,9 @@ if (dbType === 'postgres') {
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_repayment_alerts_user ON repayment_alerts(user_id);
+
+        ALTER TABLE split_ticket_expenses ADD COLUMN IF NOT EXISTS document_name VARCHAR(255);
+        ALTER TABLE split_ticket_expenses ADD COLUMN IF NOT EXISTS document_url TEXT;
       `);
       console.log('✅ [PostgreSQL Connection] Ensured gst_invoices, invoices, eway_bills, founder_pitches & repayment_alerts schema exist');
     } catch (err) {
@@ -418,7 +421,9 @@ if (dbType === 'postgres') {
       "ALTER TABLE gst_invoices ADD COLUMN pdf_url TEXT",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_inv_num ON invoices(invoice_number)",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_inv_num ON gst_invoices(invoice_number)",
-      "ALTER TABLE warehouse_transfers ADD COLUMN reference TEXT"
+      "ALTER TABLE warehouse_transfers ADD COLUMN reference TEXT",
+      "ALTER TABLE split_ticket_expenses ADD COLUMN document_name TEXT",
+      "ALTER TABLE split_ticket_expenses ADD COLUMN document_url TEXT"
     ];
     for (const sql of alterCols) {
       try { rawDb.exec(sql); } catch (e) {}

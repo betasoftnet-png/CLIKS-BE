@@ -28,6 +28,14 @@ const getSplitExpenses = async (req, res) => {
         exp.splitType = exp.split_type;
         delete exp.split_type;
         exp.amount = parseFloat(exp.amount) || 0;
+        exp.documentName = exp.document_name || (exp.attachment ? path.basename(exp.attachment).replace(/^\d+_/, '') : '');
+        exp.documentUrl = exp.document_url || (exp.attachment ? (exp.attachment.startsWith('/') ? exp.attachment : `/uploads/${exp.attachment}`) : '');
+        delete exp.document_name;
+        delete exp.document_url;
+        // Keep attachment synced for backward compatibility
+        if (!exp.attachment && exp.documentUrl) {
+          exp.attachment = exp.documentUrl;
+        }
       }
       ticket.expenses = expenses;
     }
@@ -85,7 +93,7 @@ const deleteSplitExpense = async (req, res) => {
 // ── POST /:id/expenses ────────────────────────────────────────────────────────
 const createExpense = async (req, res) => {
   try {
-    const { id, title, amount, paidBy, date, attachment, splitType, shares } = req.body;
+    const { id, title, amount, paidBy, date, attachment, documentName, documentUrl, splitType, shares } = req.body;
     const splitTicketId = req.params.id;
 
     if (!title || amount === undefined) {
@@ -95,10 +103,28 @@ const createExpense = async (req, res) => {
     const expId = id || 'exp-' + Date.now();
     const now = new Date().toISOString();
 
+    const finalDocUrl = documentUrl || (attachment ? (attachment.startsWith('/') ? attachment : `/uploads/${attachment}`) : null);
+    const finalDocName = documentName || (attachment ? path.basename(attachment).replace(/^\d+_/, '') : null);
+
     await db.prepare(`
-      INSERT INTO split_ticket_expenses (id, split_ticket_id, user_id, title, amount, paid_by, date, attachment, split_type, shares, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(expId, splitTicketId, req.user.id, title, parseFloat(amount), paidBy, date || now.split('T')[0], attachment || null, splitType || 'equal', JSON.stringify(shares || {}), now, now);
+      INSERT INTO split_ticket_expenses (id, split_ticket_id, user_id, title, amount, paid_by, date, attachment, document_name, document_url, split_type, shares, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      expId, 
+      splitTicketId, 
+      req.user.id, 
+      title, 
+      parseFloat(amount), 
+      paidBy, 
+      date || now.split('T')[0], 
+      finalDocUrl || attachment || null, 
+      finalDocName || null, 
+      finalDocUrl || null, 
+      splitType || 'equal', 
+      JSON.stringify(shares || {}), 
+      now, 
+      now
+    );
 
     const exp = await db.prepare("SELECT * FROM split_ticket_expenses WHERE id = ?").get(expId);
     exp.shares = JSON.parse(exp.shares);
@@ -107,6 +133,13 @@ const createExpense = async (req, res) => {
     exp.splitType = exp.split_type;
     delete exp.split_type;
     exp.amount = parseFloat(exp.amount) || 0;
+    exp.documentName = exp.document_name || finalDocName || '';
+    exp.documentUrl = exp.document_url || finalDocUrl || exp.attachment || '';
+    delete exp.document_name;
+    delete exp.document_url;
+    if (!exp.attachment && exp.documentUrl) {
+      exp.attachment = exp.documentUrl;
+    }
 
     return sendSuccess(res, exp, 'Expense created successfully', 201);
   } catch (error) {
@@ -131,24 +164,28 @@ const deleteExpense = async (req, res) => {
 const updateExpense = async (req, res) => {
   try {
     const { id, expenseId } = req.params;
-    const { title, amount, paidBy, date, attachment, splitType, shares } = req.body;
+    const { title, amount, paidBy, date, attachment, documentName, documentUrl, splitType, shares } = req.body;
 
     if (!title || amount === undefined) {
       return sendError(res, 'Title and amount are required', 400, 'BAD_REQUEST');
     }
 
     const now = new Date().toISOString();
+    const finalDocUrl = documentUrl || (attachment ? (attachment.startsWith('/') ? attachment : `/uploads/${attachment}`) : null);
+    const finalDocName = documentName || (attachment ? path.basename(attachment).replace(/^\d+_/, '') : null);
 
     await db.prepare(`
       UPDATE split_ticket_expenses 
-      SET title = ?, amount = ?, paid_by = ?, date = ?, attachment = ?, split_type = ?, shares = ?, updated_at = ?
+      SET title = ?, amount = ?, paid_by = ?, date = ?, attachment = ?, document_name = ?, document_url = ?, split_type = ?, shares = ?, updated_at = ?
       WHERE id = ? AND split_ticket_id = ? AND user_id = ?
     `).run(
       title, 
       parseFloat(amount), 
       paidBy, 
       date || now.split('T')[0], 
-      attachment || null, 
+      finalDocUrl || attachment || null, 
+      finalDocName || null, 
+      finalDocUrl || null, 
       splitType || 'equal', 
       JSON.stringify(shares || {}), 
       now, 
@@ -168,6 +205,13 @@ const updateExpense = async (req, res) => {
     exp.splitType = exp.split_type;
     delete exp.split_type;
     exp.amount = parseFloat(exp.amount) || 0;
+    exp.documentName = exp.document_name || finalDocName || '';
+    exp.documentUrl = exp.document_url || finalDocUrl || exp.attachment || '';
+    delete exp.document_name;
+    delete exp.document_url;
+    if (!exp.attachment && exp.documentUrl) {
+      exp.attachment = exp.documentUrl;
+    }
 
     return sendSuccess(res, exp, 'Expense updated successfully');
   } catch (error) {
