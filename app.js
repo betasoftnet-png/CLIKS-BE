@@ -209,8 +209,7 @@ app.use('/api/v1/inventory',        auth, require('./routes/inventory'));
 app.use(['/api/v1/billing', '/api/v1/invoices'], auth, require('./routes/billing'));
 app.use('/api/v1/pos',              auth, require('./routes/pos'));
 
-app.use('/api/v1/crm',              auth, require('./routes/customers'));
-app.use('/api/v1/customers',        auth, require('./routes/customers'));
+app.use(['/api/v1/sales/customers', '/api/sales/customers', '/api/v1/crm', '/api/v1/customers'], auth, require('./routes/customers'));
 app.use('/api/v1/customer',         auth, require('./routes/customerPurchases'));
 app.use('/api/v1/orders',           auth, require('./routes/orders'));
 app.use('/api/v1/returns',          auth, require('./routes/returns'));
