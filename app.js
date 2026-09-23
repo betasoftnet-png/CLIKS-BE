@@ -129,8 +129,8 @@ app.get(['/test', '/api/test', '/api/v1/test', '/ping', '/api/v1/accounting/test
 
 
 // ── Auth (no middleware) ──────────────────────────────────────────────────────
-app.use('/api/v1/auth', require('./routes/auth'));
-app.use('/api/v1/admin/auth', require('./routes/adminAuth'));
+app.use(['/api/v1/auth', '/auth'], require('./routes/auth'));
+app.use(['/api/v1/admin/auth', '/admin/auth'], require('./routes/adminAuth'));
 
 
 // ── Public Feed (selective auth inside route file) ────────────────────────────
@@ -258,6 +258,7 @@ app.use('/api/v1/gst-credentials', auth, require('./routes/gstCredentials'));
 app.use('/api/v1/vendors',          auth, require('./routes/vendors'));
 app.use('/api/v1/bank-accounts',    auth, require('./routes/bankAccounts'));
 app.use('/api/v1/audit-logs',       auth, require('./routes/auditLogs'));
+app.use(['/api/v1/referrals', '/referrals'], auth, require('./routes/referrals'));
 app.use('/api/v1/documents',        auth, require('./routes/documents'));
 
 

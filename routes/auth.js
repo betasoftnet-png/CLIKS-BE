@@ -2,7 +2,13 @@ const express = require('express');
 const router = express.Router();
 const { authLimiter } = require('../middleware/rateLimiter');
 const asyncHandler = require('../utils/asyncHandler');
-const { ssoLogin, refresh, logout, logoutAll, heartbeat } = require('../controllers/authController');
+const { ssoLogin, register, login, refresh, logout, logoutAll, heartbeat } = require('../controllers/authController');
+
+// POST /auth/register — User registration with referral attribution
+router.post('/register', authLimiter, asyncHandler(register));
+
+// POST /auth/login — User login with email/password
+router.post('/login', authLimiter, asyncHandler(login));
 
 // GET & POST /auth/sso — SSO Login using BNX Token
 router.get('/sso', authLimiter, asyncHandler(ssoLogin));
