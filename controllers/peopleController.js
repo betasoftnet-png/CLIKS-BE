@@ -73,15 +73,29 @@ const getAllReminders = async (req, res) => {
   for (const leg of legacyAlerts) {
     const exists = combined.some(a => 
       (a.id === leg.id && a.target_contact === leg.target_contact) ||
-      (String(a.contact_id) === String(leg.contact_id) && a.maturity_date === leg.maturity_date && a.memo_label === leg.memo_label)
+      (String(a.contact_id) === String(leg.contact_id) && String(a.maturity_date || a.due_date).slice(0, 10) === String(leg.maturity_date || leg.due_date).slice(0, 10) && (a.memo_label || a.title) === (leg.memo_label || leg.title)) ||
+      (
+        (a.target_contact || '').toLowerCase().trim() === (leg.target_contact || '').toLowerCase().trim() &&
+        (a.memo_label || a.title || '').toLowerCase().trim() === (leg.memo_label || leg.title || '').toLowerCase().trim() &&
+        Math.abs(Number(a.claim_cap !== undefined ? a.claim_cap : a.amount) - Number(leg.claim_cap !== undefined ? leg.claim_cap : leg.amount)) < 0.01 &&
+        String(a.maturity_date || a.due_date).slice(0, 10) === String(leg.maturity_date || leg.due_date).slice(0, 10)
+      )
     );
     if (!exists) {
       combined.push(leg);
     }
   }
 
-  // Sort by maturity_date / due_date ASC
-  combined.sort((a, b) => new Date(a.maturity_date || a.due_date) - new Date(b.maturity_date || b.due_date));
+  // Sort by created_at DESC, then maturity_date DESC (newest alerts first)
+  combined.sort((a, b) => {
+    const timeA = new Date(a.created_at || a.createdAt || 0).getTime();
+    const timeB = new Date(b.created_at || b.createdAt || 0).getTime();
+    if (timeB && timeA && timeB !== timeA) return timeB - timeA;
+    const dateA = new Date(a.maturity_date || a.due_date || 0).getTime();
+    const dateB = new Date(b.maturity_date || b.due_date || 0).getTime();
+    if (dateB !== dateA) return dateB - dateA;
+    return (Number(b.id) || 0) - (Number(a.id) || 0);
+  });
 
   let filtered = combined;
   if (status) {
@@ -153,9 +167,21 @@ const createRepaymentAlert = async (req, res) => {
     resolvedTargetContact = 'Contact';
   }
 
-  // Idempotency check: Reject duplicate concurrent requests within 3 seconds for the same contact/date/memo/cap
-  if (resolvedContactId) {
-    try {
+  // Idempotency check: Reject duplicate concurrent requests within 5 seconds for the same contact/date/memo/cap
+  try {
+    const recentAlert = await db.prepare(`
+      SELECT * FROM repayment_alerts
+      WHERE user_id = ? AND (contact_id = ? OR target_contact = ?) AND memo_label = ? AND maturity_date = ?
+      ORDER BY id DESC LIMIT 1
+    `).get(req.user.id, resolvedContactId, resolvedTargetContact, resolvedMemo, resolvedMaturityDate);
+    if (recentAlert && recentAlert.created_at) {
+      const diffMs = Date.now() - new Date(recentAlert.created_at).getTime();
+      if (diffMs >= 0 && diffMs < 5000) {
+        return sendSuccess(res, recentAlert, 'Repayment alert created (idempotent)', 200);
+      }
+    }
+
+    if (resolvedContactId) {
       const recent = await db.prepare(`
         SELECT * FROM people_reminders
         WHERE person_id = ? AND user_id = ? AND title = ? AND due_date = ?
@@ -164,12 +190,12 @@ const createRepaymentAlert = async (req, res) => {
 
       if (recent && recent.created_at) {
         const diffMs = Date.now() - new Date(recent.created_at).getTime();
-        if (diffMs >= 0 && diffMs < 3000) {
+        if (diffMs >= 0 && diffMs < 5000) {
           return sendSuccess(res, recent, 'Repayment alert created (idempotent)', 200);
         }
       }
-    } catch (e) {}
-  }
+    }
+  } catch (e) {}
 
   const alert = await RepaymentAlert.create({
     user_id: req.user.id,

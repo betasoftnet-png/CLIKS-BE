@@ -23,15 +23,19 @@ router.get('/transactions', asyncHandler(getAllTransactions));
 // Repayment Alerts (Central PostgreSQL persistence)
 // GET    /people/reminders     — List all people repayment alerts across all contacts
 router.get('/reminders', asyncHandler(getAllReminders));
+router.get('/repayment-alerts', asyncHandler(getAllReminders));
 
 // POST   /people/reminders     — Dispatch / create a new repayment alert
 router.post('/reminders', asyncHandler(createRepaymentAlert));
+router.post('/repayment-alerts', asyncHandler(createRepaymentAlert));
 
 // DELETE /people/reminders/:id — Delete / dismiss a repayment alert
 router.delete('/reminders/:id', asyncHandler(deleteRepaymentAlert));
+router.delete('/repayment-alerts/:id', asyncHandler(deleteRepaymentAlert));
 
 // PATCH  /people/reminders/:id — Update repayment alert status (e.g. Settled / Dispatched)
 router.patch('/reminders/:id', asyncHandler(updateRepaymentAlert));
+router.patch('/repayment-alerts/:id', asyncHandler(updateRepaymentAlert));
 
 // GET /people/records       — List all people records across all contacts
 router.get('/records', asyncHandler(getAllRecords));

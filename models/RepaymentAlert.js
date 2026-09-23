@@ -133,7 +133,7 @@ const RepaymentAlert = {
       const rows = await db.prepare(`
         SELECT * FROM repayment_alerts 
         WHERE user_id = ? 
-        ORDER BY maturity_date ASC, id DESC
+        ORDER BY created_at DESC, maturity_date DESC, id DESC
       `).all(String(userId));
 
       return (rows || []).map(r => ({
