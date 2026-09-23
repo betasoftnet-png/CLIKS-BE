@@ -8,7 +8,10 @@ const initColumns = async () => {
         'payment_mode TEXT',
         'invoice_id TEXT',
         'notes TEXT',
-        'reconciliation_status TEXT'
+        'reconciliation_status TEXT',
+        'total_original REAL',
+        'total_original_amount REAL',
+        'paid_amount REAL'
     ];
     for (const col of columns) {
         try {
@@ -20,36 +23,99 @@ initColumns();
 
 const paymentController = {
     receivePayment: async (req, res) => {
-        const { amount, customer_name, invoice_id, payment_mode, reference_number, notes, account_id } = req.body;
-        if (!amount) return sendError(res, 'Amount is required', 400);
-        const numAmount = parseFloat(amount);
-        if (isNaN(numAmount) || numAmount <= 0) {
+        const { 
+            amount, 
+            paidAmount, 
+            paid_amount,
+            customer_name, 
+            customerProfile, 
+            customer_profile,
+            invoice_id, 
+            invoiceLinkedId, 
+            invoice_linked_id,
+            totalOriginalAmount,
+            total_original_amount,
+            total_original,
+            total_amount,
+            original_amount,
+            payment_mode, 
+            reference_number, 
+            notes, 
+            account_id 
+        } = req.body;
+
+        const custName = customerProfile || customer_profile || customer_name || 'General Customer';
+        const invId = invoiceLinkedId || invoice_linked_id || invoice_id || null;
+        const finalPaidAmount = parseFloat(paidAmount !== undefined && paidAmount !== null && paidAmount !== '' ? paidAmount : (paid_amount !== undefined && paid_amount !== null && paid_amount !== '' ? paid_amount : amount));
+        const finalTotalOriginal = parseFloat(totalOriginalAmount !== undefined && totalOriginalAmount !== null && totalOriginalAmount !== '' ? totalOriginalAmount : (total_original_amount !== undefined && total_original_amount !== null && total_original_amount !== '' ? total_original_amount : (total_original !== undefined && total_original !== null && total_original !== '' ? total_original : (original_amount !== undefined && original_amount !== null && original_amount !== '' ? original_amount : (total_amount !== undefined && total_amount !== null && total_amount !== '' ? total_amount : finalPaidAmount)))));
+
+        if (!finalPaidAmount || isNaN(finalPaidAmount) || finalPaidAmount <= 0) {
             return sendError(res, 'Payment amount must be a positive number greater than 0', 400);
         }
+
+        const packedNotes = typeof notes === 'string' && notes.length > 0
+            ? notes
+            : JSON.stringify({
+                customerProfile: custName,
+                invoiceLinkedId: invId,
+                totalOriginalAmount: finalTotalOriginal,
+                paidAmount: finalPaidAmount,
+                total_original: finalTotalOriginal,
+                paid_amount: finalPaidAmount
+            });
+
         try {
             const now = new Date().toISOString();
-            const result = await db.prepare(
-                `INSERT INTO business_payments (user_id, type, amount, party_name, invoice_id, payment_mode, reference_number, notes, status, reconciliation_status, created_at)
-                 VALUES (?, 'receive', ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
-            ).run(req.user.id, numAmount, customer_name || 'General Customer', invoice_id || null, payment_mode || 'Cash', reference_number || null, notes || null, now);
-
-            // Record income entry in accounting table
-            await db.prepare(`
-                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                VALUES (?, 'income', ?, ?, 'Customer Payment', ?, ?, 'Completed', ?, ?)
-            `).run(req.user.id, now.split('T')[0], numAmount, payment_mode || 'Cash', `Receipt from ${customer_name || 'Customer'} (Invoice: ${invoice_id || 'Direct'})`, now, now);
-
-            // Increase balance in selected payment account
-            if (account_id) {
-                await db.prepare('UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE (id = ? OR name = ?) AND user_id = ?').run(numAmount, now, account_id, account_id, req.user.id);
-            } else {
-                const firstAccount = await db.prepare('SELECT id FROM accounts WHERE user_id = ? LIMIT 1').get(req.user.id);
-                if (firstAccount) {
-                    await db.prepare('UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE id = ? AND user_id = ?').run(numAmount, now, firstAccount.id, req.user.id);
-                }
+            let result;
+            try {
+                result = await db.prepare(
+                    `INSERT INTO business_payments (
+                        user_id, type, amount, paid_amount, total_original, total_original_amount, 
+                        party_name, invoice_id, payment_mode, reference_number, notes, status, reconciliation_status, created_at
+                     ) VALUES (?, 'receive', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
+                ).run(
+                    req.user.id, finalPaidAmount, finalPaidAmount, finalTotalOriginal, finalTotalOriginal,
+                    custName, invId, payment_mode || 'Cash', reference_number || null, packedNotes, now
+                );
+            } catch (colErr) {
+                result = await db.prepare(
+                    `INSERT INTO business_payments (user_id, type, amount, party_name, invoice_id, payment_mode, reference_number, notes, status, reconciliation_status, created_at)
+                     VALUES (?, 'receive', ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
+                ).run(req.user.id, finalPaidAmount, custName, invId, payment_mode || 'Cash', reference_number || null, packedNotes, now);
             }
 
-            return sendSuccess(res, { id: result.lastInsertRowid, amount: numAmount }, 'Payment received successfully', 201);
+            // Record income entry in accounting table
+            try {
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'income', ?, ?, 'Customer Payment', ?, ?, 'Completed', ?, ?)
+                `).run(req.user.id, now.split('T')[0], finalPaidAmount, payment_mode || 'Cash', `Receipt from ${custName} (Invoice: ${invId || 'Direct'})`, now, now);
+            } catch (e) {}
+
+            // Increase balance in selected payment account
+            try {
+                if (account_id) {
+                    await db.prepare('UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE (id = ? OR name = ?) AND user_id = ?').run(finalPaidAmount, now, account_id, account_id, req.user.id);
+                } else {
+                    const firstAccount = await db.prepare('SELECT id FROM accounts WHERE user_id = ? LIMIT 1').get(req.user.id);
+                    if (firstAccount) {
+                        await db.prepare('UPDATE accounts SET balance = balance + ?, updated_at = ? WHERE id = ? AND user_id = ?').run(finalPaidAmount, now, firstAccount.id, req.user.id);
+                    }
+                }
+            } catch (e) {}
+
+            return sendSuccess(res, { 
+                id: result.lastInsertRowid || result.id, 
+                amount: finalPaidAmount,
+                paidAmount: finalPaidAmount,
+                paid_amount: finalPaidAmount,
+                totalOriginalAmount: finalTotalOriginal,
+                total_original: finalTotalOriginal,
+                customerProfile: custName,
+                customer_name: custName,
+                invoiceLinkedId: invId,
+                invoice_id: invId
+            }, 'Payment received successfully', 201);
         } catch (error) {
             console.error('[Payment Controller] Error receiving payment:', error);
             return sendError(res, 'Failed to receive payment', 500);

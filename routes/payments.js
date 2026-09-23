@@ -8,6 +8,7 @@ router.use(businessOnly);
 
 
 router.post('/receive', paymentController.receivePayment);
+router.post('/customer-receipts', paymentController.receivePayment);
 router.post('/pay', paymentController.paySupplier);
 router.post('/transfer', paymentController.transferVault);
 router.get('/reports', paymentController.getReports);
