@@ -4,6 +4,7 @@ const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
+const fs = require('fs');
 
 const { auth } = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
@@ -97,6 +98,23 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), { fallthroug
 app.use('/api/v1/uploads', express.static(path.join(__dirname, 'uploads'), { fallthrough: false }));
 app.use('/api/uploads', express.static(path.join(__dirname, 'uploads'), { fallthrough: false }));
 
+// ── Central Storage & CDN Static File Serving ─────────────────────────────────
+const storageRoot = process.env.STORAGE_ROOT || path.join(__dirname, 'storage_root');
+if (!fs.existsSync(storageRoot)) {
+  try { fs.mkdirSync(storageRoot, { recursive: true }); } catch (e) {}
+}
+const cdnStaticOptions = {
+  fallthrough: false,
+  setHeaders: (res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  }
+};
+app.use('/cdn', express.static(storageRoot, cdnStaticOptions));
+app.use('/api/v1/cdn', express.static(storageRoot, cdnStaticOptions));
+app.use('/storage_root', express.static(storageRoot, cdnStaticOptions));
+
 // ── API Documentation (Swagger) ────────────────────────────────────────────────
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
@@ -159,8 +177,8 @@ app.use('/api/v1/profile',          auth, require('./routes/profile'));
 // Settings (persistent user preferences)
 app.use('/api/v1/settings',         auth, require('./routes/settings'));
 
-// Storage allocation & usage
-app.use('/api/v1/storage',          auth, require('./routes/storage'));
+// Storage allocation & usage (modular routes with granular auth)
+app.use('/api/v1/storage',          require('./routes/storage'));
 
 
 // Home / Summary
