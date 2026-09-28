@@ -425,16 +425,28 @@ const expensesController = {
             file_name
         } = req.body;
         try {
-            if (!employee_name || !employee_name.trim()) {
-                return sendError(res, 'Employee Name is mandatory', 400);
-            }
             const targetUserId = (req.user && req.user.id) ? req.user.id : 1;
-            let empCode = employee_code ? String(employee_code).trim() : '';
             
-            if (!empCode && employee_name) {
+            // Resolve employee name flexibly
+            let empName = employee_name || req.body.staff_name || req.body.staffName || req.body.employeeName;
+            const staffLookupId = req.body.staff_id || req.body.employee_id || req.body.staffId;
+            if ((!empName || !empName.trim()) && staffLookupId) {
+                try {
+                    const emp = await db.prepare("SELECT * FROM employees WHERE id = ?").get(staffLookupId);
+                    if (emp) {
+                        empName = `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || emp.name;
+                    }
+                } catch (e) {}
+            }
+            if (!empName || !empName.trim()) {
+                empName = 'Employee';
+            }
+
+            let empCode = employee_code ? String(employee_code).trim() : '';
+            if (!empCode && empName) {
                 try {
                     const emp = await db.prepare("SELECT id FROM employees WHERE user_id = ? AND (LOWER(first_name || ' ' || last_name) LIKE ? OR LOWER(name) LIKE ?) LIMIT 1")
-                        .get(targetUserId, `%${employee_name.toLowerCase()}%`, `%${employee_name.toLowerCase()}%`);
+                        .get(targetUserId, `%${empName.toLowerCase()}%`, `%${empName.toLowerCase()}%`);
                     if (emp) {
                         empCode = `CLK-00${emp.id}`;
                     }
@@ -446,8 +458,9 @@ const expensesController = {
             }
 
             const now = new Date().toISOString();
-            const val = parseFloat(claim_amount) || 0;
-            const finalDate = date || now.split('T')[0];
+            const val = parseFloat(claim_amount !== undefined && claim_amount !== '' ? claim_amount : (req.body.amount || 0)) || 0;
+            const finalTravel = travel_expense || req.body.category || req.body.claim_type || req.body.claimType || req.body.description || req.body.notes || 'Staff Reimbursement';
+            const finalDate = date || req.body.expense_date || req.body.claim_date || req.body.claimDate || now.split('T')[0];
             const finalTime = time || now.split('T')[1].slice(0, 5);
 
             let uploadedFiles = [];
@@ -512,7 +525,7 @@ const expensesController = {
             const firstFile = uploadedFiles[0] || {};
             const proof_files_json = uploadedFiles.length > 0 ? JSON.stringify(uploadedFiles) : null;
 
-            let finalReceipt = receipt || null;
+            let finalReceipt = receipt || req.body.receipt_url || req.body.receiptUrl || null;
             if (Array.isArray(req.body.receipts) && req.body.receipts.length > 0) {
                 finalReceipt = req.body.receipts.filter(Boolean).join(', ') || finalReceipt;
             }
@@ -525,10 +538,10 @@ const expensesController = {
             `).run(
                 targetUserId, 
                 val, 
-                employee_name || 'Employee', 
+                empName, 
                 empCode || 'CLK-001',
-                department || null,
-                travel_expense || null, 
+                department || req.body.department_name || null,
+                finalTravel, 
                 val, 
                 finalReceipt || null, 
                 finalDate, 

@@ -239,6 +239,7 @@ app.use('/api/hsn',                 auth, require('./routes/hsn'));
 app.use('/api/v1/compliance',       auth, require('./routes/compliance'));
 app.use('/api/v1/staffing',         auth, require('./routes/staffing'));
 app.use('/api/v1/staff',            auth, require('./routes/staff'));
+app.use(['/api/hr/reimbursements', '/api/v1/hr/reimbursements', '/hr/reimbursements'], auth, require('./routes/reimbursements'));
 app.use('/api/v1/business-plans',   auth, require('./routes/businessFinancialPlan'));
 app.use('/api/v1/business-segregation', auth, require('./routes/businessSegregation'));
 app.use('/api/v1/business-compare',     auth, require('./routes/businessCompare'));
