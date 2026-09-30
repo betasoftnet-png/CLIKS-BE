@@ -38,6 +38,16 @@ if (dbType === 'postgres') {
         ADD COLUMN IF NOT EXISTS signed_qr TEXT,
         ADD COLUMN IF NOT EXISTS pdf_url TEXT;
 
+        ALTER TABLE expenses
+        ADD COLUMN IF NOT EXISTS time VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS proof_file_path TEXT,
+        ADD COLUMN IF NOT EXISTS proof_file_name TEXT,
+        ADD COLUMN IF NOT EXISTS proof_file_type VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS proof_timestamp VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS proof_files TEXT,
+        ADD COLUMN IF NOT EXISTS department VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS employee_code VARCHAR(100);
+
         CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_inv_num ON invoices(invoice_number);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_inv_num ON gst_invoices(invoice_number);
 
@@ -423,7 +433,15 @@ if (dbType === 'postgres') {
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_inv_num ON gst_invoices(invoice_number)",
       "ALTER TABLE warehouse_transfers ADD COLUMN reference TEXT",
       "ALTER TABLE split_ticket_expenses ADD COLUMN document_name TEXT",
-      "ALTER TABLE split_ticket_expenses ADD COLUMN document_url TEXT"
+      "ALTER TABLE split_ticket_expenses ADD COLUMN document_url TEXT",
+      "ALTER TABLE expenses ADD COLUMN time TEXT",
+      "ALTER TABLE expenses ADD COLUMN proof_file_path TEXT",
+      "ALTER TABLE expenses ADD COLUMN proof_file_name TEXT",
+      "ALTER TABLE expenses ADD COLUMN proof_file_type TEXT",
+      "ALTER TABLE expenses ADD COLUMN proof_timestamp TEXT",
+      "ALTER TABLE expenses ADD COLUMN proof_files TEXT",
+      "ALTER TABLE expenses ADD COLUMN department TEXT",
+      "ALTER TABLE expenses ADD COLUMN employee_code TEXT"
     ];
     for (const sql of alterCols) {
       try { rawDb.exec(sql); } catch (e) {}
