@@ -644,9 +644,14 @@ const billingController = {
             await db.prepare('INSERT INTO business_invoice_payments (invoice_id, amount, payment_method, payment_date, reference_number, notes) VALUES (?, ?, ?, ?, ?, ?)')
                 .run(id, parsedAmount, payment_method, now, reference_number || null, notes || null);
 
-            // Update invoice balances and status
-            await db.prepare('UPDATE business_invoices SET paid_amount = paid_amount + ?, due_amount = due_amount - ?, status = CASE WHEN due_amount - ? <= 0 THEN \'Paid\' ELSE \'Partially Paid\' END WHERE id = ?')
-                .run(parsedAmount, parsedAmount, parsedAmount, id);
+            // Update invoice balances and status safely with COALESCE
+            await db.prepare(`
+                UPDATE business_invoices 
+                SET paid_amount = COALESCE(paid_amount, 0) + ?, 
+                    due_amount = MAX(COALESCE(due_amount, 0) - ?, 0), 
+                    status = CASE WHEN COALESCE(due_amount, 0) - ? <= 0 THEN 'Paid' ELSE 'Partially Paid' END 
+                WHERE id = ?
+            `).run(parsedAmount, parsedAmount, parsedAmount, id);
 
             // Sync to cash/bank ledger (accounting table)
             const normalizedMode = normalizePaymentMode(payment_method);
