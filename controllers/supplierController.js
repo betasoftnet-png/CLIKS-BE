@@ -131,6 +131,23 @@ const supplierController = {
             query += ` ORDER BY created_at DESC, id DESC`;
             const suppliers = await db.prepare(query).all(...params);
 
+            let purchasesRows = [];
+            try {
+                purchasesRows = await db.prepare(`
+                    SELECT LOWER(TRIM(supplier_name)) as sname, SUM(COALESCE(grand_total, 0)) as total_bought
+                    FROM business_purchases
+                    WHERE user_id = ? AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
+                    GROUP BY LOWER(TRIM(supplier_name))
+                `).all(req.user.id);
+            } catch(e) {}
+            
+            const purchasesMap = new Map();
+            (purchasesRows || []).forEach(r => {
+                if (r.sname) {
+                    purchasesMap.set(r.sname, (purchasesMap.get(r.sname) || 0) + (parseFloat(r.total_bought) || 0));
+                }
+            });
+
             const enriched = await Promise.all((suppliers || []).map(async s => {
                 let liveStatus = s.status || 'PENDING';
                 if (s.email) {
@@ -155,8 +172,14 @@ const supplierController = {
                     ? 'CONNECTED' 
                     : (liveStatus === 'REJECTED' ? 'REJECTED' : (connStatus || liveStatus || 'PENDING'));
 
+                const snameLower = (s.name || '').toLowerCase().trim();
+                const calculatedPurchases = purchasesMap.get(snameLower) || s.total_purchased || 0;
+
                 return {
                     ...s,
+                    supplier_name: s.name,
+                    total_purchases: calculatedPurchases,
+                    total_purchased: calculatedPurchases,
                     status: displaySt,
                     connection_status: displaySt
                 };
