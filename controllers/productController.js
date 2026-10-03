@@ -7,7 +7,8 @@ const productController = {
         const { 
             name, sku, category, unit, quantity, low_stock_threshold, purchase_price, selling_price, 
             barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, 
-            hsn_code, hsn_sac, hsn, has_warranty, warrantyDetails, warranty_period, warrantyPeriod 
+            hsn_code, hsn_sac, hsn, has_warranty, warrantyDetails, warranty_period, warrantyPeriod,
+            min_stock, reorder_level
         } = req.body || {};
         
         if (!name) return sendError(res, 'Product name is required', 400);
@@ -29,13 +30,13 @@ const productController = {
                     INSERT INTO business_products (
                         user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
                         purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                        tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                     batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
-                    resolvedHsn, finalHasWarranty, finalWarrantyPeriod, now, now
+                    resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, now, now
                 );
             } catch (insertError) {
                 // If column is missing in legacy SQLite schema, auto-migrate and retry
@@ -47,13 +48,13 @@ const productController = {
                         INSERT INTO business_products (
                             user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
                             purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                            tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `).run(
                         req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                         purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                         batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
-                        resolvedHsn, finalHasWarranty, finalWarrantyPeriod, now, now
+                        resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, now, now
                     );
                 } else {
                     throw insertError;
@@ -71,13 +72,13 @@ const productController = {
                     INSERT INTO business_products (
                         user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
                         purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                        tax_percentage, warehouse_id, hsn_code, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        tax_percentage, warehouse_id, hsn_code, min_stock, reorder_level, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                     batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
-                    resolvedHsn, now, now
+                    resolvedHsn, min_stock || 0, reorder_level || 0, now, now
                 );
                 const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(fallbackResult.lastInsertRowid);
                 return sendSuccess(res, created, 'Product created successfully', 201);
@@ -170,6 +171,9 @@ const productController = {
             const resolvedHsn = body.hsn_code || body.hsn_sac || body.hsn || product.hsn_code || null;
             const has_warranty = body.has_warranty !== undefined ? body.has_warranty : (product.has_warranty || 'No');
             const warranty_period = body.warranty_period !== undefined ? body.warranty_period : product.warranty_period;
+            
+            const min_stock = body.min_stock !== undefined ? parseFloat(body.min_stock) : product.min_stock;
+            const reorder_level = body.reorder_level !== undefined ? parseFloat(body.reorder_level) : product.reorder_level;
 
             try {
                 await db.prepare(`
@@ -177,13 +181,15 @@ const productController = {
                         name = ?, sku = ?, category = ?, unit = ?, status = ?, stock_status = ?, quantity = ?,
                         low_stock_threshold = ?, purchase_price = ?, selling_price = ?, barcode = ?,
                         serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?,
-                        warehouse_id = ?, hsn_code = ?, has_warranty = ?, warranty_period = ?, updated_at = ?
+                        warehouse_id = ?, hsn_code = ?, has_warranty = ?, warranty_period = ?,
+                        min_stock = ?, reorder_level = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
                     name, sku || null, category || null, unit, status || 'active', newStockStatus,
                     newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
                     barcode || null, serial_number || null, batch_number || null, expiry_date || null,
-                    tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null, new Date().toISOString(), id, req.user.id
+                    tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null,
+                    min_stock || 0, reorder_level || 0, new Date().toISOString(), id, req.user.id
                 );
             } catch (sqlErr) {
                 await db.prepare(`
