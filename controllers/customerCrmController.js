@@ -297,7 +297,50 @@ const customerCrmController = {
     getLedger: async (req, res) => {
         const { id } = req.params;
         try {
-            const ledger = await db.prepare('SELECT * FROM customer_ledger WHERE customer_id = ? AND user_id = ? ORDER BY created_at DESC').all(id, req.user.id);
+            const customer = await db.prepare('SELECT * FROM business_customers WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!customer) return sendError(res, 'Customer not found', 404);
+
+            const cName = (customer.name || '').toLowerCase().trim();
+            const cEmail = (customer.email || '').toLowerCase().trim();
+
+            const invoices = await db.prepare(`
+                SELECT created_at as date, invoice_number as reference, COALESCE(total_amount, amount, 0) as amount, 'debit' as type 
+                FROM business_invoices 
+                WHERE user_id = ? AND (LOWER(TRIM(client_name)) = ? OR (LOWER(TRIM(client_email)) = ? AND ? != ''))
+                AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
+            `).all(req.user.id, cName, cEmail, cEmail);
+
+            const payments1 = await db.prepare(`
+                SELECT created_at as date, COALESCE(reference_number, 'Payment Received') as reference, amount, 'credit' as type 
+                FROM business_payments 
+                WHERE user_id = ? AND LOWER(TRIM(party_name)) = ? AND type = 'receive'
+            `).all(req.user.id, cName);
+
+            const payments2 = await db.prepare(`
+                SELECT created_at as date, COALESCE(reference_number, 'Customer Payment') as reference, amount, 'credit' as type 
+                FROM customer_payments 
+                WHERE user_id = ? AND customer_id = ?
+            `).all(req.user.id, id);
+
+            const manual = await db.prepare(`
+                SELECT created_at as date, description as reference, amount, type 
+                FROM customer_ledger 
+                WHERE user_id = ? AND customer_id = ?
+            `).all(req.user.id, id);
+
+            let ledger = [...invoices, ...payments1, ...payments2, ...manual];
+            
+            // Deduplicate (in case some workflows inserted to multiple tables)
+            // Using a Map with a rough heuristic (date + amount + type + ref) to avoid duplicates
+            const uniqueLedgerMap = new Map();
+            ledger.forEach(tx => {
+                const key = `${tx.date}_${tx.amount}_${tx.type}_${tx.reference}`;
+                uniqueLedgerMap.set(key, tx);
+            });
+            ledger = Array.from(uniqueLedgerMap.values());
+
+            ledger.sort((a, b) => new Date(b.date) - new Date(a.date));
+
             return sendSuccess(res, ledger, 'Customer ledger fetched successfully');
         } catch (error) {
             console.error('[Customer CRM Controller] Error fetching customer ledger:', error);
