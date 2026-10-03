@@ -265,12 +265,12 @@ const expensesController = {
                 INSERT INTO expenses (
                     user_id, amount, expense_number, expense_date, expense_status, category_name, subcategory,
                     payee_name, payee_phone, payee_gstin, expense_amount, gst_percentage, subtotal, tax_amount,
-                    payment_mode, transaction_reference, input_tax_credit, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'paid', ?, ?, ?, '+91 xxxxx xxxxx', '27XXXXX0000X0Z0', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    payment_mode, transaction_reference, input_tax_credit, created_at, updated_at, description
+                ) VALUES (?, ?, ?, ?, 'paid', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                req.user.id, amt, expNum, finalDate, category_name || 'General', subcategory || 'Service Description',
-                payee_name || 'Vendor Profile', amt, gst, sub, tax, payment_mode || 'UPI', transaction_reference || 'TXN-908122',
-                gst > 0 ? 'Eligible (ITC Claimed)' : 'Not Applicable', now, now
+                req.user.id, amt, expNum, finalDate, category_name || 'General', subcategory || '',
+                payee_name || '', '', '', amt, gst, sub, tax, payment_mode || 'UPI', transaction_reference || `TXN-${Date.now().toString().slice(-6)}`,
+                gst > 0 ? 'Eligible (ITC Claimed)' : 'Not Applicable', now, now, subcategory || ''
             );
 
             const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
@@ -279,7 +279,7 @@ const expensesController = {
             await db.prepare(`
                 INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
                 VALUES (?, 'expense', ?, ?, ?, ?, ?, 'posted', ?, ?)
-            `).run(req.user.id, finalDate, amt, category_name || 'General', normalizedMode, `Expense #${expNum}`, now, now);
+            `).run(req.user.id, finalDate, amt, category_name || 'General', normalizedMode, subcategory ? `Expense #${expNum} - ${subcategory}` : `Expense #${expNum}`, now, now);
 
             return sendSuccess(res, inserted, 'Expense recorded successfully', 201);
         } catch (error) {
