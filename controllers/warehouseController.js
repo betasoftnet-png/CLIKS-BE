@@ -578,6 +578,7 @@ const warehouseController = {
     receiveTransfer: async (req, res) => {
         try {
             const transferId = req.params.transferId;
+            const { rack_number, shelf_number } = req.body;
             const userId = req.user.id;
             const now = new Date().toISOString();
 
@@ -628,14 +629,14 @@ const warehouseController = {
 
             if (destProd) {
                 await db.prepare(`
-                    UPDATE business_products SET quantity = quantity + ?, stock_status = 'In Stock', updated_at = ? WHERE id = ?
-                `).run(transQty, now, destProd.id);
+                    UPDATE business_products SET quantity = quantity + ?, stock_status = 'In Stock', updated_at = ?, rack_number = COALESCE(?, rack_number), shelf_number = COALESCE(?, shelf_number) WHERE id = ?
+                `).run(transQty, now, rack_number || null, shelf_number || null, destProd.id);
             } else {
                 await db.prepare(`
                     INSERT INTO business_products (
-                        user_id, name, sku, category, unit, quantity, purchase_price, selling_price, warehouse_id, stock_status, hsn_code, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'In Stock', ?, ?, ?)
-                `).run(userId, sourceProd.name, sourceProd.sku, sourceProd.category, sourceProd.unit, transQty, sourceProd.purchase_price, sourceProd.selling_price || sourceProd.purchase_price, toWhName, sourceProd.hsn_code || null, now, now);
+                        user_id, name, sku, category, unit, quantity, purchase_price, selling_price, warehouse_id, stock_status, hsn_code, rack_number, shelf_number, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'In Stock', ?, ?, ?, ?, ?)
+                `).run(userId, sourceProd.name, sourceProd.sku, sourceProd.category, sourceProd.unit, transQty, sourceProd.purchase_price, sourceProd.selling_price || sourceProd.purchase_price, toWhName, sourceProd.hsn_code || null, rack_number || null, shelf_number || null, now, now);
             }
 
             // 5. Add to destination in stock table
