@@ -471,7 +471,18 @@ const reportsController = {
         return sendSuccess(res, { total_value: 0 }, 'Stock valuation report compiled');
     },
     getStockMovement: async (req, res) => {
-        return sendSuccess(res, [], 'Stock movement compiled');
+        try {
+            const movements = await db.prepare(`
+                SELECT t.*, COALESCE(s.name, p.name) as product_name, COALESCE(s.sku, p.sku) as sku
+                FROM stock_transactions t
+                LEFT JOIN stock s ON t.stock_id = s.id
+                LEFT JOIN business_products p ON t.stock_id = p.id
+                WHERE t.user_id = ? ORDER BY t.created_at DESC LIMIT 500
+            `).all(req.user.id);
+            return sendSuccess(res, movements, 'Stock movement compiled');
+        } catch (err) {
+            return sendError(res, 'Failed to compile stock movement', 500);
+        }
     },
     getLowStock: async (req, res) => {
         return sendSuccess(res, [], 'Low stock report compiled');
