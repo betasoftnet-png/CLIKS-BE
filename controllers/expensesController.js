@@ -445,8 +445,8 @@ const expensesController = {
             let empCode = employee_code ? String(employee_code).trim() : '';
             if (!empCode && empName) {
                 try {
-                    const emp = await db.prepare("SELECT id FROM employees WHERE user_id = ? AND (LOWER(first_name || ' ' || last_name) LIKE ? OR LOWER(name) LIKE ?) LIMIT 1")
-                        .get(targetUserId, `%${empName.toLowerCase()}%`, `%${empName.toLowerCase()}%`);
+                    const emp = await db.prepare("SELECT id FROM employees WHERE user_id = ? AND LOWER(name) LIKE ? LIMIT 1")
+                        .get(targetUserId, `%${empName.toLowerCase()}%`);
                     if (emp) {
                         empCode = `CLK-00${emp.id}`;
                     }
