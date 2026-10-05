@@ -8,7 +8,7 @@ const productController = {
             name, sku, category, unit, quantity, low_stock_threshold, purchase_price, selling_price, 
             barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, 
             hsn_code, hsn_sac, hsn, has_warranty, warrantyDetails, warranty_period, warrantyPeriod,
-            min_stock, reorder_level, damaged_stock, expired_stock
+            min_stock, reorder_level, damaged_stock, expired_stock, is_perishable
         } = req.body || {};
         
         if (!name) return sendError(res, 'Product name is required', 400);
