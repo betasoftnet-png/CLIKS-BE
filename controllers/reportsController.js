@@ -28,7 +28,16 @@ const reportsController = {
     // Sales Reports
     getSales: async (req, res) => {
         try {
-            const list = await db.prepare("SELECT * FROM business_orders WHERE user_id = ? ORDER BY id DESC").all(req.user.id);
+            const list = await db.prepare(`
+                SELECT 
+                    invoice_number as order_number, 
+                    client_name as customer, 
+                    created_at as date, 
+                    total_amount as grand_total 
+                FROM business_invoices 
+                WHERE user_id = ? 
+                ORDER BY id DESC
+            `).all(req.user.id);
             return sendSuccess(res, list, 'Sales records compiled');
         } catch (error) {
             console.error('Error in getSales:', error);
@@ -37,7 +46,7 @@ const reportsController = {
     },
     getSalesSummary: async (req, res) => {
         try {
-            const sales = await db.prepare("SELECT SUM(grand_total) as total FROM business_orders WHERE user_id = ?").get(req.user.id);
+            const sales = await db.prepare("SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?").get(req.user.id);
             return sendSuccess(res, { total_sales: sales?.total || 0, margin: '0%' }, 'Sales summary compiled');
         } catch (error) {
             console.error('Error in getSalesSummary:', error);
