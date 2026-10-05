@@ -1174,7 +1174,11 @@ const purchaseController = {
     getSupplierReport: async (req, res) => {
         try {
             const report = await db.prepare(`
-                SELECT supplier_name, COUNT(*) as count, COALESCE(SUM(grand_total), 0) as total
+                SELECT 
+                    supplier_name, 
+                    MAX(contact_number) as phone,
+                    COUNT(*) as count, 
+                    COALESCE(SUM(grand_total), 0) as total
                 FROM business_purchases WHERE user_id = ?
                 GROUP BY supplier_name
             `).all(req.user.id);
