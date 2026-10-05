@@ -544,7 +544,69 @@ const warehouseController = {
                 `).run(transQty, now, userId, stock_id, (sourceProd.name || '').toLowerCase(), fromWhName.toLowerCase(), String(fromWhId).toLowerCase());
             } catch (e) {}
 
-            // Step B: Add to / Create product in destination warehouse
+            // Step B: Do NOT add to destination warehouse yet (it's In Transit)
+            // Stock will be added to the destination warehouse when the transfer is marked as completed/received.
+
+            // Step C: Insert transaction record into warehouse_transfers (with fallback if reference column is missing)
+            const refVal = reference || `TRF-${Date.now().toString().slice(-6)}`;
+            let lastId = Date.now();
+            try {
+                const result = await db.prepare(
+                    `INSERT INTO warehouse_transfers (user_id, from_warehouse_id, to_warehouse_id, stock_id, quantity, reference, status, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+                ).run(userId, String(fromWhId), String(toWhId), sourceProd.id || 1, transQty, refVal, 'In Transit', now);
+                lastId = result.lastInsertRowid;
+            } catch (e1) {
+                try {
+                    const result = await db.prepare(
+                        `INSERT INTO warehouse_transfers (user_id, from_warehouse_id, to_warehouse_id, stock_id, quantity, status, created_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?)`
+                    ).run(userId, String(fromWhId), String(toWhId), sourceProd.id || 1, transQty, 'In Transit', now);
+                    lastId = result.lastInsertRowid;
+                } catch (e2) {}
+            }
+
+            return sendSuccess(res, { id: lastId, quantity: transQty, reference: refVal }, 'Stock transferred successfully', 200);
+        } catch (error) {
+            console.error('[Warehouse Controller] Error transferring stock:', error);
+            return sendError(res, `Failed to transfer stock: ${error.message}`, 500);
+        }
+    },
+
+    
+    // PUT /warehouses/transfers/:transferId/receive
+    receiveTransfer: async (req, res) => {
+        try {
+            const transferId = req.params.transferId;
+            const userId = req.user.id;
+            const now = new Date().toISOString();
+
+            const transfer = await db.prepare('SELECT * FROM warehouse_transfers WHERE id = ? AND user_id = ?').get(transferId, userId);
+            if (!transfer) return sendError(res, 'Transfer not found', 404);
+            if (transfer.status === 'Completed') return sendSuccess(res, transfer, 'Transfer already completed');
+
+            // 1. Mark as completed
+            await db.prepare('UPDATE warehouse_transfers SET status = "Completed" WHERE id = ?').run(transferId);
+
+            const transQty = transfer.quantity;
+            const toWhId = transfer.to_warehouse_id;
+            const stock_id = transfer.stock_id;
+
+            // 2. Resolve destination warehouse
+            let toWh = null;
+            try {
+                toWh = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND (id = ? OR LOWER(name) = ? OR LOWER(code) = ?) LIMIT 1')
+                    .get(userId, toWhId, String(toWhId).toLowerCase(), String(toWhId).toLowerCase());
+            } catch (e) {}
+            const toWhName = toWh ? toWh.name : String(toWhId);
+
+            // 3. Resolve source product for reference details
+            let sourceProd = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(stock_id, userId);
+            if (!sourceProd) {
+                sourceProd = { name: 'Stock Item', sku: `SKU-${Date.now()}`, category: 'General', unit: 'PCS', purchase_price: 0, selling_price: 0 };
+            }
+
+            // 4. Add to destination in business_products
             let destProd = null;
             try {
                 destProd = await db.prepare(`
@@ -561,54 +623,22 @@ const warehouseController = {
                         OR (sku IS NOT NULL AND LOWER(sku) = ?)
                       )
                     LIMIT 1
-                `).get(
-                    userId, 
-                    String(toWhId).toLowerCase(), 
-                    toWhName.toLowerCase(), 
-                    toWh ? (toWh.code || '').toLowerCase() : '',
-                    toWhName,
-                    (sourceProd.name || '').toLowerCase(), 
-                    (sourceProd.sku || '').toLowerCase()
-                );
+                `).get(userId, String(toWhId).toLowerCase(), toWhName.toLowerCase(), toWh ? (toWh.code || '').toLowerCase() : '', toWhName, (sourceProd.name || '').toLowerCase(), (sourceProd.sku || '').toLowerCase());
             } catch(e) {}
 
             if (destProd) {
-                try {
-                    const newDestQty = (parseFloat(destProd.quantity) || 0) + transQty;
-                    await db.prepare(`
-                        UPDATE business_products SET 
-                            quantity = ?, 
-                            stock_status = 'In Stock', 
-                            updated_at = ? 
-                        WHERE id = ? AND user_id = ?
-                    `).run(newDestQty, now, destProd.id, userId);
-                } catch(e) {}
+                await db.prepare(`
+                    UPDATE business_products SET quantity = quantity + ?, stock_status = 'In Stock', updated_at = ? WHERE id = ?
+                `).run(transQty, now, destProd.id);
             } else {
-                try {
-                    await db.prepare(`
-                        INSERT INTO business_products (
-                            user_id, name, sku, category, unit, quantity, 
-                            purchase_price, selling_price, warehouse_id, stock_status, 
-                            hsn_code, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'In Stock', ?, ?, ?)
-                    `).run(
-                        userId,
-                        sourceProd.name || 'Stock Item',
-                        sourceProd.sku || `SKU-${Date.now().toString().slice(-4)}`,
-                        sourceProd.category || 'General',
-                        sourceProd.unit || 'PCS',
-                        transQty,
-                        sourceProd.purchase_price || 0,
-                        sourceProd.selling_price || sourceProd.purchase_price || 0,
-                        toWhName,
-                        sourceProd.hsn_code || null,
-                        now,
-                        now
-                    );
-                } catch(e) {}
+                await db.prepare(`
+                    INSERT INTO business_products (
+                        user_id, name, sku, category, unit, quantity, purchase_price, selling_price, warehouse_id, stock_status, hsn_code, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'In Stock', ?, ?, ?)
+                `).run(userId, sourceProd.name, sourceProd.sku, sourceProd.category, sourceProd.unit, transQty, sourceProd.purchase_price, sourceProd.selling_price || sourceProd.purchase_price, toWhName, sourceProd.hsn_code || null, now, now);
             }
 
-            // Also update/insert destination in stock table
+            // 5. Add to destination in stock table
             try {
                 let destStock = await db.prepare(`
                     SELECT * FROM stock 
@@ -616,60 +646,22 @@ const warehouseController = {
                       AND (LOWER(location) = ? OR LOWER(location) = ? OR LOWER(warehouse) = ?)
                       AND (LOWER(name) = ? OR (sku IS NOT NULL AND LOWER(sku) = ?))
                     LIMIT 1
-                `).get(
-                    userId, 
-                    toWhName.toLowerCase(), 
-                    String(toWhId).toLowerCase(), 
-                    toWhName.toLowerCase(),
-                    (sourceProd.name || '').toLowerCase(), 
-                    (sourceProd.sku || '').toLowerCase()
-                );
+                `).get(userId, toWhName.toLowerCase(), String(toWhId).toLowerCase(), toWhName.toLowerCase(), (sourceProd.name || '').toLowerCase(), (sourceProd.sku || '').toLowerCase());
 
                 if (destStock) {
-                    await db.prepare('UPDATE stock SET quantity = quantity + ?, updated_at = ? WHERE id = ?')
-                        .run(transQty, now, destStock.id);
+                    await db.prepare('UPDATE stock SET quantity = quantity + ?, updated_at = ? WHERE id = ?').run(transQty, now, destStock.id);
                 } else {
                     await db.prepare(`
                         INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    `).run(
-                        userId,
-                        sourceProd.name || 'Stock Item',
-                        sourceProd.sku || `SKU-${Date.now().toString().slice(-4)}`,
-                        sourceProd.category || 'General',
-                        sourceProd.unit || 'PCS',
-                        sourceProd.purchase_price || 0,
-                        transQty,
-                        toWhName,
-                        now,
-                        now
-                    );
+                    `).run(userId, sourceProd.name, sourceProd.sku, sourceProd.category, sourceProd.unit, sourceProd.purchase_price, transQty, toWhName, now, now);
                 }
-            } catch (e) {}
+            } catch(e) {}
 
-            // Step C: Insert transaction record into warehouse_transfers (with fallback if reference column is missing)
-            const refVal = reference || `TRF-${Date.now().toString().slice(-6)}`;
-            let lastId = Date.now();
-            try {
-                const result = await db.prepare(
-                    `INSERT INTO warehouse_transfers (user_id, from_warehouse_id, to_warehouse_id, stock_id, quantity, reference, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)`
-                ).run(userId, String(fromWhId), String(toWhId), sourceProd.id || 1, transQty, refVal, now);
-                lastId = result.lastInsertRowid;
-            } catch (e1) {
-                try {
-                    const result = await db.prepare(
-                        `INSERT INTO warehouse_transfers (user_id, from_warehouse_id, to_warehouse_id, stock_id, quantity, created_at)
-                         VALUES (?, ?, ?, ?, ?, ?)`
-                    ).run(userId, String(fromWhId), String(toWhId), sourceProd.id || 1, transQty, now);
-                    lastId = result.lastInsertRowid;
-                } catch (e2) {}
-            }
-
-            return sendSuccess(res, { id: lastId, quantity: transQty, reference: refVal }, 'Stock transferred successfully', 200);
-        } catch (error) {
-            console.error('[Warehouse Controller] Error transferring stock:', error);
-            return sendError(res, `Failed to transfer stock: ${error.message}`, 500);
+            return sendSuccess(res, { id: transferId, status: 'Completed' }, 'Transfer marked as received and stock updated');
+        } catch(error) {
+            console.error('[Warehouse Controller] Error receiving transfer:', error);
+            return sendError(res, 'Failed to receive transfer', 500);
         }
     },
 

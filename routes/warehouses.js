@@ -36,6 +36,7 @@ router.get('/:id/products', warehouseController.getWarehouseProducts);
 // Transfers & Logistics
 router.post('/:id/transfers', warehouseController.transferStock);
 router.get('/:id/transfers', warehouseController.getWarehouseTransfers);
+router.put('/transfers/:transferId/receive', warehouseController.receiveTransfer);
 router.post('/:id/inward', warehouseController.logWarehouseInward);
 router.post('/:id/outward', warehouseController.logWarehouseOutward);
 router.get('/:id/movements', warehouseController.getWarehouseMovements);
