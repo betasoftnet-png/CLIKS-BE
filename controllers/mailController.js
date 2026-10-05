@@ -2,6 +2,34 @@ const axios = require('axios');
 const { sendSuccess, sendError } = require('../utils/response');
 
 const mailController = {
+        send: async (req, res) => {
+        const { to, subject, body, isHtml, fromName } = req.body;
+        
+        const token = req.headers['authorization'] || req.headers['x-auth-token'];
+
+        if (!to) {
+            return sendError(res, 'To address is required', 400);
+        }
+
+        try {
+            const response = await axios.post('https://api.bnxmail.com/api/mail/send', {
+                to,
+                subject,
+                body,
+                isHtml,
+                fromName
+            }, {
+                headers: {
+                    'Authorization': token,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            return sendSuccess(res, response.data, 'Email sent successfully');
+        } catch (error) {
+            return sendError(res, error.response?.data?.message || 'Failed to send email', error.response?.status || 500);
+        }
+    },
     bulkSend: async (req, res) => {
         const { recipients, subject, body, isHtml } = req.body;
         

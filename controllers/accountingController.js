@@ -655,7 +655,7 @@ const accountingController = {
 
             // Compute dynamic cash & bank assets
             // Compute dynamic cash & bank assets
-            const accounts = await db.prepare("SELECT * FROM bank_accounts WHERE user_id = ?").all(req.user.id);
+            const accounts = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
             const transactions = await db.prepare("SELECT mode, entry_type, SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') GROUP BY mode, entry_type").all(req.user.id);
 
             let cashAsset = 0;
