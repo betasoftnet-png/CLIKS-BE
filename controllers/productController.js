@@ -30,13 +30,13 @@ const productController = {
                     INSERT INTO business_products (
                         user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
                         purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                        tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                     batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
-                    resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, now, now
+                    resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, now, now
                 );
             } catch (insertError) {
                 // If column is missing in legacy SQLite schema, auto-migrate and retry
@@ -48,13 +48,13 @@ const productController = {
                         INSERT INTO business_products (
                             user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
                             purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                            tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `).run(
                         req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                         purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                         batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
-                        resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, now, now
+                        resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, now, now
                     );
                 } else {
                     throw insertError;
@@ -72,13 +72,13 @@ const productController = {
                     INSERT INTO business_products (
                         user_id, name, sku, category, unit, status, stock_status, quantity, low_stock_threshold,
                         purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                        tax_percentage, warehouse_id, hsn_code, min_stock, reorder_level, damaged_stock, expired_stock, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        tax_percentage, warehouse_id, hsn_code, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     req.user.id, name, sku || null, category || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                     batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
-                    resolvedHsn, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, now, now
+                    resolvedHsn, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, now, now
                 );
                 const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(fallbackResult.lastInsertRowid);
                 return sendSuccess(res, created, 'Product created successfully', 201);
