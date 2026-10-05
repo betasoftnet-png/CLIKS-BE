@@ -33,7 +33,8 @@ const reportsController = {
                     invoice_number as order_number, 
                     client_name as customer, 
                     created_at as date, 
-                    total_amount as grand_total 
+                    total_amount as grand_total,
+                    discount_amount
                 FROM business_invoices 
                 WHERE user_id = ? 
                 ORDER BY id DESC
@@ -79,8 +80,26 @@ const reportsController = {
     },
     getSalesByProduct: async (req, res) => {
         try {
-            const list = await db.prepare("SELECT name, SUM(total) as total_sales, SUM(quantity) as total_quantity FROM business_order_items WHERE order_id IN (SELECT id FROM business_orders WHERE user_id = ?) GROUP BY name ORDER BY total_sales DESC").all(req.user.id);
-            return sendSuccess(res, list || [], 'Sales by product compiled');
+            const invoices = await db.prepare("SELECT items FROM business_invoices WHERE user_id = ? AND items IS NOT NULL AND items != ''").all(req.user.id);
+            const productMap = {};
+            
+            invoices.forEach(inv => {
+                try {
+                    const items = JSON.parse(inv.items);
+                    if (Array.isArray(items)) {
+                        items.forEach(item => {
+                            const name = item.product_name || item.name || item.description || 'Unknown Product';
+                            if (!productMap[name]) productMap[name] = { name, total_sales: 0, total_quantity: 0, discount_amount: 0 };
+                            productMap[name].total_sales += parseFloat(item.total || item.amount || 0);
+                            productMap[name].total_quantity += parseFloat(item.quantity || 1);
+                            productMap[name].discount_amount += parseFloat(item.discount_amount || 0);
+                        });
+                    }
+                } catch (e) {}
+            });
+            
+            const list = Object.values(productMap).sort((a, b) => b.total_sales - a.total_sales);
+            return sendSuccess(res, list, 'Sales by product compiled');
         } catch (error) {
             console.error('Error in getSalesByProduct:', error);
             return sendError(res, 'Failed to compile product sales', 500);
