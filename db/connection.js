@@ -18,6 +18,26 @@ if (dbType === 'postgres') {
   (async () => {
     try {
       await pool.query(`
+        ALTER TABLE business_products 
+        ADD COLUMN IF NOT EXISTS min_stock NUMERIC DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS reorder_level NUMERIC DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS damaged_stock NUMERIC DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS expired_stock NUMERIC DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS is_perishable INTEGER DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS rack_number VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS shelf_number VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS unit VARCHAR(50) DEFAULT 'PCS',
+        ADD COLUMN IF NOT EXISTS hsn_code VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS low_stock_threshold NUMERIC DEFAULT 5,
+        ADD COLUMN IF NOT EXISTS barcode VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS serial_number VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS batch_number VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS expiry_date VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS tax_percentage NUMERIC DEFAULT 18,
+        ADD COLUMN IF NOT EXISTS warehouse_id VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS has_warranty VARCHAR(50) DEFAULT 'No',
+        ADD COLUMN IF NOT EXISTS warranty_period VARCHAR(100);
+
         ALTER TABLE gst_invoices 
         ADD COLUMN IF NOT EXISTS sender_product_name VARCHAR(255),
         ADD COLUMN IF NOT EXISTS receiver_product_name VARCHAR(255),
