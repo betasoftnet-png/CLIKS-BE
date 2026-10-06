@@ -159,7 +159,10 @@ if (dbType === 'postgres') {
     // Handle column aliases - PostgreSQL lowercases unquoted identifiers.
     // Wrap aliases in double quotes to preserve case (e.g., AS totalItems -> AS "totalItems")
     // We target camelCase aliases specifically to avoid quoting everything
-    pgSql = pgSql.replace(/AS\s+([a-zA-Z0-9]+[A-Z][a-zA-Z0-9]*)/g, 'AS "$1"');
+    pgSql = pgSql.replace(/AS\s+([a-zA-Z0-9]+[A-Z][a-zA-Z0-9]*)/g, (match, p1) => {
+      if (p1 === p1.toUpperCase()) return match; // don't quote 'TEXT', 'INTEGER', etc.
+      return `AS "${p1}"`;
+    });
 
     return pgSql;
   };
