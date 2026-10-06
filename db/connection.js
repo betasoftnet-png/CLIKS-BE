@@ -16,61 +16,9 @@ if (dbType === 'postgres') {
 
   // Auto-run schema migrations for PostgreSQL to ensure missing columns are added automatically
   (async () => {
+    // 1. Create tables and indices
     try {
       await pool.query(`
-        ALTER TABLE business_products 
-        ADD COLUMN IF NOT EXISTS min_stock NUMERIC DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS reorder_level NUMERIC DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS damaged_stock NUMERIC DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS expired_stock NUMERIC DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS is_perishable INTEGER DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS rack_number VARCHAR(100),
-        ADD COLUMN IF NOT EXISTS shelf_number VARCHAR(100),
-        ADD COLUMN IF NOT EXISTS unit VARCHAR(50) DEFAULT 'PCS',
-        ADD COLUMN IF NOT EXISTS hsn_code VARCHAR(100),
-        ADD COLUMN IF NOT EXISTS low_stock_threshold NUMERIC DEFAULT 5,
-        ADD COLUMN IF NOT EXISTS barcode VARCHAR(255),
-        ADD COLUMN IF NOT EXISTS serial_number VARCHAR(255),
-        ADD COLUMN IF NOT EXISTS batch_number VARCHAR(255),
-        ADD COLUMN IF NOT EXISTS expiry_date VARCHAR(100),
-        ADD COLUMN IF NOT EXISTS tax_percentage NUMERIC DEFAULT 18,
-        ADD COLUMN IF NOT EXISTS warehouse_id VARCHAR(255),
-        ADD COLUMN IF NOT EXISTS has_warranty VARCHAR(50) DEFAULT 'No',
-        ADD COLUMN IF NOT EXISTS warranty_period VARCHAR(100);
-
-        ALTER TABLE gst_invoices 
-        ADD COLUMN IF NOT EXISTS sender_product_name VARCHAR(255),
-        ADD COLUMN IF NOT EXISTS receiver_product_name VARCHAR(255),
-        ADD COLUMN IF NOT EXISTS product_name VARCHAR(255),
-        ADD COLUMN IF NOT EXISTS hsn_code VARCHAR(50),
-        ADD COLUMN IF NOT EXISTS unit VARCHAR(20),
-        ADD COLUMN IF NOT EXISTS quantity NUMERIC DEFAULT 1,
-        ADD COLUMN IF NOT EXISTS pdf_url TEXT;
-
-        ALTER TABLE invoices 
-        ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255),
-        ADD COLUMN IF NOT EXISTS customer_gstin VARCHAR(50),
-        ADD COLUMN IF NOT EXISTS taxable_amount NUMERIC DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS total_amount NUMERIC DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS irn TEXT,
-        ADD COLUMN IF NOT EXISTS ack_no VARCHAR(100),
-        ADD COLUMN IF NOT EXISTS ack_date VARCHAR(100),
-        ADD COLUMN IF NOT EXISTS signed_qr TEXT,
-        ADD COLUMN IF NOT EXISTS pdf_url TEXT;
-
-        ALTER TABLE expenses
-        ADD COLUMN IF NOT EXISTS time VARCHAR(50),
-        ADD COLUMN IF NOT EXISTS proof_file_path TEXT,
-        ADD COLUMN IF NOT EXISTS proof_file_name TEXT,
-        ADD COLUMN IF NOT EXISTS proof_file_type VARCHAR(50),
-        ADD COLUMN IF NOT EXISTS proof_timestamp VARCHAR(100),
-        ADD COLUMN IF NOT EXISTS proof_files TEXT,
-        ADD COLUMN IF NOT EXISTS department VARCHAR(255),
-        ADD COLUMN IF NOT EXISTS employee_code VARCHAR(100);
-
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_inv_num ON invoices(invoice_number);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_inv_num ON gst_invoices(invoice_number);
-
         CREATE TABLE IF NOT EXISTS eway_bills (
           id SERIAL PRIMARY KEY,
           user_id INTEGER,
@@ -116,15 +64,70 @@ if (dbType === 'postgres') {
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_repayment_alerts_user ON repayment_alerts(user_id);
-
-        ALTER TABLE split_ticket_expenses ADD COLUMN IF NOT EXISTS document_name VARCHAR(255);
-        ALTER TABLE split_ticket_expenses ADD COLUMN IF NOT EXISTS document_url TEXT;
       `);
-      console.log('✅ [PostgreSQL Connection] Ensured gst_invoices, invoices, eway_bills, founder_pitches & repayment_alerts schema exist');
-    } catch (err) {
-      // Table might not be created yet during first boot before migrations run
-      console.warn('⚠️ [PostgreSQL Connection Init Note]:', err.message);
+    } catch (e) {
+      console.warn('⚠️ [PostgreSQL Connection Init Tables Note]:', e.message);
     }
+
+    // 2. Add columns individually to prevent one failure from blocking others
+    const alterStatements = [
+      "ALTER TABLE business_products ADD COLUMN min_stock NUMERIC DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN reorder_level NUMERIC DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN damaged_stock NUMERIC DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN expired_stock NUMERIC DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN is_perishable INTEGER DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN rack_number VARCHAR(100)",
+      "ALTER TABLE business_products ADD COLUMN shelf_number VARCHAR(100)",
+      "ALTER TABLE business_products ADD COLUMN unit VARCHAR(50) DEFAULT 'PCS'",
+      "ALTER TABLE business_products ADD COLUMN hsn_code VARCHAR(100)",
+      "ALTER TABLE business_products ADD COLUMN low_stock_threshold NUMERIC DEFAULT 5",
+      "ALTER TABLE business_products ADD COLUMN barcode VARCHAR(255)",
+      "ALTER TABLE business_products ADD COLUMN serial_number VARCHAR(255)",
+      "ALTER TABLE business_products ADD COLUMN batch_number VARCHAR(255)",
+      "ALTER TABLE business_products ADD COLUMN expiry_date VARCHAR(100)",
+      "ALTER TABLE business_products ADD COLUMN tax_percentage NUMERIC DEFAULT 18",
+      "ALTER TABLE business_products ADD COLUMN warehouse_id VARCHAR(255)",
+      "ALTER TABLE business_products ADD COLUMN has_warranty VARCHAR(50) DEFAULT 'No'",
+      "ALTER TABLE business_products ADD COLUMN warranty_period VARCHAR(100)",
+      "ALTER TABLE gst_invoices ADD COLUMN sender_product_name VARCHAR(255)",
+      "ALTER TABLE gst_invoices ADD COLUMN receiver_product_name VARCHAR(255)",
+      "ALTER TABLE gst_invoices ADD COLUMN product_name VARCHAR(255)",
+      "ALTER TABLE gst_invoices ADD COLUMN hsn_code VARCHAR(50)",
+      "ALTER TABLE gst_invoices ADD COLUMN unit VARCHAR(20)",
+      "ALTER TABLE gst_invoices ADD COLUMN quantity NUMERIC DEFAULT 1",
+      "ALTER TABLE gst_invoices ADD COLUMN pdf_url TEXT",
+      "ALTER TABLE invoices ADD COLUMN customer_name VARCHAR(255)",
+      "ALTER TABLE invoices ADD COLUMN customer_gstin VARCHAR(50)",
+      "ALTER TABLE invoices ADD COLUMN taxable_amount NUMERIC DEFAULT 0",
+      "ALTER TABLE invoices ADD COLUMN total_amount NUMERIC DEFAULT 0",
+      "ALTER TABLE invoices ADD COLUMN irn TEXT",
+      "ALTER TABLE invoices ADD COLUMN ack_no VARCHAR(100)",
+      "ALTER TABLE invoices ADD COLUMN ack_date VARCHAR(100)",
+      "ALTER TABLE invoices ADD COLUMN signed_qr TEXT",
+      "ALTER TABLE invoices ADD COLUMN pdf_url TEXT",
+      "ALTER TABLE expenses ADD COLUMN time VARCHAR(50)",
+      "ALTER TABLE expenses ADD COLUMN proof_file_path TEXT",
+      "ALTER TABLE expenses ADD COLUMN proof_file_name TEXT",
+      "ALTER TABLE expenses ADD COLUMN proof_file_type VARCHAR(50)",
+      "ALTER TABLE expenses ADD COLUMN proof_timestamp VARCHAR(100)",
+      "ALTER TABLE expenses ADD COLUMN proof_files TEXT",
+      "ALTER TABLE expenses ADD COLUMN department VARCHAR(255)",
+      "ALTER TABLE expenses ADD COLUMN employee_code VARCHAR(100)",
+      "ALTER TABLE split_ticket_expenses ADD COLUMN document_name VARCHAR(255)",
+      "ALTER TABLE split_ticket_expenses ADD COLUMN document_url TEXT",
+      "CREATE UNIQUE INDEX idx_invoices_inv_num ON invoices(invoice_number)",
+      "CREATE UNIQUE INDEX idx_gst_invoices_inv_num ON gst_invoices(invoice_number)"
+    ];
+
+    for (const sql of alterStatements) {
+      try {
+        await pool.query(sql);
+      } catch (err) {
+        // Ignored: column or index already exists, or table doesn't exist yet
+      }
+    }
+    
+    console.log('✅ [PostgreSQL Connection] Applied all isolated schema checks');
   })();
 
 
