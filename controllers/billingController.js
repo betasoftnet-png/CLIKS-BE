@@ -225,6 +225,19 @@ const billingController = {
                 console.error('[Billing Controller] Warranty sync notice:', warrErr.message || warrErr);
             }
 
+            // Loyalty Points Module
+            if (resolvedCustomerId) {
+                const earned = parseInt(req.body.loyalty_points_earned) || 0;
+                const redeemed = parseInt(req.body.loyalty_points_redeemed) || 0;
+                if (earned > 0 || redeemed > 0) {
+                    try {
+                        await db.prepare('UPDATE business_customers SET loyalty_points = COALESCE(loyalty_points, 0) + ? - ? WHERE id = ?').run(earned, redeemed, resolvedCustomerId);
+                    } catch (e) {
+                        console.error('[Billing Controller] Failed to update loyalty points:', e);
+                    }
+                }
+            }
+
             return sendSuccess(res, createdInvoice, 'Invoice created successfully', 201);
         } catch (error) {
             console.error('[Billing Controller] Error creating invoice:', error);

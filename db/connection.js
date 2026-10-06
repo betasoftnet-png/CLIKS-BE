@@ -71,6 +71,7 @@ if (dbType === 'postgres') {
 
     // 2. Add columns individually to prevent one failure from blocking others
     const alterStatements = [
+      "ALTER TABLE business_customers ADD COLUMN loyalty_points INTEGER DEFAULT 0",
       "ALTER TABLE business_products ADD COLUMN min_stock NUMERIC DEFAULT 0",
       "ALTER TABLE business_products ADD COLUMN reorder_level NUMERIC DEFAULT 0",
       "ALTER TABLE business_products ADD COLUMN damaged_stock NUMERIC DEFAULT 0",
