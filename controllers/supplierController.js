@@ -134,7 +134,14 @@ const supplierController = {
             let purchasesRows = [];
             try {
                 purchasesRows = await db.prepare(`
-                    SELECT LOWER(TRIM(supplier_name)) as sname, SUM(COALESCE(grand_total, 0)) as total_bought
+                    SELECT 
+                        LOWER(TRIM(supplier_name)) as sname, 
+                        SUM(COALESCE(grand_total, 0)) as total_bought,
+                        COUNT(id) as total_orders,
+                        SUM(CASE WHEN LOWER(status) = 'completed' THEN 1 ELSE 0 END) as completed_orders,
+                        AVG(CASE WHEN LOWER(status) = 'completed' AND updated_at IS NOT NULL AND created_at IS NOT NULL 
+                            THEN julianday(updated_at) - julianday(created_at) 
+                            ELSE 0 END) as raw_lead_time
                     FROM business_purchases
                     WHERE user_id = ? AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
                     GROUP BY LOWER(TRIM(supplier_name))
@@ -144,7 +151,12 @@ const supplierController = {
             const purchasesMap = new Map();
             (purchasesRows || []).forEach(r => {
                 if (r.sname) {
-                    purchasesMap.set(r.sname, (purchasesMap.get(r.sname) || 0) + (parseFloat(r.total_bought) || 0));
+                    purchasesMap.set(r.sname, {
+                        total_bought: (parseFloat(r.total_bought) || 0),
+                        total_orders: parseInt(r.total_orders) || 0,
+                        completed_orders: parseInt(r.completed_orders) || 0,
+                        raw_lead_time: parseFloat(r.raw_lead_time) || 0
+                    });
                 }
             });
 
@@ -173,7 +185,17 @@ const supplierController = {
                     : (liveStatus === 'REJECTED' ? 'REJECTED' : (connStatus || liveStatus || 'PENDING'));
 
                 const snameLower = (s.name || '').toLowerCase().trim();
-                const calculatedPurchases = purchasesMap.get(snameLower) || s.total_purchased || 0;
+                const pData = purchasesMap.get(snameLower) || {};
+                const calculatedPurchases = pData.total_bought || s.total_purchased || 0;
+                
+                const totalOrd = pData.total_orders || 0;
+                const compOrd = pData.completed_orders || 0;
+                const leadTimeRaw = pData.raw_lead_time || 0;
+                const fulfillmentRate = totalOrd > 0 ? Math.round((compOrd / totalOrd) * 100) : 100;
+                // Lead time in days, min 1 day for realism if completed
+                const leadTimeDays = leadTimeRaw > 0 ? Math.max(1, Math.round(leadTimeRaw)) : (compOrd > 0 ? 2 : 0);
+                // Reliability score: 0-100 based on fulfillment and pseudo-lead time
+                const reliability = totalOrd > 0 ? Math.min(100, Math.max(0, fulfillmentRate - (leadTimeDays > 3 ? (leadTimeDays - 3) * 5 : 0))) : 95;
 
                 return {
                     ...s,
@@ -181,7 +203,13 @@ const supplierController = {
                     total_purchases: calculatedPurchases,
                     total_purchased: calculatedPurchases,
                     status: displaySt,
-                    connection_status: displaySt
+                    connection_status: displaySt,
+                    scorecard: {
+                        fulfillment_rate: fulfillmentRate,
+                        lead_time_days: leadTimeDays,
+                        reliability_score: reliability,
+                        total_orders: totalOrd
+                    }
                 };
             }));
 
