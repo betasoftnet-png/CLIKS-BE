@@ -1021,7 +1021,7 @@ const warehouseController = {
                 LEFT JOIN stock s ON t.stock_id = s.id 
                 LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT))
                 LEFT JOIN warehouses w ON (t.warehouse_id = w.id OR CAST(t.warehouse_id AS TEXT) = CAST(w.id AS TEXT) OR LOWER(t.warehouse_id) = LOWER(w.name) OR LOWER(t.warehouse_id) = LOWER(w.code))
-                LEFT JOIN warehouses w2 ON (LOWER(s.location) = LOWER(w2.name) OR LOWER(s.warehouse) = LOWER(w2.code))
+                LEFT JOIN warehouses w2 ON (LOWER(s.location) = LOWER(w2.name) OR LOWER(s.location) = LOWER(w2.code))
                 LEFT JOIN warehouses w3 ON (LOWER(bp.warehouse_id) = LOWER(w3.name) OR CAST(bp.warehouse_id AS TEXT) = CAST(w3.id AS TEXT) OR LOWER(bp.warehouse_id) = LOWER(w3.code))
                 LEFT JOIN users u ON t.user_id = u.id
                 WHERE t.user_id = ? AND t.type = 'in'
