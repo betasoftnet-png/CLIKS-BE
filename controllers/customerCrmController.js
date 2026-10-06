@@ -183,21 +183,39 @@ const customerCrmController = {
     getCustomers: async (req, res) => {
         const { city, balance_due } = req.query;
         try {
-            let query = 'SELECT * FROM business_customers WHERE user_id = ?';
+            let query = `
+                SELECT 
+                    c.*,
+                    COALESCE(SUM(i.due_amount), 0) as calculated_balance,
+                    COALESCE(SUM(i.total_amount), 0) as calculated_spent
+                FROM business_customers c
+                LEFT JOIN business_invoices i ON c.id = i.customer_id AND i.status != 'cancelled'
+                WHERE c.user_id = ?
+            `;
             const params = [req.user.id];
 
             if (city) {
-                query += ' AND LOWER(city) = ?';
+                query += ' AND LOWER(c.city) = ?';
                 params.push(city.toLowerCase());
             }
 
+            query += ' GROUP BY c.id';
+
             if (balance_due === 'true') {
-                query += ' AND outstanding_balance > 0';
+                query += ' HAVING calculated_balance > 0 OR c.outstanding_balance > 0';
             }
 
-            query += ' ORDER BY created_at DESC';
+            query += ' ORDER BY c.created_at DESC';
 
-            const customers = await db.prepare(query).all(params);
+            let customers = await db.prepare(query).all(params);
+            
+            // Map calculated balance if it's > 0 (to verify against actual transactions)
+            customers = customers.map(c => ({
+                ...c,
+                outstanding_balance: c.calculated_balance > 0 ? c.calculated_balance : (c.outstanding_balance || 0),
+                total_spent: c.calculated_spent > 0 ? c.calculated_spent : (c.total_spent || 0)
+            }));
+
             return sendSuccess(res, customers, 'Customers fetched successfully');
         } catch (error) {
             console.error('[Customer CRM Controller] Error fetching customers:', error);
