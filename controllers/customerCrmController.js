@@ -187,7 +187,10 @@ const customerCrmController = {
                 SELECT 
                     c.*,
                     COALESCE(SUM(i.due_amount), 0) as calculated_balance,
-                    COALESCE(SUM(i.total_amount), 0) as calculated_spent
+                    COALESCE(SUM(i.total_amount), 0) as calculated_spent,
+                    COALESCE(SUM(CASE WHEN (julianday('now') - julianday(i.due_date)) < 30 THEN i.due_amount ELSE 0 END), 0) as aging_current,
+                    COALESCE(SUM(CASE WHEN (julianday('now') - julianday(i.due_date)) >= 30 AND (julianday('now') - julianday(i.due_date)) <= 60 THEN i.due_amount ELSE 0 END), 0) as aging_30_60,
+                    COALESCE(SUM(CASE WHEN (julianday('now') - julianday(i.due_date)) > 60 THEN i.due_amount ELSE 0 END), 0) as aging_60_plus
                 FROM business_customers c
                 LEFT JOIN business_invoices i ON c.id = i.customer_id AND i.status != 'cancelled'
                 WHERE c.user_id = ?
