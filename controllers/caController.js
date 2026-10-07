@@ -3464,6 +3464,11 @@ const caController = {
         try {
             const userId = req.user.id;
             const now = new Date().toISOString();
+
+            if (userId === 9999 || userId === 8888) {
+                return sendSuccess(res, { userId, status: 'Online', loginTime: now }, 'Admin online presence bypassed');
+            }
+
             const existing = await db.prepare("SELECT * FROM user_presence WHERE user_id = ?").get(userId);
 
             if (existing) {
@@ -3492,6 +3497,11 @@ const caController = {
         try {
             const userId = req.user.id;
             const now = new Date().toISOString();
+
+            if (userId === 9999 || userId === 8888) {
+                return sendSuccess(res, { userId, status: 'Offline', logoutTime: now }, 'Admin offline presence bypassed');
+            }
+
             const existing = await db.prepare("SELECT * FROM user_presence WHERE user_id = ?").get(userId);
 
             if (existing) {
