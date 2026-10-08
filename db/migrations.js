@@ -2372,6 +2372,7 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       'ALTER TABLE audit_logs ADD COLUMN new_value TEXT',
       'ALTER TABLE audit_logs ADD COLUMN ip_address TEXT',
       'ALTER TABLE audit_logs ADD COLUMN browser TEXT',
+      'ALTER TABLE audit_logs ADD COLUMN customer_id INTEGER',
       'ALTER TABLE ca_audit_sessions ADD COLUMN audit_description TEXT',
       'ALTER TABLE ca_audit_sessions ADD COLUMN end_time TEXT',
       'ALTER TABLE ca_audit_sessions ADD COLUMN hourly_rate REAL DEFAULT 500',

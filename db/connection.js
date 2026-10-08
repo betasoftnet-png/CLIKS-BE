@@ -468,7 +468,8 @@ if (dbType === 'postgres') {
       "ALTER TABLE expenses ADD COLUMN proof_timestamp TEXT",
       "ALTER TABLE expenses ADD COLUMN proof_files TEXT",
       "ALTER TABLE expenses ADD COLUMN department TEXT",
-      "ALTER TABLE expenses ADD COLUMN employee_code TEXT"
+      "ALTER TABLE expenses ADD COLUMN employee_code TEXT",
+      "ALTER TABLE audit_logs ADD COLUMN customer_id INTEGER"
     ];
     for (const sql of alterCols) {
       try { rawDb.exec(sql); } catch (e) {}
