@@ -873,7 +873,7 @@ router.get(['/invoices', '/einvoices', '/einvoice'], async (req, res) => {
     let invRows = [];
     try {
       invRows = await db.prepare(`
-        SELECT * FROM invoices 
+        SELECT * FROM business_invoices 
         WHERE user_id = ? OR user_id = 1
         ORDER BY id DESC
       `).all(userId);

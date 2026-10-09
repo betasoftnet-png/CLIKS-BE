@@ -653,9 +653,9 @@ const gstController = {
             const safeNum = (col) => isPg ? `COALESCE(NULLIF(REGEXP_REPLACE("${col}"::text, '[^0-9.]', '', 'g'), '')::numeric, 0)` : `COALESCE(${col}, 0)`;
             const sum = (col) => `SUM(${safeNum(col)})`;
 
-            const notEway = isPg ? `(is_eway_bill IS NOT TRUE AND COALESCE(is_eway_bill::text, 'false') NOT IN ('true','1'))` : `(is_eway_bill = 'false' OR is_eway_bill IS NULL)`;
-            const notRecon = isPg ? `(is_reconciliation IS NOT TRUE AND COALESCE(is_reconciliation::text, 'false') NOT IN ('true','1'))` : `(is_reconciliation = 'false' OR is_reconciliation IS NULL)`;
-            const isRecon = isPg ? `(is_reconciliation = true OR COALESCE(is_reconciliation::text, 'false') IN ('true','1'))` : `is_reconciliation = 'true'`;
+            const notEway = isPg ? `COALESCE(is_eway_bill::text, 'false') NOT IN ('true', '1', 't')` : `(is_eway_bill = 'false' OR is_eway_bill IS NULL)`;
+            const notRecon = isPg ? `COALESCE(is_reconciliation::text, 'false') NOT IN ('true', '1', 't')` : `(is_reconciliation = 'false' OR is_reconciliation IS NULL)`;
+            const isRecon = isPg ? `COALESCE(is_reconciliation::text, 'false') IN ('true', '1', 't')` : `is_reconciliation = 'true'`;
 
             const dateFilter = isPg ? `created_at::date BETWEEN ? AND ?` : `date(created_at) BETWEEN ? AND ?`;
 
