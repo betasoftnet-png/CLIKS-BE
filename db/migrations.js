@@ -2866,6 +2866,34 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       // Column already exists
     }
 
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN min_stock REAL DEFAULT 0").run();
+    } catch (e) {}
+
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN reorder_level REAL DEFAULT 0").run();
+    } catch (e) {}
+
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN damaged_stock REAL DEFAULT 0").run();
+    } catch (e) {}
+
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN expired_stock REAL DEFAULT 0").run();
+    } catch (e) {}
+
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN is_perishable INTEGER DEFAULT 0").run();
+    } catch (e) {}
+
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN rack_number TEXT").run();
+    } catch (e) {}
+
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN shelf_number TEXT").run();
+    } catch (e) {}
+
     await seedHsnMaster();
   } catch (hsnErr) {
     console.warn("⚠️ Error initializing HSN master migrations:", hsnErr.message);
