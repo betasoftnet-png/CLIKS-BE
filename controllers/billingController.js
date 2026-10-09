@@ -645,7 +645,13 @@ const billingController = {
         const { id } = req.params;
         const { amount, payment_method, reference_number, notes } = req.body;
         try {
-            const invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            let invoice;
+            if (isNaN(id)) {
+                invoice = await db.prepare('SELECT * FROM business_invoices WHERE invoice_number = ? AND user_id = ?').get(id, req.user.id);
+            } else {
+                invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            }
+
             if (!invoice) {
                 return sendError(res, 'Invoice not found or access denied', 404);
             }
@@ -655,7 +661,7 @@ const billingController = {
 
             // Insert payment record
             await db.prepare('INSERT INTO business_invoice_payments (invoice_id, amount, payment_method, payment_date, reference_number, notes) VALUES (?, ?, ?, ?, ?, ?)')
-                .run(id, parsedAmount, payment_method, now, reference_number || null, notes || null);
+                .run(invoice.id, parsedAmount, payment_method, now, reference_number || null, notes || null);
 
             // Update invoice balances and status safely with COALESCE
             await db.prepare(`
@@ -670,7 +676,7 @@ const billingController = {
                         ELSE 'Partially Paid' 
                     END 
                 WHERE id = ?
-            `).run(parsedAmount, parsedAmount, parsedAmount, parsedAmount, parsedAmount, id);
+            `).run(parsedAmount, parsedAmount, parsedAmount, parsedAmount, parsedAmount, invoice.id);
 
             // Sync to business_payments (for Customer Receivables view)
             try {
