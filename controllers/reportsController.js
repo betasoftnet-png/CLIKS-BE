@@ -320,35 +320,35 @@ const reportsController = {
                 return mode;
             };
 
-            const accounts = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
+            const accounts = await db.prepare("SELECT * FROM bank_accounts WHERE user_id = ?").all(req.user.id);
             const transactions = await db.prepare("SELECT mode, entry_type, SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') GROUP BY mode, entry_type").all(req.user.id);
 
             let cashAsset = 0;
             let bankAsset = 0;
 
+            // 1. Process initial balances from bank_accounts
             for (const acc of accounts) {
-                const normName = normalizePaymentMode(acc.account_name);
-                let totalIncome = 0;
-                let totalExpenses = 0;
-
-                for (const tx of transactions) {
-                    const normMode = normalizePaymentMode(tx.mode);
-                    if (normMode === normName) {
-                        if (tx.entry_type === 'income') {
-                            totalIncome += tx.total || 0;
-                        } else {
-                            totalExpenses += tx.total || 0;
-                        }
-                    }
-                }
-
-                const initialBal = parseFloat(acc.balance) || 0;
-                const currentBalance = initialBal + totalIncome - totalExpenses;
-
-                if (normName === 'Cash in Hand') {
-                    cashAsset += currentBalance;
+                const normName = normalizePaymentMode(acc.bank_name || acc.account_name);
+                const initialBal = parseFloat(acc.opening_balance || acc.balance) || 0;
+                
+                if (normName === 'Cash in Hand' || acc.bank_type === 'Cash' || (acc.account_name || '').toLowerCase().includes('cash')) {
+                    cashAsset += initialBal;
                 } else {
-                    bankAsset += currentBalance;
+                    bankAsset += initialBal;
+                }
+            }
+
+            // 2. Process all dynamic transactions
+            for (const tx of transactions) {
+                const normMode = normalizePaymentMode(tx.mode);
+                const val = parseFloat(tx.total) || 0;
+                
+                if (normMode === 'Cash in Hand') {
+                    if (tx.entry_type === 'income') cashAsset += val;
+                    else cashAsset -= val;
+                } else {
+                    if (tx.entry_type === 'income') bankAsset += val;
+                    else bankAsset -= val;
                 }
             }
 
