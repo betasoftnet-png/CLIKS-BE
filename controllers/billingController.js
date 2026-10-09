@@ -697,13 +697,13 @@ const billingController = {
                          ) VALUES (?, 'receive', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
                     ).run(
                         req.user.id, parsedAmount, parsedAmount, invoice.total_amount, invoice.total_amount,
-                        invoice.client_name || 'General Customer', invoice.invoice_number, payment_method || 'Cash', reference_number || null, packedNotes, now
+                        invoice.client_name || 'General Customer', invoice.id, payment_method || 'Cash', reference_number || null, packedNotes, now
                     );
                 } catch (colErr) {
                     await db.prepare(
                         `INSERT INTO business_payments (user_id, type, amount, party_name, invoice_id, payment_mode, reference_number, notes, status, reconciliation_status, created_at)
                          VALUES (?, 'receive', ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
-                    ).run(req.user.id, parsedAmount, invoice.client_name || 'General Customer', invoice.invoice_number, payment_method || 'Cash', reference_number || null, packedNotes, now);
+                    ).run(req.user.id, parsedAmount, invoice.client_name || 'General Customer', invoice.id, payment_method || 'Cash', reference_number || null, packedNotes, now);
                 }
             } catch (e) {
                 console.error('[Billing Controller] Error syncing to business_payments:', e);

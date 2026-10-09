@@ -66,6 +66,15 @@ const paymentController = {
 
         try {
             const now = new Date().toISOString();
+
+            let resolvedInvId = null;
+            if (invId) {
+                try {
+                    const invoice = await db.prepare('SELECT id FROM business_invoices WHERE user_id = ? AND (invoice_number = ? OR id = ?)').get(req.user.id, invId, invId);
+                    resolvedInvId = invoice ? invoice.id : (!isNaN(parseInt(invId)) ? parseInt(invId) : null);
+                } catch(e) {}
+            }
+
             let result;
             try {
                 result = await db.prepare(
@@ -75,13 +84,13 @@ const paymentController = {
                      ) VALUES (?, 'receive', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
                 ).run(
                     req.user.id, finalPaidAmount, finalPaidAmount, finalTotalOriginal, finalTotalOriginal,
-                    custName, invId, payment_mode || 'Cash', reference_number || null, packedNotes, now
+                    custName, resolvedInvId, payment_mode || 'Cash', reference_number || null, packedNotes, now
                 );
             } catch (colErr) {
                 result = await db.prepare(
                     `INSERT INTO business_payments (user_id, type, amount, party_name, invoice_id, payment_mode, reference_number, notes, status, reconciliation_status, created_at)
                      VALUES (?, 'receive', ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
-                ).run(req.user.id, finalPaidAmount, custName, invId, payment_mode || 'Cash', reference_number || null, packedNotes, now);
+                ).run(req.user.id, finalPaidAmount, custName, resolvedInvId, payment_mode || 'Cash', reference_number || null, packedNotes, now);
             }
 
             // Record income entry in accounting table
@@ -162,14 +171,16 @@ const paymentController = {
         }
         try {
             const now = new Date().toISOString();
-            const result = await db.prepare(
-                `INSERT INTO business_payments (user_id, type, amount, party_name, invoice_id, payment_mode, reference_number, notes, status, reconciliation_status, created_at)
-                 VALUES (?, 'pay', ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
-            ).run(req.user.id, numAmount, supplier_name || 'General Supplier', purchase_id || null, payment_mode || 'Bank Transfer', reference_number || null, notes || null, now);
 
             // Locate credit purchase bill using Bill Number (purchase_id)
             const purchase = await db.prepare("SELECT * FROM business_purchases WHERE user_id = ? AND (purchase_number = ? OR id = ? || 0)").get(req.user.id, purchase_id, purchase_id);
-            
+            const resolvedPurchaseId = purchase ? purchase.id : (purchase_id && !isNaN(parseInt(purchase_id)) ? parseInt(purchase_id) : null);
+
+            const result = await db.prepare(
+                `INSERT INTO business_payments (user_id, type, amount, party_name, invoice_id, payment_mode, reference_number, notes, status, reconciliation_status, created_at)
+                 VALUES (?, 'pay', ?, ?, ?, ?, ?, ?, 'completed', 'matched', ?)`
+            ).run(req.user.id, numAmount, supplier_name || 'General Supplier', resolvedPurchaseId, payment_mode || 'Bank Transfer', reference_number || null, notes || null, now);
+
             if (purchase) {
                 const newPaidAmount = (parseFloat(purchase.paid_amount) || 0) + numAmount;
                 const totalToPay = parseFloat(purchase.grand_total) || 0;

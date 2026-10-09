@@ -11,6 +11,11 @@ const mailController = {
             return sendError(res, 'To address is required', 400);
         }
 
+        let authHeader = token;
+        if (authHeader && !authHeader.startsWith('Bearer ')) {
+            authHeader = `Bearer ${authHeader}`;
+        }
+
         try {
             const response = await axios.post('https://api.bnxmail.com/api/mail/send', {
                 to,
@@ -20,7 +25,7 @@ const mailController = {
                 fromName
             }, {
                 headers: {
-                    'Authorization': token,
+                    'Authorization': authHeader,
                     'Content-Type': 'application/json'
                 }
             });
@@ -43,6 +48,11 @@ const mailController = {
         console.log('[Mail Proxy] Sending bulk mail to:', recipients.length, 'recipients');
         console.log('[Mail Proxy] Token present:', !!token);
 
+        let authHeader = token;
+        if (authHeader && !authHeader.startsWith('Bearer ')) {
+            authHeader = `Bearer ${authHeader}`;
+        }
+
         try {
             const response = await axios.post('https://api.bnxmail.com/api/mail/bulk-send', {
                 recipients,
@@ -51,7 +61,7 @@ const mailController = {
                 isHtml
             }, {
                 headers: {
-                    'Authorization': token,
+                    'Authorization': authHeader,
                     'Content-Type': 'application/json'
                 }
             });
