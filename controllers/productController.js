@@ -700,18 +700,25 @@ const productController = {
 
     getTopProductsReport: async (req, res) => {
         try {
-            const list = await db.prepare(`
-                SELECT 
-                    COALESCE(json_extract(item.value, '$.product_name'), json_extract(item.value, '$.description'), json_extract(item.value, '$.name')) as name,
-                    SUM(json_extract(item.value, '$.quantity')) as sold,
-                    SUM(json_extract(item.value, '$.quantity') * COALESCE(json_extract(item.value, '$.unit_price'), json_extract(item.value, '$.price'), json_extract(item.value, '$.rate'), 0)) as total_sales
-                FROM business_invoices, json_each(business_invoices.items) as item
-                WHERE business_invoices.user_id = ? AND business_invoices.status != 'Cancelled'
-                GROUP BY name
-                HAVING name IS NOT NULL
-                ORDER BY total_sales DESC
-                LIMIT 5
-            `).all(req.user.id);
+            const invoices = await db.prepare("SELECT items FROM business_invoices WHERE user_id = ? AND status != 'Cancelled'").all(req.user.id);
+            const productMap = {};
+            for (const inv of invoices) {
+                if (!inv.items) continue;
+                let parsed;
+                try { parsed = typeof inv.items === 'string' ? JSON.parse(inv.items) : inv.items; } catch(e) { continue; }
+                if (Array.isArray(parsed)) {
+                    for (const item of parsed) {
+                        const name = item.product_name || item.description || item.name;
+                        if (!name) continue;
+                        const qty = parseFloat(item.quantity) || 0;
+                        const price = parseFloat(item.unit_price || item.price || item.rate) || 0;
+                        if (!productMap[name]) productMap[name] = { name, sold: 0, total_sales: 0 };
+                        productMap[name].sold += qty;
+                        productMap[name].total_sales += qty * price;
+                    }
+                }
+            }
+            const list = Object.values(productMap).sort((a, b) => b.total_sales - a.total_sales).slice(0, 5);
             return sendSuccess(res, list, 'Top products fetched successfully');
         } catch (error) {
             console.error('Error in getTopProductsReport:', error);

@@ -12,23 +12,17 @@ const reportsController = {
             const purchasesTotal = parseFloat(purchases?.total) || 0;
             const expensesTotal = parseFloat(expenses?.total) || 0;
 
-            const monthlyData = await db.prepare(`
-                SELECT 
-                    strftime('%m', created_at) as month,
-                    SUM(total_amount) as total
-                FROM business_invoices
-                WHERE user_id = ? AND strftime('%Y', created_at) = strftime('%Y', 'now')
-                GROUP BY month
-            `).all(req.user.id);
-
+            const invoices = await db.prepare("SELECT created_at, total_amount FROM business_invoices WHERE user_id = ?").all(req.user.id);
             const monthly_sales = [0,0,0,0,0,0,0,0,0,0,0,0];
-            if (monthlyData && Array.isArray(monthlyData)) {
-                for (const item of monthlyData) {
-                    if (item.month) {
-                        const monthIndex = parseInt(item.month, 10) - 1;
-                        if (monthIndex >= 0 && monthIndex < 12) {
-                            monthly_sales[monthIndex] = item.total;
-                        }
+            const currentYear = new Date().getFullYear();
+            
+            for (const inv of invoices) {
+                if (!inv.created_at) continue;
+                const dateObj = new Date(inv.created_at);
+                if (dateObj.getFullYear() === currentYear) {
+                    const monthIndex = dateObj.getMonth();
+                    if (monthIndex >= 0 && monthIndex < 12) {
+                        monthly_sales[monthIndex] += parseFloat(inv.total_amount) || 0;
                     }
                 }
             }

@@ -856,7 +856,7 @@ const expensesController = {
                 SELECT COALESCE(category_name, category, 'Operating') as category_name, SUM(amount) as total_amount 
                 FROM expenses 
                 WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')
-                GROUP BY category_name
+                GROUP BY COALESCE(category_name, category, 'Operating')
                 ORDER BY total_amount DESC
             `).all(req.user.id);
             return sendSuccess(res, list, 'Category report retrieved');
