@@ -12,10 +12,32 @@ const reportsController = {
             const purchasesTotal = parseFloat(purchases?.total) || 0;
             const expensesTotal = parseFloat(expenses?.total) || 0;
 
+            const monthlyData = await db.prepare(`
+                SELECT 
+                    strftime('%m', created_at) as month,
+                    SUM(total_amount) as total
+                FROM business_invoices
+                WHERE user_id = ? AND strftime('%Y', created_at) = strftime('%Y', 'now')
+                GROUP BY month
+            `).all(req.user.id);
+
+            const monthly_sales = [0,0,0,0,0,0,0,0,0,0,0,0];
+            if (monthlyData && Array.isArray(monthlyData)) {
+                for (const item of monthlyData) {
+                    if (item.month) {
+                        const monthIndex = parseInt(item.month, 10) - 1;
+                        if (monthIndex >= 0 && monthIndex < 12) {
+                            monthly_sales[monthIndex] = item.total;
+                        }
+                    }
+                }
+            }
+
             return sendSuccess(res, {
                 total_sales: salesTotal,
                 total_purchases: purchasesTotal,
                 total_expenses: expensesTotal + purchasesTotal,
+                monthly_sales: monthly_sales,
                 status: 'healthy',
                 updated_at: new Date().toISOString()
             }, 'Dashboard summary compiled');

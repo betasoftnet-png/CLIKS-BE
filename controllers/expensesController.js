@@ -851,7 +851,19 @@ const expensesController = {
         return sendSuccess(res, {}, 'Summary report retrieved');
     },
     getReportCategory: async (req, res) => {
-        return sendSuccess(res, {}, 'Category report retrieved');
+        try {
+            const list = await db.prepare(`
+                SELECT COALESCE(category_name, category, 'Operating') as category_name, SUM(amount) as total_amount 
+                FROM expenses 
+                WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')
+                GROUP BY category_name
+                ORDER BY total_amount DESC
+            `).all(req.user.id);
+            return sendSuccess(res, list, 'Category report retrieved');
+        } catch (error) {
+            console.error('Error in getReportCategory:', error);
+            return sendError(res, 'Failed to fetch category report', 500);
+        }
     },
     getReportMonthly: async (req, res) => {
         return sendSuccess(res, {}, 'Monthly report retrieved');
