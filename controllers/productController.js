@@ -700,9 +700,21 @@ const productController = {
 
     getTopProductsReport: async (req, res) => {
         try {
-            const list = await db.prepare('SELECT id, name, quantity, selling_price FROM business_products WHERE user_id = ? ORDER BY quantity DESC LIMIT 5').all(req.user.id);
+            const list = await db.prepare(`
+                SELECT 
+                    COALESCE(json_extract(item.value, '$.product_name'), json_extract(item.value, '$.description'), json_extract(item.value, '$.name')) as name,
+                    SUM(json_extract(item.value, '$.quantity')) as sold,
+                    SUM(json_extract(item.value, '$.quantity') * COALESCE(json_extract(item.value, '$.unit_price'), json_extract(item.value, '$.price'), json_extract(item.value, '$.rate'), 0)) as total_sales
+                FROM business_invoices, json_each(business_invoices.items) as item
+                WHERE business_invoices.user_id = ? AND business_invoices.status != 'Cancelled'
+                GROUP BY name
+                HAVING name IS NOT NULL
+                ORDER BY total_sales DESC
+                LIMIT 5
+            `).all(req.user.id);
             return sendSuccess(res, list, 'Top products fetched successfully');
         } catch (error) {
+            console.error('Error in getTopProductsReport:', error);
             return sendError(res, 'Failed to load top products', 500);
         }
     },
