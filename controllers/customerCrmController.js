@@ -327,9 +327,9 @@ const customerCrmController = {
             const invoices = await db.prepare(`
                 SELECT created_at as date, invoice_number as reference, COALESCE(total_amount, amount, 0) as amount, 'debit' as type 
                 FROM business_invoices 
-                WHERE user_id = ? AND (LOWER(TRIM(client_name)) = ? OR (LOWER(TRIM(client_email)) = ? AND ? != ''))
+                WHERE user_id = ? AND (customer_id = ? OR LOWER(TRIM(client_name)) = ? OR (LOWER(TRIM(client_email)) = ? AND ? != ''))
                 AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
-            `).all(req.user.id, cName, cEmail, cEmail);
+            `).all(req.user.id, id, cName, cEmail, cEmail);
 
             const payments1 = await db.prepare(`
                 SELECT created_at as date, COALESCE(reference_number, 'Payment Received') as reference, amount, 'credit' as type 
