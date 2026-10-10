@@ -5,7 +5,7 @@ const productController = {
     // 1. Create Product
     createProduct: async (req, res) => {
         const { 
-            name, sku, category, unit, quantity, low_stock_threshold, purchase_price, selling_price, brand, 
+            name, sku, category, unit, quantity, low_stock_threshold, purchase_price, selling_price, brand, product_type, 
             barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, 
             hsn_code, hsn_sac, hsn, has_warranty, warrantyDetails, warranty_period, warrantyPeriod,
             min_stock, reorder_level, damaged_stock, expired_stock, is_perishable
@@ -28,12 +28,12 @@ const productController = {
             try {
                 result = await db.prepare(`
                     INSERT INTO business_products (
-                        user_id, name, sku, category, brand, unit, status, stock_status, quantity, low_stock_threshold,
+                        user_id, name, sku, category, brand, product_type, unit, status, stock_status, quantity, low_stock_threshold,
                         purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
                         tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, shelf_number, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
-                    req.user.id, name, sku || null, category || null, req.body.brand || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
+                    req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                     batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
                     resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, now, now
@@ -46,12 +46,12 @@ const productController = {
                     
                     result = await db.prepare(`
                         INSERT INTO business_products (
-                            user_id, name, sku, category, brand, unit, status, stock_status, quantity, low_stock_threshold,
+                            user_id, name, sku, category, brand, product_type, unit, status, stock_status, quantity, low_stock_threshold,
                             purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
                             tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, shelf_number, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `).run(
-                        req.user.id, name, sku || null, category || null, req.body.brand || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
+                        req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                         purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                         batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
                         resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, now, now
@@ -70,12 +70,12 @@ const productController = {
                 const now = new Date().toISOString();
                 const fallbackResult = await db.prepare(`
                     INSERT INTO business_products (
-                        user_id, name, sku, category, brand, unit, status, stock_status, quantity, low_stock_threshold,
+                        user_id, name, sku, category, brand, product_type, unit, status, stock_status, quantity, low_stock_threshold,
                         purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
                         tax_percentage, warehouse_id, hsn_code, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, shelf_number, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
-                    req.user.id, name, sku || null, category || null, req.body.brand || null, unit || 'PCS', quantity || 0, low_stock_threshold || 5,
+                    req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                     batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
                     resolvedHsn, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, now, now
@@ -158,6 +158,7 @@ const productController = {
             const sku = body.sku !== undefined ? body.sku : product.sku;
             const category = body.category !== undefined ? body.category : product.category;
             const brand = body.brand !== undefined ? body.brand : product.brand;
+            const product_type = body.product_type !== undefined ? body.product_type : (product.product_type || 'product');
             const unit = body.unit !== undefined ? body.unit : (product.unit || 'PCS');
             const status = body.status !== undefined ? body.status : product.status;
             const low_stock_threshold = body.low_stock_threshold !== undefined ? body.low_stock_threshold : product.low_stock_threshold;
@@ -184,14 +185,14 @@ const productController = {
             try {
                 await db.prepare(`
                     UPDATE business_products SET
-                        name = ?, sku = ?, category = ?, brand = ?, unit = ?, status = ?, stock_status = ?, quantity = ?,
+                        name = ?, sku = ?, category = ?, brand = ?, product_type = ?, unit = ?, status = ?, stock_status = ?, quantity = ?,
                         low_stock_threshold = ?, purchase_price = ?, selling_price = ?, barcode = ?,
                         serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?,
                         warehouse_id = ?, hsn_code = ?, has_warranty = ?, warranty_period = ?,
                         min_stock = ?, reorder_level = ?, damaged_stock = ?, expired_stock = ?, rack_number = ?, shelf_number = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
-                    name, sku || null, category || null, brand || null, unit, status || 'active', newStockStatus,
+                    name, sku || null, category || null, brand || null, product_type || 'product', unit, status || 'active', newStockStatus,
                     newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
                     barcode || null, serial_number || null, batch_number || null, expiry_date || null,
                     tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null,
@@ -200,11 +201,11 @@ const productController = {
             } catch (sqlErr) {
                 await db.prepare(`
                     UPDATE business_products SET
-                        name = ?, sku = ?, category = ?, brand = ?, status = ?, stock_status = ?, quantity = ?,
+                        name = ?, sku = ?, category = ?, brand = ?, product_type = ?, status = ?, stock_status = ?, quantity = ?,
                         selling_price = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
-                    name, sku || null, category || null, brand || null, status || 'active', newStockStatus,
+                    name, sku || null, category || null, brand || null, product_type || 'product', status || 'active', newStockStatus,
                     newQuantity, selling_price || 0, new Date().toISOString(), id, req.user.id
                 );
             }
