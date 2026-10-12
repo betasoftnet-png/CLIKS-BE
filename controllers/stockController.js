@@ -103,18 +103,29 @@ const getStocks = async (req, res) => {
 
 // ── POST / ────────────────────────────────────────────────────────────────────
 const createStock = async (req, res) => {
-  const { name, sub_name, sku, quantity = 0, unit, unit_price, category, location, notes, low_stock_threshold, warehouse_id, warehouse } = req.body;
+  const { name, sub_name, sku, quantity = 0, unit, unit_price, category, location, notes, low_stock_threshold, warehouse_id, warehouse, zone, rack_number, shelf_number, bin_number } = req.body;
   if (!name) return sendError(res, 'Name is required', 400, 'BAD_REQUEST');
 
   const now = new Date().toISOString();
   const qty = Number(quantity || 0);
   const price = Number(unit_price || 0);
   const threshold = low_stock_threshold !== undefined ? Number(low_stock_threshold) : 5;
-  const stmt = db.prepare(`
-    INSERT INTO stock (user_id, name, sub_name, sku, quantity, unit, unit_price, category, location, notes, low_stock_threshold, created_at, updated_at) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const info = await stmt.run(req.user.id, name, sub_name || null, sku || null, qty, unit || null, price || null, category || null, location || null, notes || null, threshold, now, now);
+  const resolvedWarehouse = warehouse || warehouse_id || location || null;
+  
+  let info;
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO stock (user_id, name, sub_name, sku, quantity, unit, unit_price, category, location, warehouse, zone, rack_number, shelf_number, bin_number, notes, low_stock_threshold, created_at, updated_at) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    info = await stmt.run(req.user.id, name, sub_name || null, sku || null, qty, unit || null, price || null, category || null, location || null, resolvedWarehouse, zone || null, rack_number || null, shelf_number || null, bin_number || null, notes || null, threshold, now, now);
+  } catch (err) {
+    const stmt = db.prepare(`
+      INSERT INTO stock (user_id, name, sub_name, sku, quantity, unit, unit_price, category, location, notes, low_stock_threshold, created_at, updated_at) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    info = await stmt.run(req.user.id, name, sub_name || null, sku || null, qty, unit || null, price || null, category || null, location || null, notes || null, threshold, now, now);
+  }
   
   const newItem = await db.prepare('SELECT * FROM stock WHERE id = ?').get(info.lastInsertRowid);
   
@@ -143,7 +154,7 @@ const updateStock = async (req, res) => {
 
   const updates = [];
   const params = [];
-  const allowedFields = ['name', 'sub_name', 'sku', 'quantity', 'unit', 'unit_price', 'category', 'location', 'notes', 'low_stock_threshold'];
+  const allowedFields = ['name', 'sub_name', 'sku', 'quantity', 'unit', 'unit_price', 'category', 'location', 'warehouse', 'zone', 'rack_number', 'shelf_number', 'bin_number', 'notes', 'low_stock_threshold'];
   
   for (const field of allowedFields) {
     let val = req.body[field];

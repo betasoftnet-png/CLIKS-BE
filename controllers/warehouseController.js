@@ -604,7 +604,7 @@ const warehouseController = {
     receiveTransfer: async (req, res) => {
         try {
             const transferId = req.params.transferId;
-            const { rack_number, shelf_number } = req.body;
+            const { rack_number, shelf_number, bin_number, zone } = req.body;
             const userId = req.user.id;
             const now = new Date().toISOString();
 
@@ -639,7 +639,11 @@ const warehouseController = {
                         category: sRow.category || 'General',
                         unit: sRow.unit || 'PCS',
                         purchase_price: sRow.unit_price || 0,
-                        selling_price: sRow.unit_price || 0
+                        selling_price: sRow.unit_price || 0,
+                        rack_number: sRow.rack_number,
+                        shelf_number: sRow.shelf_number,
+                        bin_number: sRow.bin_number,
+                        zone: sRow.zone
                     };
                 }
             } catch (e) {}
@@ -674,15 +678,37 @@ const warehouseController = {
             } catch(e) {}
 
             if (destProd) {
-                await db.prepare(`
-                    UPDATE business_products SET quantity = quantity + ?, stock_status = 'In Stock', updated_at = ?, rack_number = COALESCE(?, rack_number), shelf_number = COALESCE(?, shelf_number) WHERE id = ?
-                `).run(transQty, now, rack_number || null, shelf_number || null, destProd.id);
+                try {
+                    await db.prepare(`
+                        UPDATE business_products SET 
+                            quantity = quantity + ?, 
+                            stock_status = 'In Stock', 
+                            updated_at = ?, 
+                            rack_number = COALESCE(?, rack_number), 
+                            shelf_number = COALESCE(?, shelf_number),
+                            bin_number = COALESCE(?, bin_number),
+                            zone = COALESCE(?, zone)
+                        WHERE id = ?
+                    `).run(transQty, now, rack_number || null, shelf_number || null, bin_number || null, zone || null, destProd.id);
+                } catch (e) {
+                    await db.prepare(`
+                        UPDATE business_products SET quantity = quantity + ?, stock_status = 'In Stock', updated_at = ? WHERE id = ?
+                    `).run(transQty, now, destProd.id);
+                }
             } else {
-                await db.prepare(`
-                    INSERT INTO business_products (
-                        user_id, name, sku, category, unit, quantity, purchase_price, selling_price, warehouse_id, stock_status, hsn_code, rack_number, shelf_number, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'In Stock', ?, ?, ?, ?, ?)
-                `).run(userId, sourceProd.name, sourceProd.sku, sourceProd.category, sourceProd.unit, transQty, sourceProd.purchase_price, sourceProd.selling_price || sourceProd.purchase_price, toWhName, sourceProd.hsn_code || null, rack_number || null, shelf_number || null, now, now);
+                try {
+                    await db.prepare(`
+                        INSERT INTO business_products (
+                            user_id, name, sku, category, unit, quantity, purchase_price, selling_price, warehouse_id, stock_status, hsn_code, rack_number, shelf_number, bin_number, zone, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'In Stock', ?, ?, ?, ?, ?, ?, ?)
+                    `).run(userId, sourceProd.name, sourceProd.sku, sourceProd.category, sourceProd.unit, transQty, sourceProd.purchase_price, sourceProd.selling_price || sourceProd.purchase_price, toWhName, sourceProd.hsn_code || null, rack_number || null, shelf_number || null, bin_number || null, zone || null, now, now);
+                } catch (e) {
+                    await db.prepare(`
+                        INSERT INTO business_products (
+                            user_id, name, sku, category, unit, quantity, purchase_price, selling_price, warehouse_id, stock_status, hsn_code, rack_number, shelf_number, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'In Stock', ?, ?, ?, ?, ?)
+                    `).run(userId, sourceProd.name, sourceProd.sku, sourceProd.category, sourceProd.unit, transQty, sourceProd.purchase_price, sourceProd.selling_price || sourceProd.purchase_price, toWhName, sourceProd.hsn_code || null, rack_number || null, shelf_number || null, now, now);
+                }
             }
 
             // 5. Add to destination in stock table
@@ -698,14 +724,39 @@ const warehouseController = {
 
                 if (destStock) {
                     destStockId = destStock.id;
-                    await db.prepare('UPDATE stock SET quantity = quantity + ?, updated_at = ? WHERE id = ?').run(transQty, now, destStock.id);
+                    try {
+                        await db.prepare(`
+                            UPDATE stock SET 
+                                quantity = quantity + ?, 
+                                rack_number = COALESCE(?, rack_number), 
+                                shelf_number = COALESCE(?, shelf_number), 
+                                bin_number = COALESCE(?, bin_number), 
+                                zone = COALESCE(?, zone), 
+                                updated_at = ? 
+                            WHERE id = ?
+                        `).run(transQty, rack_number || null, shelf_number || null, bin_number || null, zone || null, now, destStock.id);
+                    } catch (e) {
+                        await db.prepare('UPDATE stock SET quantity = quantity + ?, updated_at = ? WHERE id = ?').run(transQty, now, destStock.id);
+                    }
                 } else {
-                    const locStr = `${toWhName}${rack_number ? ` (Rack ${rack_number})` : ''}`;
-                    const insStockRes = await db.prepare(`
-                        INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, warehouse, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    `).run(userId, sourceProd.name, sourceProd.sku, sourceProd.category, sourceProd.unit, sourceProd.purchase_price, transQty, locStr, toWhName, now, now);
-                    destStockId = insStockRes.lastInsertRowid;
+                    const locParts = [toWhName];
+                    if (rack_number) locParts.push(`Rack ${rack_number}`);
+                    if (shelf_number) locParts.push(`Shelf ${shelf_number}`);
+                    if (bin_number) locParts.push(`Bin ${bin_number}`);
+                    const locStr = locParts.length > 1 ? `${locParts[0]} (${locParts.slice(1).join(' | ')})` : toWhName;
+                    try {
+                        const insStockRes = await db.prepare(`
+                            INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, warehouse, zone, rack_number, shelf_number, bin_number, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        `).run(userId, sourceProd.name, sourceProd.sku, sourceProd.category, sourceProd.unit, sourceProd.purchase_price, transQty, locStr, toWhName, zone || null, rack_number || null, shelf_number || null, bin_number || null, now, now);
+                        destStockId = insStockRes.lastInsertRowid;
+                    } catch (e) {
+                        const insStockRes = await db.prepare(`
+                            INSERT INTO stock (user_id, name, sku, category, unit, unit_price, quantity, location, warehouse, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        `).run(userId, sourceProd.name, sourceProd.sku, sourceProd.category, sourceProd.unit, sourceProd.purchase_price, transQty, locStr, toWhName, now, now);
+                        destStockId = insStockRes.lastInsertRowid;
+                    }
                 }
             } catch(e) {
                 console.error('[Warehouse Controller] Error updating destStock in receiveTransfer:', e);
