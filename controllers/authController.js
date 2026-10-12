@@ -497,4 +497,38 @@ const login = async (req, res) => {
   }, 'Login successful', 200);
 };
 
-module.exports = { ssoLogin, register, login, refresh, logout, logoutAll, heartbeat };
+/**
+ * GET /api/users/me or /auth/me
+ * Returns authenticated user details matching decoded JWT data
+ */
+const getMe = async (req, res) => {
+  if (!req.user) {
+    return sendError(res, 'Unauthorized', 401, 'UNAUTHORIZED');
+  }
+
+  let user = null;
+  if (req.user.id) {
+    try {
+      user = await db.prepare('SELECT id, username, email, role, business_name, tier, subscription_days_remaining, created_at FROM users WHERE id = ?').get(req.user.id);
+    } catch (e) {}
+  }
+
+  const username = user?.username || req.user.username || (req.user.email ? req.user.email.split('@')[0] : 'User');
+  const safeData = {
+    id: user?.id || req.user.id,
+    username: username,
+    name: username,
+    fullName: user?.business_name || username,
+    email: user?.email || req.user.email,
+    role: user?.role || req.user.role || 'business',
+    account_type: req.user.account_type || 'business',
+    accountType: req.user.accountType || 'BUSINESS',
+    business: true,
+    tier: user?.tier || 'Starter Plan',
+    created_at: user?.created_at
+  };
+
+  return sendSuccess(res, safeData, 'User fetched successfully', 200);
+};
+
+module.exports = { ssoLogin, register, login, refresh, logout, logoutAll, heartbeat, getMe };

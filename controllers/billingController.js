@@ -152,6 +152,23 @@ const billingController = {
                     }
                 } catch (e) {}
             }
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN billed_by TEXT').run(); } catch (e) { }
+
+            // Resolve who billed from request body or authenticated token user data (username, name, email)
+            let billedByName = (req.body.billed_by || req.body.billedBy || '').trim();
+            if (!billedByName || billedByName.toLowerCase() === 'admin' || billedByName.toLowerCase() === 'cashier' || billedByName.toLowerCase() === 'system') {
+                billedByName = req.user?.username || req.user?.name || req.user?.full_name || '';
+                if (!billedByName && req.user?.id) {
+                    try {
+                        const uRow = await db.prepare('SELECT username, business_name FROM users WHERE id = ?').get(req.user.id);
+                        if (uRow) billedByName = uRow.username || uRow.business_name || '';
+                    } catch (e) {}
+                }
+                if (!billedByName && req.user?.email) {
+                    billedByName = req.user.email.split('@')[0];
+                }
+            }
+            if (!billedByName) billedByName = 'Admin';
 
             const result = await db.prepare(`
                 INSERT INTO business_invoices (
@@ -159,20 +176,23 @@ const billingController = {
                     billing_address, shipping_address, amount, tax_amount, total_amount,
                     paid_amount, due_amount, bank_account_id, discount_amount, round_off,
                     status, due_date, payment_mode, invoice_type, tax_type, sendToCustomerHistory, sendPurchaseHistoryToCustomer, items,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    billed_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, resolvedCustomerId, invNum, client_name, client_email || null, client_gstin || null,
                 billing_address || null, shipping_address || null, numAmount, numTax, numTotal,
                 numPaid, numDue, bank_account_id || null, numDiscount, numRoundOff,
                 status || 'Draft', due_date, payment_mode || 'Cash', invoice_type || 'GST', tax_type || 'Exclusive', sendToCustVal, sendToCustVal,
                 typeof items === 'string' ? items : JSON.stringify(items || []),
-                now, now
+                billedByName, now, now
             );
 
             const createdInvoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(result.lastInsertRowid);
-            if (createdInvoice && createdInvoice.items) {
-                try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) {}
+            if (createdInvoice) {
+                if (!createdInvoice.billed_by) createdInvoice.billed_by = billedByName;
+                if (createdInvoice.items) {
+                    try { createdInvoice.items = JSON.parse(createdInvoice.items); } catch (e) {}
+                }
             }
 
             // Sync to accounting entries

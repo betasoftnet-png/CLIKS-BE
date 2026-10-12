@@ -43,7 +43,20 @@ const posController = {
                 : Math.max(0, existingLoyaltyPoints - loyaltyPointsRedeemed + loyaltyPointsEarned));
         
         const netPointsChange = loyaltyPointsEarned - loyaltyPointsRedeemed;
-        const customerId = req.body.customer_id || null;
+        let billedByName = (req.body.billed_by || req.body.billedBy || req.body.cashier_name || '').trim();
+        if (!billedByName || billedByName.toLowerCase() === 'admin' || billedByName.toLowerCase() === 'cashier' || billedByName.toLowerCase() === 'system') {
+            billedByName = req.user?.username || req.user?.name || req.user?.full_name || '';
+            if (!billedByName && req.user?.id) {
+                try {
+                    const uRow = await db.prepare('SELECT username, business_name FROM users WHERE id = ?').get(req.user.id);
+                    if (uRow) billedByName = uRow.username || uRow.business_name || '';
+                } catch (e) {}
+            }
+            if (!billedByName && req.user?.email) {
+                billedByName = req.user.email.split('@')[0];
+            }
+        }
+        if (!billedByName) billedByName = 'Cashier';
 
         try { await db.prepare('ALTER TABLE business_customers ADD COLUMN loyalty_points REAL DEFAULT 0').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN customer_id INTEGER').run(); } catch (e) { }
@@ -52,6 +65,7 @@ const posController = {
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_points_redeemed REAL DEFAULT 0').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_discount_amount REAL DEFAULT 0').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN remaining_loyalty_points REAL DEFAULT 0').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN billed_by TEXT').run(); } catch (e) { }
 
         // 0. Check stock availability for all items before processing checkout
         for (const item of items) {
@@ -109,15 +123,15 @@ const posController = {
                         discount_amount, round_off, status, due_date, payment_mode,
                         invoice_type, items, existing_loyalty_points, loyalty_points_earned, 
                         loyalty_points_redeemed, loyalty_discount_amount, remaining_loyalty_points, 
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        billed_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run([
                     userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null, customerId,
                     numAmount, numTax, numTotal, numPaid, numDue,
                     numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
                     'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned, 
                     loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints, 
-                    now, now
+                    billedByName, now, now
                 ]);
                 invoiceId = result.lastInsertRowid || result.id;
             } catch (errIns) {
@@ -127,13 +141,13 @@ const posController = {
                         user_id, invoice_number, client_name, client_email,
                         amount, tax_amount, total_amount, paid_amount, due_amount,
                         discount_amount, round_off, status, due_date, payment_mode,
-                        invoice_type, items, loyalty_points_earned, loyalty_points_redeemed, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        invoice_type, items, loyalty_points_earned, loyalty_points_redeemed, billed_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run([
                     userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null,
                     numAmount, numTax, numTotal, numPaid, numDue,
                     numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
-                    'POS', JSON.stringify(items), loyaltyPointsEarned, loyaltyPointsRedeemed, now, now
+                    'POS', JSON.stringify(items), loyaltyPointsEarned, loyaltyPointsRedeemed, billedByName, now, now
                 ]);
                 invoiceId = result.lastInsertRowid || result.id;
             }
@@ -285,6 +299,7 @@ const posController = {
                 createdInvoice.remaining_loyalty_points = freshLoyaltyBalance;
                 createdInvoice.final_loyalty_points = freshLoyaltyBalance;
                 createdInvoice.updated_customer_loyalty_points = freshLoyaltyBalance;
+                createdInvoice.billed_by = createdInvoice.billed_by || billedByName;
             }
 
             // Real-time integration to CLIKS Customer Application

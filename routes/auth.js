@@ -30,4 +30,9 @@ const { auth } = require('../middleware/auth');
 router.get('/heartbeat', auth, asyncHandler(heartbeat));
 router.post('/heartbeat', auth, asyncHandler(heartbeat));
 
+// GET /auth/me & /auth/users/me — Return current user details
+const { getMe } = require('../controllers/authController');
+router.get('/me', auth, asyncHandler(getMe));
+router.get('/users/me', auth, asyncHandler(getMe));
+
 module.exports = router;

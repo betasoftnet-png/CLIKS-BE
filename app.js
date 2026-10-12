@@ -149,6 +149,7 @@ app.get(['/test', '/api/test', '/api/v1/test', '/ping', '/api/v1/accounting/test
 // ── Auth (no middleware) ──────────────────────────────────────────────────────
 app.use(['/api/v1/auth', '/auth'], require('./routes/auth'));
 app.use(['/api/v1/admin/auth', '/admin/auth'], require('./routes/adminAuth'));
+app.get(['/api/users/me', '/api/v1/users/me', '/users/me'], auth, require('./controllers/authController').getMe);
 
 
 // ── Public Feed (selective auth inside route file) ────────────────────────────
