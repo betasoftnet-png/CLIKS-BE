@@ -149,7 +149,10 @@ const productController = {
         const { id } = req.params;
         const body = req.body || {};
         try {
-            const product = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            let product = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!product && (body.sku || body.barcode)) {
+                product = await db.prepare('SELECT * FROM business_products WHERE (sku = ? OR barcode = ?) AND user_id = ?').get(body.sku || body.barcode, body.sku || body.barcode, req.user.id);
+            }
 
             if (!product) return sendError(res, 'Product not found', 404);
 
@@ -186,6 +189,8 @@ const productController = {
             const bin_number = body.bin_number !== undefined ? body.bin_number : product.bin_number;
             const zone = body.zone !== undefined ? body.zone : product.zone;
 
+            const targetId = product.id;
+
             try {
                 await db.prepare(`
                     UPDATE business_products SET
@@ -200,21 +205,31 @@ const productController = {
                     newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
                     barcode || null, serial_number || null, batch_number || null, expiry_date || null,
                     tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null,
-                    min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, rack_number || null, shelf_number || null, bin_number || null, zone || null, new Date().toISOString(), id, req.user.id
+                    min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, rack_number || null, shelf_number || null, bin_number || null, zone || null, new Date().toISOString(), targetId, req.user.id
                 );
             } catch (sqlErr) {
                 await db.prepare(`
                     UPDATE business_products SET
                         name = ?, sku = ?, category = ?, brand = ?, product_type = ?, status = ?, stock_status = ?, quantity = ?,
-                        selling_price = ?, updated_at = ?
+                        selling_price = ?, hsn_code = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
                     name, sku || null, category || null, brand || null, product_type || 'product', status || 'active', newStockStatus,
-                    newQuantity, selling_price || 0, new Date().toISOString(), id, req.user.id
+                    newQuantity, selling_price || 0, resolvedHsn, new Date().toISOString(), targetId, req.user.id
                 );
             }
 
-            const updated = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(id);
+            // Sync updated HSN code to stock and inventory tables if matching sku or name
+            if (resolvedHsn) {
+                try {
+                    await db.prepare('UPDATE stock SET hsn_code = ? WHERE user_id = ? AND (sku = ? OR LOWER(name) = LOWER(?))').run(resolvedHsn, req.user.id, sku || '', name || '');
+                } catch (e) {}
+                try {
+                    await db.prepare('UPDATE inventory SET hsn_code = ? WHERE user_id = ? AND (sku = ? OR LOWER(name) = LOWER(?))').run(resolvedHsn, req.user.id, sku || '', name || '');
+                } catch (e) {}
+            }
+
+            const updated = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(targetId);
             return sendSuccess(res, updated, 'Product updated successfully');
         } catch (error) {
             console.error('[Product Controller] Update product error:', error);
