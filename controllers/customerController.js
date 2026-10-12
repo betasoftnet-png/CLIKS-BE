@@ -285,6 +285,9 @@ const customerController = {
             if (body.email) {
                 const emailErr = validateEmail(body.email, false);
                 if (emailErr) return sendError(res, emailErr, 400);
+                if (!String(body.email).trim().toLowerCase().endsWith('@bnxmail.com')) {
+                    return sendError(res, 'Email address must use the @bnxmail.com domain', 400);
+                }
             }
 
             if (body.gstin) {
@@ -299,6 +302,26 @@ const customerController = {
 
             const rawPhone = (body.phone_number || body.phone || body.mobile || body.contact || '').toString().trim();
             const rawEmail = (body.email || '').toString().trim().toLowerCase();
+
+            // Uniqueness validation for phone number and email
+            if (rawPhone) {
+                const existingPhoneCust = await db.prepare(
+                    'SELECT id, name FROM business_customers WHERE user_id = ? AND (phone = ? OR phone_number = ?)'
+                ).get(userId, rawPhone, rawPhone);
+                if (existingPhoneCust) {
+                    return sendError(res, `Already a customer with this phone number (${existingPhoneCust.name})`, 400);
+                }
+            }
+
+            if (rawEmail) {
+                const existingEmailCust = await db.prepare(
+                    'SELECT id, name FROM business_customers WHERE user_id = ? AND LOWER(email) = ?'
+                ).get(userId, rawEmail);
+                if (existingEmailCust) {
+                    return sendError(res, `Already a customer with this email (${existingEmailCust.name})`, 400);
+                }
+            }
+
             const rawGstin = (body.gstin || '').toString().trim().toUpperCase();
             const rawPan = (body.pan_number || body.pan || '').toString().trim().toUpperCase();
 
