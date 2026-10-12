@@ -22,6 +22,12 @@ const ensureInventoryTable = async () => {
     try {
         await db.prepare("ALTER TABLE inventory ADD COLUMN unit TEXT DEFAULT 'PCS'").run();
     } catch (e) {}
+    try {
+        await db.prepare("ALTER TABLE inventory ADD COLUMN hsn_code TEXT").run();
+    } catch (e) {}
+    try {
+        await db.prepare("ALTER TABLE inventory ADD COLUMN barcode TEXT").run();
+    } catch (e) {}
 };
 
 exports.getInventory = async (req, res) => {
@@ -36,7 +42,7 @@ exports.getInventory = async (req, res) => {
 };
 
 exports.addInventoryItem = async (req, res) => {
-    const { name, sku, category, unit, quantity, price, supplier, status } = req.body;
+    const { name, sku, category, unit, quantity, price, supplier, status, hsn_code, barcode } = req.body;
     try {
         const userId = req.user.id;
         const now = new Date().toISOString();
@@ -44,19 +50,26 @@ exports.addInventoryItem = async (req, res) => {
         let result;
         try {
             result = await db.prepare(
-                `INSERT INTO inventory (user_id, name, sku, category, unit, quantity, price, supplier, status, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).run([userId, name, sku, category, itemUnit, quantity || 0, price || 0, supplier, status || 'In Stock', now, now]);
+                `INSERT INTO inventory (user_id, name, sku, category, unit, quantity, price, supplier, status, hsn_code, barcode, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).run([userId, name, sku, category, itemUnit, quantity || 0, price || 0, supplier, status || 'In Stock', hsn_code || null, barcode || null, now, now]);
         } catch (e) {
-            result = await db.prepare(
-                `INSERT INTO inventory (user_id, name, sku, category, quantity, price, supplier, status, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).run([userId, name, sku, category, quantity || 0, price || 0, supplier, status || 'In Stock', now, now]);
+            try {
+                result = await db.prepare(
+                    `INSERT INTO inventory (user_id, name, sku, category, unit, quantity, price, supplier, status, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                ).run([userId, name, sku, category, itemUnit, quantity || 0, price || 0, supplier, status || 'In Stock', now, now]);
+            } catch (e2) {
+                result = await db.prepare(
+                    `INSERT INTO inventory (user_id, name, sku, category, quantity, price, supplier, status, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                ).run([userId, name, sku, category, quantity || 0, price || 0, supplier, status || 'In Stock', now, now]);
+            }
         }
         
         res.status(201).json({ 
             success: true, 
-            data: { id: result.lastInsertRowid || result.id || result[0]?.id, name, sku, category, unit: itemUnit, quantity, price, supplier, status } 
+            data: { id: result.lastInsertRowid || result.id || result[0]?.id, name, sku, category, unit: itemUnit, quantity, price, supplier, status, hsn_code, barcode } 
         });
     } catch (error) {
         console.error('Error adding inventory item:', error);
@@ -83,17 +96,26 @@ exports.updateInventoryItem = async (req, res) => {
         const price = body.price !== undefined ? parseFloat(body.price) : (body.selling_price !== undefined ? parseFloat(body.selling_price) : item.price);
         const supplier = body.supplier !== undefined ? body.supplier : item.supplier;
         const status = body.status !== undefined ? body.status : (quantity <= 0 ? 'Out of Stock' : (quantity < 10 ? 'Low Stock' : 'In Stock'));
+        const hsn_code = body.hsn_code !== undefined ? body.hsn_code : (body.hsnCode !== undefined ? body.hsnCode : item.hsn_code);
+        const barcode = body.barcode !== undefined ? body.barcode : item.barcode;
 
         try {
             await db.prepare(
-                `UPDATE inventory SET name = ?, sku = ?, category = ?, unit = ?, quantity = ?, price = ?, supplier = ?, status = ?, updated_at = ?
+                `UPDATE inventory SET name = ?, sku = ?, category = ?, unit = ?, quantity = ?, price = ?, supplier = ?, status = ?, hsn_code = ?, barcode = ?, updated_at = ?
                  WHERE id = ? AND user_id = ?`
-            ).run([name, sku, category, unit, quantity, price, supplier, status, now, id, userId]);
+            ).run([name, sku, category, unit, quantity, price, supplier, status, hsn_code || null, barcode || null, now, id, userId]);
         } catch (e) {
-            await db.prepare(
-                `UPDATE inventory SET name = ?, sku = ?, category = ?, quantity = ?, price = ?, supplier = ?, status = ?, updated_at = ?
-                 WHERE id = ? AND user_id = ?`
-            ).run([name, sku, category, quantity, price, supplier, status, now, id, userId]);
+            try {
+                await db.prepare(
+                    `UPDATE inventory SET name = ?, sku = ?, category = ?, unit = ?, quantity = ?, price = ?, supplier = ?, status = ?, updated_at = ?
+                     WHERE id = ? AND user_id = ?`
+                ).run([name, sku, category, unit, quantity, price, supplier, status, now, id, userId]);
+            } catch (e2) {
+                await db.prepare(
+                    `UPDATE inventory SET name = ?, sku = ?, category = ?, quantity = ?, price = ?, supplier = ?, status = ?, updated_at = ?
+                     WHERE id = ? AND user_id = ?`
+                ).run([name, sku, category, quantity, price, supplier, status, now, id, userId]);
+            }
         }
         
         res.json({ success: true, message: 'Inventory item updated successfully' });
