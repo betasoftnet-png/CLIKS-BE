@@ -27,13 +27,13 @@ const posController = {
         const numDiscount = parseFloat(discount_amount) || 0;
         const numRoundOff = parseFloat(round_off) || 0;
 
-        const existingLoyaltyPoints = parseFloat(req.body.existing_loyalty_points || req.body.existingLoyaltyPoints || 0) || 0;
-        let loyaltyPointsEarned = parseFloat(req.body.loyalty_points_earned || req.body.loyaltyPointsEarned || 0) || 0;
-        const loyaltyPointsRedeemed = parseFloat(req.body.loyalty_points_redeemed || req.body.loyaltyPointsRedeemed || 0) || 0;
-        
-        if (loyaltyPointsEarned === 0 && loyaltyPointsRedeemed === 0 && numTotal > 0) {
-            loyaltyPointsEarned = Math.round(numTotal * 0.1);
-        }
+        const existingLoyaltyPoints = parseFloat(req.body.existing_loyalty_points ?? req.body.existingLoyaltyPoints ?? 0) || 0;
+        let loyaltyPointsEarned = (req.body.loyalty_points_earned !== undefined && req.body.loyalty_points_earned !== null)
+            ? (parseFloat(req.body.loyalty_points_earned) || 0)
+            : ((req.body.loyaltyPointsEarned !== undefined && req.body.loyaltyPointsEarned !== null)
+                ? (parseFloat(req.body.loyaltyPointsEarned) || 0)
+                : (numTotal > 0 ? Math.round(numTotal * 0.1) : 0));
+        const loyaltyPointsRedeemed = parseFloat(req.body.loyalty_points_redeemed ?? req.body.loyaltyPointsRedeemed ?? 0) || 0;
 
         const loyaltyDiscountAmount = parseFloat(req.body.loyalty_discount_amount || req.body.loyaltyDiscount || req.body.loyalty_discount || loyaltyPointsRedeemed || 0) || 0;
         const remainingLoyaltyPoints = req.body.remaining_loyalty_points !== undefined 
