@@ -66,6 +66,11 @@ const posController = {
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN loyalty_discount_amount REAL DEFAULT 0').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN remaining_loyalty_points REAL DEFAULT 0').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN billed_by TEXT').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_name TEXT').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_address TEXT').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_phone TEXT').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_email TEXT').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_gstin TEXT').run(); } catch (e) { }
 
         // 0. Check stock availability for all items before processing checkout
         for (const item of items) {
@@ -112,6 +117,23 @@ const posController = {
             }
         }
 
+        // Resolve shop information from request body or merchant user profile/settings
+        let userRow = null;
+        try {
+            userRow = await db.prepare('SELECT business_name, settings, email FROM users WHERE id = ?').get(userId);
+        } catch (e) {}
+
+        let userSettingsObj = {};
+        if (userRow?.settings) {
+            try { userSettingsObj = JSON.parse(userRow.settings); } catch (e) {}
+        }
+
+        const resolvedShopName = req.body.shop_name || userSettingsObj.pos_shop_name || userSettingsObj.companyName || userRow?.business_name || null;
+        const resolvedShopAddress = req.body.shop_address || userSettingsObj.pos_shop_address || userSettingsObj.registeredAddress || null;
+        const resolvedShopPhone = req.body.shop_phone || userSettingsObj.pos_shop_phone || userSettingsObj.phone || null;
+        const resolvedShopEmail = req.body.shop_email || userSettingsObj.pos_shop_email || userSettingsObj.email || userRow?.email || null;
+        const resolvedShopGstin = req.body.shop_gstin || userSettingsObj.pos_shop_gstin || userSettingsObj.gstinRef || null;
+
         try {
             // 1. Insert into business_invoices
             let invoiceId;
@@ -123,33 +145,54 @@ const posController = {
                         discount_amount, round_off, status, due_date, payment_mode,
                         invoice_type, items, existing_loyalty_points, loyalty_points_earned, 
                         loyalty_points_redeemed, loyalty_discount_amount, remaining_loyalty_points, 
-                        billed_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        billed_by, shop_name, shop_address, shop_phone, shop_email, shop_gstin, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run([
                     userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null, customerId,
                     numAmount, numTax, numTotal, numPaid, numDue,
                     numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
                     'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned, 
                     loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints, 
-                    billedByName, now, now
+                    billedByName, resolvedShopName, resolvedShopAddress, resolvedShopPhone, resolvedShopEmail, resolvedShopGstin, now, now
                 ]);
                 invoiceId = result.lastInsertRowid || result.id;
             } catch (errIns) {
-                // Fallback insert if columns missing on legacy table
-                const result = await db.prepare(`
-                    INSERT INTO business_invoices (
-                        user_id, invoice_number, client_name, client_email,
-                        amount, tax_amount, total_amount, paid_amount, due_amount,
-                        discount_amount, round_off, status, due_date, payment_mode,
-                        invoice_type, items, loyalty_points_earned, loyalty_points_redeemed, billed_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `).run([
-                    userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null,
-                    numAmount, numTax, numTotal, numPaid, numDue,
-                    numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
-                    'POS', JSON.stringify(items), loyaltyPointsEarned, loyaltyPointsRedeemed, billedByName, now, now
-                ]);
-                invoiceId = result.lastInsertRowid || result.id;
+                try {
+                    // Fallback without shop columns if migration pending
+                    const result = await db.prepare(`
+                        INSERT INTO business_invoices (
+                            user_id, invoice_number, client_name, client_email, customer_id,
+                            amount, tax_amount, total_amount, paid_amount, due_amount,
+                            discount_amount, round_off, status, due_date, payment_mode,
+                            invoice_type, items, existing_loyalty_points, loyalty_points_earned, 
+                            loyalty_points_redeemed, loyalty_discount_amount, remaining_loyalty_points, 
+                            billed_by, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run([
+                        userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null, customerId,
+                        numAmount, numTax, numTotal, numPaid, numDue,
+                        numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
+                        'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned, 
+                        loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints, 
+                        billedByName, now, now
+                    ]);
+                    invoiceId = result.lastInsertRowid || result.id;
+                } catch (legacyErr) {
+                    const result = await db.prepare(`
+                        INSERT INTO business_invoices (
+                            user_id, invoice_number, client_name, client_email,
+                            amount, tax_amount, total_amount, paid_amount, due_amount,
+                            discount_amount, round_off, status, due_date, payment_mode,
+                            invoice_type, items, loyalty_points_earned, loyalty_points_redeemed, billed_by, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run([
+                        userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null,
+                        numAmount, numTax, numTotal, numPaid, numDue,
+                        numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
+                        'POS', JSON.stringify(items), loyaltyPointsEarned, loyaltyPointsRedeemed, billedByName, now, now
+                    ]);
+                    invoiceId = result.lastInsertRowid || result.id;
+                }
             }
 
             // 1.5 Atomically update Customer Loyalty Points in database upon successful payment
@@ -300,6 +343,11 @@ const posController = {
                 createdInvoice.final_loyalty_points = freshLoyaltyBalance;
                 createdInvoice.updated_customer_loyalty_points = freshLoyaltyBalance;
                 createdInvoice.billed_by = createdInvoice.billed_by || billedByName;
+                createdInvoice.shop_name = createdInvoice.shop_name || resolvedShopName;
+                createdInvoice.shop_address = createdInvoice.shop_address || resolvedShopAddress;
+                createdInvoice.shop_phone = createdInvoice.shop_phone || resolvedShopPhone;
+                createdInvoice.shop_email = createdInvoice.shop_email || resolvedShopEmail;
+                createdInvoice.shop_gstin = createdInvoice.shop_gstin || resolvedShopGstin;
             }
 
             // Real-time integration to CLIKS Customer Application
@@ -392,12 +440,36 @@ const posController = {
 
             const orders = await db.prepare(query).all(params);
 
+            let defaultShopInfo = {};
+            try {
+                const uRow = await db.prepare('SELECT business_name, settings, email FROM users WHERE id = ?').get(userId);
+                if (uRow?.settings) {
+                    try {
+                        const sObj = JSON.parse(uRow.settings);
+                        defaultShopInfo = {
+                            shop_name: sObj.pos_shop_name || sObj.companyName || uRow.business_name || null,
+                            shop_address: sObj.pos_shop_address || sObj.registeredAddress || null,
+                            shop_phone: sObj.pos_shop_phone || sObj.phone || null,
+                            shop_email: sObj.pos_shop_email || sObj.email || uRow.email || null,
+                            shop_gstin: sObj.pos_shop_gstin || sObj.gstinRef || null,
+                        };
+                    } catch (e) {}
+                } else if (uRow?.business_name) {
+                    defaultShopInfo = { shop_name: uRow.business_name };
+                }
+            } catch (e) {}
+
             const formattedOrders = orders.map(order => {
                 try {
                     order.items = typeof order.items === 'string' ? JSON.parse(order.items) : (order.items || []);
                 } catch (e) {
                     order.items = [];
                 }
+                order.shop_name = order.shop_name || defaultShopInfo.shop_name;
+                order.shop_address = order.shop_address || defaultShopInfo.shop_address;
+                order.shop_phone = order.shop_phone || defaultShopInfo.shop_phone;
+                order.shop_email = order.shop_email || defaultShopInfo.shop_email;
+                order.shop_gstin = order.shop_gstin || defaultShopInfo.shop_gstin;
                 return order;
             });
 
