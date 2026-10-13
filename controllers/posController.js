@@ -37,12 +37,12 @@ const posController = {
         const loyaltyPointsRedeemed = parseFloat(req.body.loyalty_points_redeemed ?? req.body.loyaltyPointsRedeemed ?? 0) || 0;
 
         const loyaltyDiscountAmount = parseFloat(req.body.loyalty_discount_amount || req.body.loyaltyDiscount || req.body.loyalty_discount || loyaltyPointsRedeemed || 0) || 0;
-        const remainingLoyaltyPoints = req.body.remaining_loyalty_points !== undefined 
-            ? parseFloat(req.body.remaining_loyalty_points) 
-            : (req.body.final_loyalty_points !== undefined 
-                ? parseFloat(req.body.final_loyalty_points) 
+        const remainingLoyaltyPoints = req.body.remaining_loyalty_points !== undefined
+            ? parseFloat(req.body.remaining_loyalty_points)
+            : (req.body.final_loyalty_points !== undefined
+                ? parseFloat(req.body.final_loyalty_points)
                 : Math.max(0, existingLoyaltyPoints - loyaltyPointsRedeemed + loyaltyPointsEarned));
-        
+
         const netPointsChange = loyaltyPointsEarned - loyaltyPointsRedeemed;
         let billedByName = (req.body.billed_by || req.body.billedBy || req.body.cashier_name || '').trim();
         if (!billedByName || billedByName.toLowerCase() === 'admin' || billedByName.toLowerCase() === 'cashier' || billedByName.toLowerCase() === 'system') {
@@ -51,7 +51,7 @@ const posController = {
                 try {
                     const uRow = await db.prepare('SELECT username, business_name FROM users WHERE id = ?').get(req.user.id);
                     if (uRow) billedByName = uRow.username || uRow.business_name || '';
-                } catch (e) {}
+                } catch (e) { }
             }
             if (!billedByName && req.user?.email) {
                 billedByName = req.user.email.split('@')[0];
@@ -125,7 +125,7 @@ const posController = {
                 let checkRms = [];
                 try {
                     checkRms = typeof bpItemForCheck.raw_materials === 'string' ? JSON.parse(bpItemForCheck.raw_materials) : (bpItemForCheck.raw_materials || []);
-                } catch (e) {}
+                } catch (e) { }
 
                 if (Array.isArray(checkRms) && checkRms.length > 0) {
                     for (const rm of checkRms) {
@@ -163,11 +163,11 @@ const posController = {
         let userRow = null;
         try {
             userRow = await db.prepare('SELECT business_name, settings, email FROM users WHERE id = ?').get(userId);
-        } catch (e) {}
+        } catch (e) { }
 
         let userSettingsObj = {};
         if (userRow?.settings) {
-            try { userSettingsObj = JSON.parse(userRow.settings); } catch (e) {}
+            try { userSettingsObj = JSON.parse(userRow.settings); } catch (e) { }
         }
 
         const resolvedShopName = req.body.shop_name || userSettingsObj.pos_shop_name || userSettingsObj.companyName || userRow?.business_name || null;
@@ -193,8 +193,8 @@ const posController = {
                     userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null, customerId,
                     numAmount, numTax, numTotal, numPaid, numDue,
                     numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
-                    'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned, 
-                    loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints, 
+                    'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned,
+                    loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints,
                     billedByName, resolvedShopName, resolvedShopAddress, resolvedShopPhone, resolvedShopEmail, resolvedShopGstin, now, now
                 ]);
                 invoiceId = result.lastInsertRowid || result.id;
@@ -214,8 +214,8 @@ const posController = {
                         userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null, customerId,
                         numAmount, numTax, numTotal, numPaid, numDue,
                         numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
-                        'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned, 
-                        loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints, 
+                        'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned,
+                        loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints,
                         billedByName, now, now
                     ]);
                     invoiceId = result.lastInsertRowid || result.id;
@@ -381,7 +381,7 @@ const posController = {
                         let parsedRms = [];
                         try {
                             parsedRms = typeof groupItem.raw_materials === 'string' ? JSON.parse(groupItem.raw_materials) : (groupItem.raw_materials || []);
-                        } catch (e) {}
+                        } catch (e) { }
 
                         if (Array.isArray(parsedRms) && parsedRms.length > 0) {
                             for (const rm of parsedRms) {
@@ -422,7 +422,7 @@ const posController = {
                                                 await db.prepare('UPDATE inventory SET quantity = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
                                                     .run([invNew, invStatus, now, rmInv.id, userId]);
                                             }
-                                        } catch (e) {}
+                                        } catch (e) { }
 
                                         try {
                                             const rmStock = await db.prepare('SELECT id, quantity, unit FROM stock WHERE (id = ? OR LOWER(name) = ?) AND user_id = ?').get([rmProd.id, rmProd.name.toLowerCase().trim(), userId]);
@@ -439,7 +439,7 @@ const posController = {
                                                     VALUES (?, ?, 'out', ?, ?, ?)
                                                 `).run([rmStock.id, userId, stkDeduct, now, now]);
                                             }
-                                        } catch (e) {}
+                                        } catch (e) { }
                                     }
                                 }
                             }
@@ -573,11 +573,11 @@ const posController = {
                             shop_email: sObj.pos_shop_email || sObj.email || uRow.email || null,
                             shop_gstin: sObj.pos_shop_gstin || sObj.gstinRef || null,
                         };
-                    } catch (e) {}
+                    } catch (e) { }
                 } else if (uRow?.business_name) {
                     defaultShopInfo = { shop_name: uRow.business_name };
                 }
-            } catch (e) {}
+            } catch (e) { }
 
             const formattedOrders = orders.map(order => {
                 try {
