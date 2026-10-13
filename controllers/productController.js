@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const { STANDARD_UNITS } = require('../utils/unitConversion');
 
 const productController = {
     // 1. Create Product
@@ -30,13 +31,15 @@ const productController = {
                     INSERT INTO business_products (
                         user_id, name, sku, category, brand, product_type, unit, status, stock_status, quantity, low_stock_threshold,
                         purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                        tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, shelf_number, bin_number, zone, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, shelf_number, bin_number, zone,
+                        item_role, group_id, subgroup_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                     batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
-                    resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null, now, now
+                    resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
+                    req.body.item_role || 'standard', req.body.group_id || null, req.body.subgroup_id || null, now, now
                 );
             } catch (insertError) {
                 // If column is missing in legacy SQLite schema, auto-migrate and retry
@@ -93,7 +96,7 @@ const productController = {
 
     // 2. Get Products with dynamic Filters
     getProducts: async (req, res) => {
-        const { search, category, status, stock_status, warehouse_id } = req.query;
+        const { search, category, status, stock_status, warehouse_id, item_role, group_id, subgroup_id } = req.query;
         try {
             let query = `SELECT * FROM business_products WHERE user_id = ?`;
             const params = [req.user.id];
@@ -105,6 +108,18 @@ const productController = {
             if (category) {
                 query += ` AND category = ?`;
                 params.push(category);
+            }
+            if (item_role) {
+                query += ` AND item_role = ?`;
+                params.push(item_role);
+            }
+            if (group_id) {
+                query += ` AND group_id = ?`;
+                params.push(group_id);
+            }
+            if (subgroup_id) {
+                query += ` AND subgroup_id = ?`;
+                params.push(subgroup_id);
             }
             if (status) {
                 query += ` AND status = ?`;
@@ -189,6 +204,10 @@ const productController = {
             const bin_number = body.bin_number !== undefined ? body.bin_number : product.bin_number;
             const zone = body.zone !== undefined ? body.zone : product.zone;
 
+            const item_role = body.item_role !== undefined ? body.item_role : (product.item_role || 'standard');
+            const group_id = body.group_id !== undefined ? body.group_id : (product.group_id || null);
+            const subgroup_id = body.subgroup_id !== undefined ? body.subgroup_id : (product.subgroup_id || null);
+
             const targetId = product.id;
 
             try {
@@ -198,24 +217,26 @@ const productController = {
                         low_stock_threshold = ?, purchase_price = ?, selling_price = ?, barcode = ?,
                         serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?,
                         warehouse_id = ?, hsn_code = ?, has_warranty = ?, warranty_period = ?,
-                        min_stock = ?, reorder_level = ?, damaged_stock = ?, expired_stock = ?, rack_number = ?, shelf_number = ?, bin_number = ?, zone = ?, updated_at = ?
+                        min_stock = ?, reorder_level = ?, damaged_stock = ?, expired_stock = ?, rack_number = ?, shelf_number = ?, bin_number = ?, zone = ?,
+                        item_role = ?, group_id = ?, subgroup_id = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
                     name, sku || null, category || null, brand || null, product_type || 'product', unit, status || 'active', newStockStatus,
                     newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
                     barcode || null, serial_number || null, batch_number || null, expiry_date || null,
                     tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null,
-                    min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, rack_number || null, shelf_number || null, bin_number || null, zone || null, new Date().toISOString(), targetId, req.user.id
+                    min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, rack_number || null, shelf_number || null, bin_number || null, zone || null,
+                    item_role, group_id, subgroup_id, new Date().toISOString(), targetId, req.user.id
                 );
             } catch (sqlErr) {
                 await db.prepare(`
                     UPDATE business_products SET
                         name = ?, sku = ?, category = ?, brand = ?, product_type = ?, status = ?, stock_status = ?, quantity = ?,
-                        selling_price = ?, hsn_code = ?, updated_at = ?
+                        selling_price = ?, hsn_code = ?, item_role = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
                     name, sku || null, category || null, brand || null, product_type || 'product', status || 'active', newStockStatus,
-                    newQuantity, selling_price || 0, resolvedHsn, new Date().toISOString(), targetId, req.user.id
+                    newQuantity, selling_price || 0, resolvedHsn, item_role, new Date().toISOString(), targetId, req.user.id
                 );
             }
 
@@ -563,36 +584,110 @@ const productController = {
 
     // 17. Categories
     createCategory: async (req, res) => {
-        const { category_name } = req.body;
-        if (!category_name) return sendError(res, 'Category name is required', 400);
+        const { category_name, parent_id, description } = req.body || {};
+        if (!category_name || !String(category_name).trim()) return sendError(res, 'Category name is required', 400);
+        
         try {
+            // Prevent duplicate group/subgroup names within company scope
+            const trimmedName = String(category_name).trim();
+            const parentVal = parent_id ? Number(parent_id) : null;
+            
+            let dupQuery = 'SELECT id FROM product_categories WHERE user_id = ? AND LOWER(TRIM(category_name)) = LOWER(?)';
+            const dupParams = [req.user.id, trimmedName];
+            if (parentVal !== null) {
+                dupQuery += ' AND parent_id = ?';
+                dupParams.push(parentVal);
+            } else {
+                dupQuery += ' AND (parent_id IS NULL OR parent_id = 0)';
+            }
+            
+            const existing = await db.prepare(dupQuery).get(...dupParams);
+            if (existing) {
+                return sendError(res, parentVal ? 'A subgroup with this name already exists in this group' : 'A product group with this name already exists', 400);
+            }
+
             const result = await db.prepare(`
-                INSERT INTO product_categories (user_id, category_name, created_at)
-                VALUES (?, ?, ?)
-            `).run(req.user.id, category_name, new Date().toISOString());
+                INSERT INTO product_categories (user_id, category_name, parent_id, description, is_active, created_at)
+                VALUES (?, ?, ?, ?, 1, ?)
+            `).run(req.user.id, trimmedName, parentVal, description || null, new Date().toISOString());
 
             const created = await db.prepare('SELECT * FROM product_categories WHERE id = ?').get(result.lastInsertRowid);
             return sendSuccess(res, created, 'Category created successfully', 201);
         } catch (error) {
+            console.error('[Product Controller] Create category error:', error);
             return sendError(res, 'Failed to add category', 500);
         }
     },
 
     getCategories: async (req, res) => {
         try {
-            const cats = await db.prepare('SELECT DISTINCT category as category_name FROM business_products WHERE user_id = ? UNION SELECT category_name FROM product_categories WHERE user_id = ?').all(req.user.id, req.user.id);
-            return sendSuccess(res, cats, 'Product categories fetched successfully');
+            // Fetch all structured categories with parent hierarchy
+            const allCategories = await db.prepare(`
+                SELECT c.*, p.category_name as parent_name 
+                FROM product_categories c
+                LEFT JOIN product_categories p ON c.parent_id = p.id
+                WHERE c.user_id = ?
+                ORDER BY c.parent_id ASC, c.category_name ASC
+            `).all(req.user.id);
+
+            // Also keep distinct category names from business_products for backward compatibility
+            const productCats = await db.prepare('SELECT DISTINCT category as category_name FROM business_products WHERE user_id = ? AND category IS NOT NULL AND category != \'\'').all(req.user.id);
+            
+            const existingNames = new Set(allCategories.map(c => c.category_name.toLowerCase()));
+            productCats.forEach(p => {
+                if (!existingNames.has(p.category_name.toLowerCase())) {
+                    allCategories.push({
+                        id: null,
+                        user_id: req.user.id,
+                        category_name: p.category_name,
+                        parent_id: null,
+                        parent_name: null,
+                        is_active: 1
+                    });
+                }
+            });
+
+            // Separate into top-level groups and subgroups
+            const groups = allCategories.filter(c => !c.parent_id);
+            const subgroups = allCategories.filter(c => !!c.parent_id);
+
+            return sendSuccess(res, {
+                categories: allCategories,
+                groups,
+                subgroups
+            }, 'Product categories fetched successfully');
         } catch (error) {
+            console.error('[Product Controller] Error loading categories:', error);
             return sendError(res, 'Failed to load categories', 500);
         }
     },
 
     updateCategory: async (req, res) => {
         const { categoryId } = req.params;
-        const { category_name } = req.body;
+        const { category_name, parent_id, description, is_active } = req.body || {};
         try {
-            await db.prepare('UPDATE product_categories SET category_name = ? WHERE id = ?').run(category_name, categoryId);
-            return sendSuccess(res, null, 'Category updated successfully');
+            const existing = await db.prepare('SELECT * FROM product_categories WHERE id = ? AND user_id = ?').get(categoryId, req.user.id);
+            if (!existing) return sendError(res, 'Category not found', 404);
+
+            const trimmedName = category_name ? String(category_name).trim() : existing.category_name;
+            const parentVal = parent_id !== undefined ? (parent_id ? Number(parent_id) : null) : existing.parent_id;
+            const activeVal = is_active !== undefined ? (is_active ? 1 : 0) : existing.is_active;
+            const descVal = description !== undefined ? description : existing.description;
+
+            // Check duplicate if name changed
+            if (trimmedName.toLowerCase() !== existing.category_name.toLowerCase()) {
+                const dup = await db.prepare('SELECT id FROM product_categories WHERE user_id = ? AND LOWER(TRIM(category_name)) = LOWER(?) AND id != ?').get(req.user.id, trimmedName, categoryId);
+                if (dup) return sendError(res, 'A category with this name already exists', 400);
+            }
+
+            await db.prepare(`
+                UPDATE product_categories 
+                SET category_name = ?, parent_id = ?, description = ?, is_active = ?
+                WHERE id = ? AND user_id = ?
+            `).run(trimmedName, parentVal, descVal, activeVal, categoryId, req.user.id);
+
+            const updated = await db.prepare('SELECT * FROM product_categories WHERE id = ?').get(categoryId);
+            return sendSuccess(res, updated, 'Category updated successfully');
         } catch (error) {
             return sendError(res, 'Failed to update category', 500);
         }
@@ -601,17 +696,23 @@ const productController = {
     deleteCategory: async (req, res) => {
         const { categoryId } = req.params;
         try {
-            await db.prepare('DELETE FROM product_categories WHERE id = ?').run(categoryId);
+            // Check if any subcategories exist
+            const children = await db.prepare('SELECT id FROM product_categories WHERE parent_id = ? AND user_id = ?').all(categoryId, req.user.id);
+            if (children && children.length > 0) {
+                return sendError(res, 'Cannot delete category that contains subgroups. Deactivate it or delete subgroups first.', 400);
+            }
+
+            const result = await db.prepare('DELETE FROM product_categories WHERE id = ? AND user_id = ?').run(categoryId, req.user.id);
+            if (result.changes === 0) return sendError(res, 'Category not found', 404);
             return sendSuccess(res, null, 'Category removed successfully');
         } catch (error) {
             return sendError(res, 'Failed to remove category', 500);
         }
     },
 
-    // 18. Units
+    // 18. Units with standard conversion definitions
     getUnits: async (req, res) => {
-        const units = [{ id: 1, name: 'pcs' }, { id: 2, name: 'box' }, { id: 3, name: 'kgs' }, { id: 4, name: 'packet' }];
-        return sendSuccess(res, units, 'Units list fetched successfully');
+        return sendSuccess(res, STANDARD_UNITS, 'Units list fetched successfully');
     },
 
     // 19. Warehouse

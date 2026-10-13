@@ -3007,6 +3007,13 @@ CREATE TABLE IF NOT EXISTS money_trackers (
     try {
       await db.prepare("ALTER TABLE business_invoices ADD COLUMN SignedQRCode TEXT").run();
     } catch (_) {}
+    // ── Manufacturing & Production Management Migrations ──────────────────
+    try {
+      const { runManufacturingMigrations } = require('./manufacturingMigration');
+      await runManufacturingMigrations();
+    } catch (mfgErr) {
+      console.warn("⚠️ Error initializing manufacturing tables migration:", mfgErr.message);
+    }
   } catch (invErr) {
     console.warn("⚠️ Error initializing inventory, stock, or compliance tables migration:", invErr.message);
   }

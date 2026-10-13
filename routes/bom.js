@@ -24,6 +24,7 @@ router.get('/reports/efficiency', bomController.getReportEfficiency);
 
 // Specific ID Routes
 router.get('/:id', bomController.getBomById);
+router.get('/:id/calculate-requirements', bomController.calculateRequirements);
 router.put('/:id', bomController.updateBom);
 router.delete('/:id', bomController.deleteBom);
 
