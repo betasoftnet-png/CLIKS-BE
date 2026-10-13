@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { processCustomerInvoiceIntegration } = require('../utils/customerIntegration');
+const { convertUnit } = require('../utils/unitConversion');
 
 const posController = {
     // POS Checkout: Create Invoice and Decrement stock
@@ -112,7 +113,48 @@ const posController = {
                 if (stk && (maxQty === null || parseFloat(stk.quantity) > maxQty)) maxQty = parseFloat(stk.quantity) || 0;
             }
 
-            if (maxQty !== null && sellQty > maxQty) {
+            // Check raw materials availability if item is a group product
+            let bpItemForCheck = null;
+            if (itemId) {
+                bpItemForCheck = await db.prepare('SELECT id, is_group_product, raw_materials FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
+            }
+            if (!bpItemForCheck && cleanName) {
+                bpItemForCheck = await db.prepare('SELECT id, is_group_product, raw_materials FROM business_products WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
+            }
+            if (bpItemForCheck && (bpItemForCheck.is_group_product || bpItemForCheck.raw_materials)) {
+                let checkRms = [];
+                try {
+                    checkRms = typeof bpItemForCheck.raw_materials === 'string' ? JSON.parse(bpItemForCheck.raw_materials) : (bpItemForCheck.raw_materials || []);
+                } catch (e) {}
+
+                if (Array.isArray(checkRms) && checkRms.length > 0) {
+                    for (const rm of checkRms) {
+                        const rmQty = parseFloat(rm.quantity) || 0;
+                        const totalRmNeeded = rmQty * sellQty;
+                        const rmUnit = rm.unit || 'PCS';
+                        const rmId = rm.product_id || rm.id;
+                        const rmName = rm.name || 'Raw Material';
+
+                        if (totalRmNeeded > 0) {
+                            let rmProd = null;
+                            if (rmId) rmProd = await db.prepare('SELECT quantity, unit FROM business_products WHERE id = ? AND user_id = ?').get([rmId, userId]);
+                            if (!rmProd && rmName) rmProd = await db.prepare('SELECT quantity, unit FROM business_products WHERE LOWER(name) = ? AND user_id = ?').get([rmName.toLowerCase().trim(), userId]);
+
+                            if (rmProd) {
+                                const rawStockUnit = rmProd.unit || rmUnit;
+                                const deductQty = convertUnit(totalRmNeeded, rmUnit, rawStockUnit);
+                                const avail = parseFloat(rmProd.quantity) || 0;
+                                if (deductQty > avail) {
+                                    return sendError(res, `Cannot complete checkout. Insufficient stock for ingredient "${rmName}". Needed: ${deductQty} ${rawStockUnit}, Available: ${avail} ${rawStockUnit} (for ${sellQty}x "${itemName}").`, 400);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            const isItemUnlimited = Boolean(item.isUnlimited || (maxQty !== null && maxQty >= 999000));
+            if (!isItemUnlimited && maxQty !== null && sellQty > maxQty) {
                 return sendError(res, `Cannot complete checkout. Requested quantity (${sellQty}) for "${itemName}" exceeds available stock (${maxQty}).`, 400);
             }
         }
@@ -259,13 +301,13 @@ const posController = {
                     // 2a. Update business_products (Inventory -> Products)
                     let prodItem = null;
                     if (itemId && item.source === 'products') {
-                        prodItem = await db.prepare('SELECT id, quantity, low_stock_threshold FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                        prodItem = await db.prepare('SELECT id, quantity, low_stock_threshold, is_group_product, raw_materials FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
                     }
                     if (!prodItem && itemId) {
-                        prodItem = await db.prepare('SELECT id, quantity, low_stock_threshold FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                        prodItem = await db.prepare('SELECT id, quantity, low_stock_threshold, is_group_product, raw_materials FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
                     }
                     if (!prodItem && cleanName) {
-                        prodItem = await db.prepare('SELECT id, quantity, low_stock_threshold FROM business_products WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
+                        prodItem = await db.prepare('SELECT id, quantity, low_stock_threshold, is_group_product, raw_materials FROM business_products WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
                     }
 
                     if (prodItem) {
@@ -324,6 +366,84 @@ const posController = {
                             INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at)
                             VALUES (?, ?, 'out', ?, ?, ?)
                         `).run([stockItem.id, userId, sellQty, now, now]);
+                    }
+
+                    // 2d. Group Product: Deduct raw materials/ingredients stock
+                    let groupItem = prodItem;
+                    if (!groupItem && itemId) {
+                        groupItem = await db.prepare('SELECT id, is_group_product, raw_materials FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
+                    }
+                    if (!groupItem && cleanName) {
+                        groupItem = await db.prepare('SELECT id, is_group_product, raw_materials FROM business_products WHERE LOWER(name) = ? AND user_id = ?').get([cleanName, userId]);
+                    }
+
+                    if (groupItem && (groupItem.is_group_product || groupItem.raw_materials)) {
+                        let parsedRms = [];
+                        try {
+                            parsedRms = typeof groupItem.raw_materials === 'string' ? JSON.parse(groupItem.raw_materials) : (groupItem.raw_materials || []);
+                        } catch (e) {}
+
+                        if (Array.isArray(parsedRms) && parsedRms.length > 0) {
+                            for (const rm of parsedRms) {
+                                const rmQty = parseFloat(rm.quantity) || 0;
+                                const totalRmNeeded = rmQty * sellQty;
+                                const rmUnit = rm.unit || 'PCS';
+                                const rmId = rm.product_id || rm.id;
+                                const rmName = rm.name || '';
+
+                                if (totalRmNeeded > 0 && (rmId || rmName)) {
+                                    let rmProd = null;
+                                    if (rmId) {
+                                        rmProd = await db.prepare('SELECT id, name, unit, quantity, low_stock_threshold FROM business_products WHERE id = ? AND user_id = ?').get([rmId, userId]);
+                                    }
+                                    if (!rmProd && rmName) {
+                                        rmProd = await db.prepare('SELECT id, name, unit, quantity, low_stock_threshold FROM business_products WHERE LOWER(name) = ? AND user_id = ?').get([rmName.toLowerCase().trim(), userId]);
+                                    }
+
+                                    if (rmProd) {
+                                        const rawStockUnit = rmProd.unit || rmUnit;
+                                        const deductQty = convertUnit(totalRmNeeded, rmUnit, rawStockUnit);
+                                        const currentQty = parseFloat(rmProd.quantity) || 0;
+                                        const newQty = Math.max(0, currentQty - deductQty);
+                                        const lowThreshold = parseFloat(rmProd.low_stock_threshold) || 5;
+                                        const newStatus = newQty <= 0 ? 'Out of Stock' : (newQty <= lowThreshold ? 'Low Stock' : 'In Stock');
+
+                                        await db.prepare('UPDATE business_products SET quantity = ?, stock_status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+                                            .run([newQty, newStatus, now, rmProd.id, userId]);
+
+                                        try {
+                                            const rmInv = await db.prepare('SELECT id, quantity, unit FROM inventory WHERE (id = ? OR LOWER(name) = ?) AND user_id = ?').get([rmProd.id, rmProd.name.toLowerCase().trim(), userId]);
+                                            if (rmInv) {
+                                                const invUnit = rmInv.unit || rawStockUnit;
+                                                const invDeduct = convertUnit(totalRmNeeded, rmUnit, invUnit);
+                                                const invCurrent = parseFloat(rmInv.quantity) || 0;
+                                                const invNew = Math.max(0, invCurrent - invDeduct);
+                                                const invStatus = invNew <= 0 ? 'Out of Stock' : (invNew < 10 ? 'Low Stock' : 'In Stock');
+                                                await db.prepare('UPDATE inventory SET quantity = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+                                                    .run([invNew, invStatus, now, rmInv.id, userId]);
+                                            }
+                                        } catch (e) {}
+
+                                        try {
+                                            const rmStock = await db.prepare('SELECT id, quantity, unit FROM stock WHERE (id = ? OR LOWER(name) = ?) AND user_id = ?').get([rmProd.id, rmProd.name.toLowerCase().trim(), userId]);
+                                            if (rmStock) {
+                                                const stkUnit = rmStock.unit || rawStockUnit;
+                                                const stkDeduct = convertUnit(totalRmNeeded, rmUnit, stkUnit);
+                                                const stkCurrent = parseFloat(rmStock.quantity) || 0;
+                                                const stkNew = Math.max(0, stkCurrent - stkDeduct);
+                                                await db.prepare('UPDATE stock SET quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+                                                    .run([stkNew, now, rmStock.id, userId]);
+
+                                                await db.prepare(`
+                                                    INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at)
+                                                    VALUES (?, ?, 'out', ?, ?, ?)
+                                                `).run([rmStock.id, userId, stkDeduct, now, now]);
+                                            }
+                                        } catch (e) {}
+                                    }
+                                }
+                            }
+                        }
                     }
                 } catch (errStock) {
                     console.error('[POS Controller] Error updating stock for item:', itemId, errStock);

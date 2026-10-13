@@ -18,6 +18,18 @@ const productController = {
         }
         const resolvedHsn = hsn_code || hsn_sac || hsn || null;
 
+        const is_group_product = (req.body.is_group_product || req.body.isGroupProduct) ? 1 : 0;
+        const raw_materials = req.body.raw_materials !== undefined
+            ? (typeof req.body.raw_materials === 'string' ? req.body.raw_materials : JSON.stringify(req.body.raw_materials))
+            : (req.body.rawMaterials !== undefined ? (typeof req.body.rawMaterials === 'string' ? req.body.rawMaterials : JSON.stringify(req.body.rawMaterials)) : null);
+
+        try { await db.prepare("ALTER TABLE business_products ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
+        try { await db.prepare("ALTER TABLE business_products ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
+        try { await db.prepare("ALTER TABLE inventory ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
+        try { await db.prepare("ALTER TABLE inventory ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
+        try { await db.prepare("ALTER TABLE stock ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
+        try { await db.prepare("ALTER TABLE stock ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
+
         const rawHasWarranty = has_warranty || warrantyDetails || 'No';
         const isWarrantyYes = rawHasWarranty === 'Yes' || rawHasWarranty === true || String(rawHasWarranty).toLowerCase() === 'yes';
         const finalHasWarranty = isWarrantyYes ? 'Yes' : 'No';
@@ -32,14 +44,14 @@ const productController = {
                         user_id, name, sku, category, brand, product_type, unit, status, stock_status, quantity, low_stock_threshold,
                         purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
                         tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, shelf_number, bin_number, zone,
-                        item_role, group_id, subgroup_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        item_role, group_id, subgroup_id, is_group_product, raw_materials, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                     batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
                     resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
-                    req.body.item_role || 'standard', req.body.group_id || null, req.body.subgroup_id || null, now, now
+                    req.body.item_role || 'standard', req.body.group_id || null, req.body.subgroup_id || null, is_group_product, raw_materials, now, now
                 );
             } catch (insertError) {
                 // If column is missing in legacy SQLite schema, auto-migrate and retry
@@ -48,18 +60,22 @@ const productController = {
                     try { await db.prepare("ALTER TABLE business_products ADD COLUMN warranty_period TEXT").run(); } catch (_) {}
                     try { await db.prepare("ALTER TABLE business_products ADD COLUMN bin_number TEXT").run(); } catch (_) {}
                     try { await db.prepare("ALTER TABLE business_products ADD COLUMN zone TEXT").run(); } catch (_) {}
+                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
+                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
                     
                     result = await db.prepare(`
                         INSERT INTO business_products (
                             user_id, name, sku, category, brand, product_type, unit, status, stock_status, quantity, low_stock_threshold,
                             purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                            tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, shelf_number, bin_number, zone, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, shelf_number, bin_number, zone,
+                            is_group_product, raw_materials, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `).run(
                         req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                         purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
                         batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
-                        resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null, now, now
+                        resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
+                        is_group_product, raw_materials, now, now
                     );
                 } else {
                     throw insertError;
@@ -208,6 +224,13 @@ const productController = {
             const group_id = body.group_id !== undefined ? body.group_id : (product.group_id || null);
             const subgroup_id = body.subgroup_id !== undefined ? body.subgroup_id : (product.subgroup_id || null);
 
+            const is_group_product = body.is_group_product !== undefined 
+                ? (body.is_group_product ? 1 : 0) 
+                : (body.isGroupProduct !== undefined ? (body.isGroupProduct ? 1 : 0) : (product.is_group_product || 0));
+            const raw_materials = body.raw_materials !== undefined 
+                ? (typeof body.raw_materials === 'string' ? body.raw_materials : JSON.stringify(body.raw_materials))
+                : (body.rawMaterials !== undefined ? (typeof body.rawMaterials === 'string' ? body.rawMaterials : JSON.stringify(body.rawMaterials)) : (product.raw_materials || null));
+
             const targetId = product.id;
 
             try {
@@ -218,7 +241,7 @@ const productController = {
                         serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?,
                         warehouse_id = ?, hsn_code = ?, has_warranty = ?, warranty_period = ?,
                         min_stock = ?, reorder_level = ?, damaged_stock = ?, expired_stock = ?, rack_number = ?, shelf_number = ?, bin_number = ?, zone = ?,
-                        item_role = ?, group_id = ?, subgroup_id = ?, updated_at = ?
+                        item_role = ?, group_id = ?, subgroup_id = ?, is_group_product = ?, raw_materials = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
                     name, sku || null, category || null, brand || null, product_type || 'product', unit, status || 'active', newStockStatus,
@@ -226,17 +249,17 @@ const productController = {
                     barcode || null, serial_number || null, batch_number || null, expiry_date || null,
                     tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null,
                     min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, rack_number || null, shelf_number || null, bin_number || null, zone || null,
-                    item_role, group_id, subgroup_id, new Date().toISOString(), targetId, req.user.id
+                    item_role, group_id, subgroup_id, is_group_product, raw_materials, new Date().toISOString(), targetId, req.user.id
                 );
             } catch (sqlErr) {
                 await db.prepare(`
                     UPDATE business_products SET
                         name = ?, sku = ?, category = ?, brand = ?, product_type = ?, status = ?, stock_status = ?, quantity = ?,
-                        selling_price = ?, hsn_code = ?, item_role = ?, updated_at = ?
+                        selling_price = ?, hsn_code = ?, item_role = ?, is_group_product = ?, raw_materials = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
                     name, sku || null, category || null, brand || null, product_type || 'product', status || 'active', newStockStatus,
-                    newQuantity, selling_price || 0, resolvedHsn, item_role, new Date().toISOString(), targetId, req.user.id
+                    newQuantity, selling_price || 0, resolvedHsn, item_role, is_group_product, raw_materials, new Date().toISOString(), targetId, req.user.id
                 );
             }
 
