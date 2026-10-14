@@ -35,6 +35,8 @@ const productController = {
         const finalHasWarranty = isWarrantyYes ? 'Yes' : 'No';
         const finalWarrantyPeriod = isWarrantyYes ? (warranty_period || warrantyPeriod || null) : null;
 
+        const resolvedTax = (tax_percentage !== undefined && tax_percentage !== null && tax_percentage !== '' && !isNaN(Number(tax_percentage))) ? Number(tax_percentage) : 18;
+
         try {
             const now = new Date().toISOString();
             let result;
@@ -49,7 +51,7 @@ const productController = {
                 `).run(
                     req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
-                    batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
+                    batch_number || null, expiry_date || null, resolvedTax, warehouse_id || null,
                     resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
                     req.body.item_role || 'standard', req.body.group_id || null, req.body.subgroup_id || null, is_group_product, raw_materials, now, now
                 );
@@ -73,7 +75,7 @@ const productController = {
                     `).run(
                         req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                         purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
-                        batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
+                        batch_number || null, expiry_date || null, resolvedTax, warehouse_id || null,
                         resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
                         is_group_product, raw_materials, now, now
                     );
@@ -98,7 +100,7 @@ const productController = {
                 `).run(
                     req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
                     purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
-                    batch_number || null, expiry_date || null, tax_percentage || 18, warehouse_id || null,
+                    batch_number || null, expiry_date || null, resolvedTax, warehouse_id || null,
                     resolvedHsn, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null, now, now
                 );
                 const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(fallbackResult.lastInsertRowid);
@@ -204,7 +206,8 @@ const productController = {
             const serial_number = body.serial_number !== undefined ? body.serial_number : product.serial_number;
             const batch_number = body.batch_number !== undefined ? body.batch_number : product.batch_number;
             const expiry_date = body.expiry_date !== undefined ? body.expiry_date : product.expiry_date;
-            const tax_percentage = body.tax_percentage !== undefined ? body.tax_percentage : product.tax_percentage;
+            const rawTax = body.tax_percentage !== undefined ? body.tax_percentage : (body.taxRate !== undefined ? body.taxRate : product.tax_percentage);
+            const resolvedTax = (rawTax !== undefined && rawTax !== null && rawTax !== '' && !isNaN(Number(rawTax))) ? Number(rawTax) : 18;
             const warehouse_id = body.warehouse_id !== undefined ? body.warehouse_id : product.warehouse_id;
             const resolvedHsn = body.hsn_code || body.hsn_sac || body.hsn || product.hsn_code || null;
             const has_warranty = body.has_warranty !== undefined ? body.has_warranty : (product.has_warranty || 'No');
@@ -247,7 +250,7 @@ const productController = {
                     name, sku || null, category || null, brand || null, product_type || 'product', unit, status || 'active', newStockStatus,
                     newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
                     barcode || null, serial_number || null, batch_number || null, expiry_date || null,
-                    tax_percentage || 18, warehouse_id || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null,
+                    resolvedTax, warehouse_id || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null,
                     min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, rack_number || null, shelf_number || null, bin_number || null, zone || null,
                     item_role, group_id, subgroup_id, is_group_product, raw_materials, new Date().toISOString(), targetId, req.user.id
                 );
@@ -906,7 +909,7 @@ const productController = {
                         item.serial_number || null,
                         item.batch_number || null,
                         item.expiry_date || null,
-                        item.tax_percentage || 18,
+                        (item.tax_percentage !== undefined && item.tax_percentage !== null && item.tax_percentage !== '' && !isNaN(Number(item.tax_percentage))) ? Number(item.tax_percentage) : 18,
                         item.warehouse_id || 'Main Godown',
                         now,
                         now
