@@ -273,7 +273,13 @@ app.use('/api/v1/tax-audit',     (req, res, next) => {
 app.use('/api/v1/gst',           auth, require('./routes/gst'));
 app.use('/api/v1/tasks',         auth, require('./routes/tasks'));
 app.use('/api/v1/notifications', auth, require('./routes/notifications'));
-app.use('/api/v1/presence',      auth, require('./routes/presence'));
+app.use('/api/v1/presence', (req, res, next) => {
+    if (req.path === '/logout') {
+        const { optionalAuth } = require('./middleware/auth');
+        return optionalAuth(req, res, next);
+    }
+    return auth(req, res, next);
+}, require('./routes/presence'));
 app.use('/api/v1/gst-credentials', auth, require('./routes/gstCredentials'));
 app.use('/api/v1/vendors',          auth, require('./routes/vendors'));
 app.use('/api/v1/bank-accounts',    auth, require('./routes/bankAccounts'));

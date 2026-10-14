@@ -3495,8 +3495,12 @@ const caController = {
 
     setUserOffline: async (req, res) => {
         try {
-            const userId = req.user.id;
+            const userId = req.user?.id;
             const now = new Date().toISOString();
+
+            if (!userId) {
+                return sendSuccess(res, { status: 'Offline', logoutTime: now }, 'User offline presence recorded');
+            }
 
             if (userId === 9999 || userId === 8888) {
                 return sendSuccess(res, { userId, status: 'Offline', logoutTime: now }, 'Admin offline presence bypassed');
