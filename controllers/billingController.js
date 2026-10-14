@@ -245,15 +245,35 @@ const billingController = {
                 console.error('[Billing Controller] Warranty sync notice:', warrErr.message || warrErr);
             }
 
-            // Loyalty Points Module
+            // Loyalty Points Module (Enforce business owner setting from database)
             if (resolvedCustomerId) {
-                const earned = parseInt(req.body.loyalty_points_earned) || 0;
-                const redeemed = parseInt(req.body.loyalty_points_redeemed) || 0;
-                if (earned > 0 || redeemed > 0) {
-                    try {
-                        await db.prepare('UPDATE business_customers SET loyalty_points = COALESCE(loyalty_points, 0) + ? - ? WHERE id = ?').run(earned, redeemed, resolvedCustomerId);
-                    } catch (e) {
-                        console.error('[Billing Controller] Failed to update loyalty points:', e);
+                let isLoyaltyEnabled = true;
+                try {
+                    const lRow = await db.prepare('SELECT loyalty_enabled FROM business_loyalty_settings WHERE user_id = ?').get(req.user.id);
+                    if (lRow && (lRow.loyalty_enabled === 0 || lRow.loyalty_enabled === false)) {
+                        isLoyaltyEnabled = false;
+                    } else if (!lRow) {
+                        const uRow = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+                        if (uRow && uRow.settings) {
+                            const parsed = JSON.parse(uRow.settings);
+                            if (parsed.loyaltyEnabled === false || parsed.loyalty === false) {
+                                isLoyaltyEnabled = false;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[Billing Controller] Failed to check loyalty settings:', e.message);
+                }
+
+                if (isLoyaltyEnabled) {
+                    const earned = parseInt(req.body.loyalty_points_earned) || 0;
+                    const redeemed = parseInt(req.body.loyalty_points_redeemed) || 0;
+                    if (earned > 0 || redeemed > 0) {
+                        try {
+                            await db.prepare('UPDATE business_customers SET loyalty_points = COALESCE(loyalty_points, 0) + ? - ? WHERE id = ?').run(earned, redeemed, resolvedCustomerId);
+                        } catch (e) {
+                            console.error('[Billing Controller] Failed to update loyalty points:', e);
+                        }
                     }
                 }
             }

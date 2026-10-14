@@ -177,6 +177,7 @@ app.use('/api/v1/profile',          auth, require('./routes/profile'));
 
 // Settings (persistent user preferences)
 app.use('/api/v1/settings',         auth, require('./routes/settings'));
+app.use(['/api/v1/loyalty', '/api/v1/loyalty-program'], auth, require('./routes/loyalty'));
 
 // Storage allocation & usage (modular routes with granular auth)
 app.use('/api/v1/storage',          require('./routes/storage'));

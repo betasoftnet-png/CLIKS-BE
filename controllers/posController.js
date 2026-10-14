@@ -28,22 +28,46 @@ const posController = {
         const numDiscount = parseFloat(discount_amount) || 0;
         const numRoundOff = parseFloat(round_off) || 0;
 
-        const existingLoyaltyPoints = parseFloat(req.body.existing_loyalty_points ?? req.body.existingLoyaltyPoints ?? 0) || 0;
-        let loyaltyPointsEarned = (req.body.loyalty_points_earned !== undefined && req.body.loyalty_points_earned !== null)
-            ? (parseFloat(req.body.loyalty_points_earned) || 0)
-            : ((req.body.loyaltyPointsEarned !== undefined && req.body.loyaltyPointsEarned !== null)
-                ? (parseFloat(req.body.loyaltyPointsEarned) || 0)
-                : (numTotal > 0 ? Math.round(numTotal * 0.1) : 0));
-        const loyaltyPointsRedeemed = parseFloat(req.body.loyalty_points_redeemed ?? req.body.loyaltyPointsRedeemed ?? 0) || 0;
+        let isLoyaltyEnabled = true;
+        try {
+            const lRow = await db.prepare('SELECT loyalty_enabled FROM business_loyalty_settings WHERE user_id = ?').get(userId);
+            if (lRow && (lRow.loyalty_enabled === 0 || lRow.loyalty_enabled === false)) {
+                isLoyaltyEnabled = false;
+            } else if (!lRow) {
+                const uRow = await db.prepare('SELECT settings FROM users WHERE id = ?').get(userId);
+                if (uRow && uRow.settings) {
+                    const parsed = JSON.parse(uRow.settings);
+                    if (parsed.loyaltyEnabled === false || parsed.loyalty === false) {
+                        isLoyaltyEnabled = false;
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[POS Controller] Error checking loyalty settings:', e.message);
+        }
 
-        const loyaltyDiscountAmount = parseFloat(req.body.loyalty_discount_amount || req.body.loyaltyDiscount || req.body.loyalty_discount || loyaltyPointsRedeemed || 0) || 0;
-        const remainingLoyaltyPoints = req.body.remaining_loyalty_points !== undefined
-            ? parseFloat(req.body.remaining_loyalty_points)
-            : (req.body.final_loyalty_points !== undefined
-                ? parseFloat(req.body.final_loyalty_points)
-                : Math.max(0, existingLoyaltyPoints - loyaltyPointsRedeemed + loyaltyPointsEarned));
+        const existingLoyaltyPoints = isLoyaltyEnabled ? (parseFloat(req.body.existing_loyalty_points ?? req.body.existingLoyaltyPoints ?? 0) || 0) : 0;
+        let loyaltyPointsEarned = 0;
+        let loyaltyPointsRedeemed = 0;
+        let loyaltyDiscountAmount = 0;
+        let remainingLoyaltyPoints = 0;
 
-        const netPointsChange = loyaltyPointsEarned - loyaltyPointsRedeemed;
+        if (isLoyaltyEnabled) {
+            loyaltyPointsEarned = (req.body.loyalty_points_earned !== undefined && req.body.loyalty_points_earned !== null)
+                ? (parseFloat(req.body.loyalty_points_earned) || 0)
+                : ((req.body.loyaltyPointsEarned !== undefined && req.body.loyaltyPointsEarned !== null)
+                    ? (parseFloat(req.body.loyaltyPointsEarned) || 0)
+                    : (numTotal > 0 ? Math.round(numTotal * 0.1) : 0));
+            loyaltyPointsRedeemed = parseFloat(req.body.loyalty_points_redeemed ?? req.body.loyaltyPointsRedeemed ?? 0) || 0;
+            loyaltyDiscountAmount = parseFloat(req.body.loyalty_discount_amount || req.body.loyaltyDiscount || req.body.loyalty_discount || loyaltyPointsRedeemed || 0) || 0;
+            remainingLoyaltyPoints = req.body.remaining_loyalty_points !== undefined
+                ? parseFloat(req.body.remaining_loyalty_points)
+                : (req.body.final_loyalty_points !== undefined
+                    ? parseFloat(req.body.final_loyalty_points)
+                    : Math.max(0, existingLoyaltyPoints - loyaltyPointsRedeemed + loyaltyPointsEarned));
+        }
+
+        const netPointsChange = isLoyaltyEnabled ? (loyaltyPointsEarned - loyaltyPointsRedeemed) : 0;
         let billedByName = (req.body.billed_by || req.body.billedBy || req.body.cashier_name || '').trim();
         if (!billedByName || billedByName.toLowerCase() === 'admin' || billedByName.toLowerCase() === 'cashier' || billedByName.toLowerCase() === 'system') {
             billedByName = req.user?.username || req.user?.name || req.user?.full_name || '';

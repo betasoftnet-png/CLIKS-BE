@@ -14,6 +14,14 @@ const customerController = {
 
             const emailLower = String(email).trim().toLowerCase();
 
+            let isLoyaltyEnabled = true;
+            try {
+                const lRow = await db.prepare('SELECT loyalty_enabled FROM business_loyalty_settings WHERE user_id = ?').get(req.user.id);
+                if (lRow && (lRow.loyalty_enabled === 0 || lRow.loyalty_enabled === false)) {
+                    isLoyaltyEnabled = false;
+                }
+            } catch (e) {}
+
             // 1. Search merchant's business_customers table FIRST for merchant context
             const crmCust = await db.prepare('SELECT id, name, email, loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, req.user.id);
 
@@ -23,7 +31,7 @@ const customerController = {
                     user_id: crmCust.id,
                     email: crmCust.email,
                     customer_name: crmCust.name,
-                    loyalty_points: parseFloat(crmCust.loyalty_points || 0) || 0
+                    loyalty_points: isLoyaltyEnabled ? (parseFloat(crmCust.loyalty_points || 0) || 0) : 0
                 });
             }
 
@@ -40,7 +48,7 @@ const customerController = {
                     user_id: user.id,
                     email: user.email,
                     customer_name: user.username,
-                    loyalty_points: parseFloat(pts || 0) || 0
+                    loyalty_points: isLoyaltyEnabled ? (parseFloat(pts || 0) || 0) : 0
                 });
             }
 
@@ -128,6 +136,14 @@ const customerController = {
                 if (r.name) salesByName.set(r.name, (salesByName.get(r.name) || 0) + val);
             });
 
+            let isLoyaltyEnabled = true;
+            try {
+                const lRow = await db.prepare('SELECT loyalty_enabled FROM business_loyalty_settings WHERE user_id = ?').get(userId);
+                if (lRow && (lRow.loyalty_enabled === 0 || lRow.loyalty_enabled === false)) {
+                    isLoyaltyEnabled = false;
+                }
+            } catch (e) {}
+
             const normalized = customers.map(c => {
                 const phoneVal = c.phone_number || c.phone || '';
                 const panVal = c.pan_number || c.pan || '';
@@ -137,7 +153,7 @@ const customerController = {
 
                 const connStatus = connMapByCustId.get(c.id) || (emailLower ? connMapByEmail.get(emailLower) : null) || 'UNCONNECTED';
                 const totalSales = (emailLower ? salesByEmail.get(emailLower) : 0) || (nameLower ? salesByName.get(nameLower) : 0) || 0;
-                const loyaltyPts = parseFloat(c.loyalty_points || 0) || 0;
+                const loyaltyPts = isLoyaltyEnabled ? (parseFloat(c.loyalty_points || 0) || 0) : 0;
 
                 return {
                     ...c,

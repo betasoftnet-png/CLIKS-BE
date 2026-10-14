@@ -64,6 +64,18 @@ if (dbType === 'postgres') {
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_repayment_alerts_user ON repayment_alerts(user_id);
+
+        CREATE TABLE IF NOT EXISTS business_loyalty_settings (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER UNIQUE NOT NULL,
+          loyalty_enabled INTEGER DEFAULT 1,
+          rs_per_point NUMERIC(10, 2) DEFAULT 100.00,
+          points_per_rs NUMERIC(10, 2) DEFAULT 100.00,
+          max_claim_percent NUMERIC(5, 2) DEFAULT 50.00,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_biz_loyalty_user ON business_loyalty_settings(user_id);
       `);
     } catch (e) {
       console.warn('⚠️ [PostgreSQL Connection Init Tables Note]:', e.message);
@@ -424,6 +436,18 @@ if (dbType === 'postgres') {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_repayment_alerts_user ON repayment_alerts(user_id);
+
+      CREATE TABLE IF NOT EXISTS business_loyalty_settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER UNIQUE NOT NULL,
+        loyalty_enabled INTEGER DEFAULT 1,
+        rs_per_point REAL DEFAULT 100.0,
+        points_per_rs REAL DEFAULT 100.0,
+        max_claim_percent REAL DEFAULT 50.0,
+        created_at TEXT,
+        updated_at TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_biz_loyalty_user ON business_loyalty_settings(user_id);
     `);
 
     const alterCols = [

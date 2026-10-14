@@ -211,10 +211,19 @@ const customerCrmController = {
             query += ' ORDER BY c.created_at DESC';
 
             let customers = await db.prepare(query).all(params);
+
+            let isLoyaltyEnabled = true;
+            try {
+                const lRow = await db.prepare('SELECT loyalty_enabled FROM business_loyalty_settings WHERE user_id = ?').get(req.user.id);
+                if (lRow && (lRow.loyalty_enabled === 0 || lRow.loyalty_enabled === false)) {
+                    isLoyaltyEnabled = false;
+                }
+            } catch (e) {}
             
             // Map calculated balance if it's > 0 (to verify against actual transactions)
             customers = customers.map(c => ({
                 ...c,
+                loyalty_points: isLoyaltyEnabled ? (parseFloat(c.loyalty_points || 0) || 0) : 0,
                 outstanding_balance: c.calculated_balance > 0 ? c.calculated_balance : (c.outstanding_balance || 0),
                 total_spent: c.calculated_spent > 0 ? c.calculated_spent : (c.total_spent || 0)
             }));
@@ -232,6 +241,18 @@ const customerCrmController = {
         try {
             const customer = await db.prepare('SELECT * FROM business_customers WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (!customer) return sendError(res, 'Customer not found or access denied', 404);
+
+            let isLoyaltyEnabled = true;
+            try {
+                const lRow = await db.prepare('SELECT loyalty_enabled FROM business_loyalty_settings WHERE user_id = ?').get(req.user.id);
+                if (lRow && (lRow.loyalty_enabled === 0 || lRow.loyalty_enabled === false)) {
+                    isLoyaltyEnabled = false;
+                }
+            } catch (e) {}
+
+            if (!isLoyaltyEnabled) {
+                customer.loyalty_points = 0;
+            }
 
             // Fetch nested details
             const addresses = await db.prepare('SELECT * FROM customer_addresses WHERE customer_id = ?').all(id);
