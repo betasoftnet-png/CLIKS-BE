@@ -254,7 +254,23 @@ const DOMAIN_TAXONOMY = [
         type: 'goods'
     },
 
-    // 12. Footwear
+    // 12. Jewellery & Precious Metals
+    {
+        domain: 'gold_jewellery',
+        synonyms: ['gold', 'gold jewellery', 'gold jewelry', 'gold coin', 'gold bar', 'gold ring', 'gold chain', 'swarna', 'thangam', 'sona', 'kangan', 'bangle'],
+        hsnPrefixes: ['7108', '7113', '7114', '7118'],
+        keywords: ['gold', 'jewellery', 'precious metal', 'unwrought'],
+        type: 'goods'
+    },
+    {
+        domain: 'silver_jewellery',
+        synonyms: ['silver', 'silver jewellery', 'silver jewelry', 'silver coin', 'silver bar', 'velli', 'chandi'],
+        hsnPrefixes: ['7106', '7113', '7114', '7118'],
+        keywords: ['silver', 'jewellery', 'precious metal'],
+        type: 'goods'
+    },
+
+    // 13. Footwear
     {
         domain: 'footwear',
         synonyms: ['shoes', 'shoe', 'sports shoes', 'sandals', 'slippers', 'leather shoes', 'chappal', 'footwear', 'boots', 'sneakers'],
