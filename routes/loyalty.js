@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/auth');
+const { auth } = require('../middleware/auth');
 const { getProgramSettings, updateProgramSettings } = require('../controllers/loyaltyController');
 
 // GET   /api/v1/loyalty/program-settings — Get loyalty settings for the merchant
