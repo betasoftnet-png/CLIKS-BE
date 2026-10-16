@@ -331,6 +331,10 @@ const branchController = {
     // 3. POST /api/v1/branches - Create new showroom/branch
     createBranch: async (req, res) => {
         try {
+            if (req.user.is_sub_id || req.user.role === 'sub_id' || req.user.role === 'SUB_ID') {
+                return sendError(res, 'Access denied. Only the business owner can register new showroom branches.', 403);
+            }
+
             await ensureTablesInit();
             const userId = req.user.id;
             const {
@@ -410,6 +414,10 @@ const branchController = {
     // 4. PUT /api/v1/branches/:id - Update showroom details
     updateBranch: async (req, res) => {
         try {
+            if (req.user.is_sub_id || req.user.role === 'sub_id' || req.user.role === 'SUB_ID') {
+                return sendError(res, 'Access denied. Only the business owner can modify branch details.', 403);
+            }
+
             await ensureTablesInit();
             const userId = req.user.id;
             const branchId = parseInt(req.params.id);
@@ -475,6 +483,10 @@ const branchController = {
     // 5. DELETE /api/v1/branches/:id - Soft delete branch
     deleteBranch: async (req, res) => {
         try {
+            if (req.user.is_sub_id || req.user.role === 'sub_id' || req.user.role === 'SUB_ID') {
+                return sendError(res, 'Access denied. Only the business owner can delete showroom branches.', 403);
+            }
+
             await ensureTablesInit();
             const userId = req.user.id;
             const branchId = parseInt(req.params.id);
