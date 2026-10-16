@@ -44,6 +44,8 @@ const ssoLogin = async (req, res) => {
   let { email, name: _name, accountType } = bnxProfile;
   let originalSubEmail = null;
   let originalSubPermissions = null;
+  let originalSubBranchId = null;
+  let originalSubBranchName = null;
 
   // --- SUB-ID LOGIC ---
   // If the token indicates this is a Sub-ID, override the login email to be the parent's email.
@@ -60,11 +62,17 @@ const ssoLogin = async (req, res) => {
       }
 
       if (decoded.is_sub_id === true && decoded.parent_account) {
-        console.log(`[SSO] Sub-ID login detected for ${decoded.sub}. Mapping to parent account: ${decoded.parent_account}`);
+        console.log(`[SSO] Sub-ID login detected for ${decoded.sub}. Mapping to parent account: ${decoded.parent_account}, Branch: ${decoded.branchName || decoded.branchId || 'N/A'}`);
         originalSubEmail = decoded.sub;
         email = decoded.parent_account;
         if (decoded.permissions) {
           originalSubPermissions = decoded.permissions;
+        }
+        if (decoded.branchId !== undefined || decoded.branch_id !== undefined) {
+          originalSubBranchId = decoded.branchId !== undefined ? decoded.branchId : decoded.branch_id;
+        }
+        if (decoded.branchName || decoded.branch_name) {
+          originalSubBranchName = decoded.branchName || decoded.branch_name;
         }
       }
     }
@@ -124,6 +132,12 @@ const ssoLogin = async (req, res) => {
   if (originalSubPermissions) {
     user.subPermissions = originalSubPermissions;
   }
+  if (originalSubBranchId !== null) {
+    user.branchId = originalSubBranchId;
+  }
+  if (originalSubBranchName) {
+    user.branchName = originalSubBranchName;
+  }
 
   const { accessToken, refreshToken } = await TokenService.issueEnhancedTokens(user);
 
@@ -153,6 +167,10 @@ const ssoLogin = async (req, res) => {
     parent_email: originalSubEmail ? user.email : undefined,
     is_sub_id: !!originalSubEmail,
     permissions: originalSubPermissions ? originalSubPermissions : undefined,
+    branch_id: originalSubBranchId || undefined,
+    branch_name: originalSubBranchName || undefined,
+    branchId: originalSubBranchId || undefined,
+    branchName: originalSubBranchName || undefined,
     role: (user.role === 'admin' || user.role === 'business_admin') ? 'business_admin' : (user.role || 'business'),
     account_type: 'business',
     accountType: 'BUSINESS',

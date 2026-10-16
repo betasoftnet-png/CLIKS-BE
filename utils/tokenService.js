@@ -96,6 +96,14 @@ class TokenService {
       if (user.subPermissions) {
         payload.permissions = user.subPermissions;
       }
+      if (user.branchId !== undefined || user.branch_id !== undefined) {
+        payload.branch_id = user.branchId !== undefined ? user.branchId : user.branch_id;
+        payload.branchId = payload.branch_id;
+      }
+      if (user.branchName || user.branch_name) {
+        payload.branch_name = user.branchName || user.branch_name;
+        payload.branchName = payload.branch_name;
+      }
     }
 
 

@@ -96,6 +96,25 @@ const posController = {
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_phone TEXT').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_email TEXT').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_gstin TEXT').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN branch_id INTEGER').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN branch_name TEXT').run(); } catch (e) { }
+
+        // Resolve branch context (strict if Sub-ID)
+        let effectiveBranchId = req.user.branch_id || req.body.branch_id || null;
+        let branchRow = null;
+        if (effectiveBranchId) {
+            try {
+                branchRow = await db.prepare('SELECT id, name, address, phone, email, gstin, invoice_prefix FROM branches WHERE id = ? AND user_id = ?').get(effectiveBranchId, userId);
+            } catch (e) {}
+        }
+        if (!branchRow) {
+            try {
+                branchRow = await db.prepare('SELECT id, name, address, phone, email, gstin, invoice_prefix FROM branches WHERE user_id = ? AND is_main_branch = 1 LIMIT 1').get(userId);
+            } catch (e) {}
+        }
+        if (branchRow) {
+            effectiveBranchId = branchRow.id;
+        }
 
         // 0. Check stock availability for all items before processing checkout
         for (const item of items) {
@@ -106,7 +125,15 @@ const posController = {
 
             let maxQty = null;
 
-            if (itemId) {
+            // First check branch_stock if a branch is active
+            if (effectiveBranchId && itemId) {
+                try {
+                    const bsRow = await db.prepare('SELECT quantity FROM branch_stock WHERE branch_id = ? AND product_id = ? AND user_id = ?').get(effectiveBranchId, itemId, userId);
+                    if (bsRow) maxQty = parseFloat(bsRow.quantity) || 0;
+                } catch (e) {}
+            }
+
+            if (maxQty === null && itemId) {
                 if (item.source === 'products') {
                     const prod = await db.prepare('SELECT quantity FROM business_products WHERE id = ? AND user_id = ?').get([itemId, userId]);
                     if (prod) maxQty = parseFloat(prod.quantity) || 0;
@@ -194,11 +221,11 @@ const posController = {
             try { userSettingsObj = JSON.parse(userRow.settings); } catch (e) { }
         }
 
-        const resolvedShopName = req.body.shop_name || userSettingsObj.pos_shop_name || userSettingsObj.companyName || userRow?.business_name || null;
-        const resolvedShopAddress = req.body.shop_address || userSettingsObj.pos_shop_address || userSettingsObj.registeredAddress || null;
-        const resolvedShopPhone = req.body.shop_phone || userSettingsObj.pos_shop_phone || userSettingsObj.phone || null;
-        const resolvedShopEmail = req.body.shop_email || userSettingsObj.pos_shop_email || userSettingsObj.email || userRow?.email || null;
-        const resolvedShopGstin = req.body.shop_gstin || userSettingsObj.pos_shop_gstin || userSettingsObj.gstinRef || null;
+        const resolvedShopName = branchRow?.name || req.body.shop_name || userSettingsObj.pos_shop_name || userSettingsObj.companyName || userRow?.business_name || null;
+        const resolvedShopAddress = branchRow?.address || req.body.shop_address || userSettingsObj.pos_shop_address || userSettingsObj.registeredAddress || null;
+        const resolvedShopPhone = branchRow?.phone || req.body.shop_phone || userSettingsObj.pos_shop_phone || userSettingsObj.phone || null;
+        const resolvedShopEmail = branchRow?.email || req.body.shop_email || userSettingsObj.pos_shop_email || userSettingsObj.email || userRow?.email || null;
+        const resolvedShopGstin = branchRow?.gstin || req.body.shop_gstin || userSettingsObj.pos_shop_gstin || userSettingsObj.gstinRef || null;
 
         try {
             // 1. Insert into business_invoices
@@ -345,6 +372,25 @@ const posController = {
                             SET quantity = ?, stock_status = ?, updated_at = ? 
                             WHERE id = ? AND user_id = ?
                         `).run([newQty, newStatus, now, prodItem.id, userId]);
+
+                        // Also decrement from branch_stock for effectiveBranchId
+                        if (effectiveBranchId) {
+                            try {
+                                const bsExist = await db.prepare('SELECT id, quantity FROM branch_stock WHERE branch_id = ? AND product_id = ? AND user_id = ?')
+                                    .get(effectiveBranchId, prodItem.id, userId);
+                                if (bsExist) {
+                                    await db.prepare('UPDATE branch_stock SET quantity = MAX(0, quantity - ?), updated_at = ? WHERE id = ?')
+                                        .run(sellQty, now, bsExist.id);
+                                } else {
+                                    await db.prepare(`
+                                        INSERT INTO branch_stock (user_id, branch_id, product_id, quantity, low_stock_threshold, created_at, updated_at)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                                    `).run(userId, effectiveBranchId, prodItem.id, Math.max(0, currentQty - sellQty), lowThreshold, now, now);
+                                }
+                            } catch (bsErr) {
+                                console.warn('[POS Controller] Error updating branch_stock:', bsErr.message);
+                            }
+                        }
                     }
 
                     // 2b. Update inventory table (Inventory -> Items)
