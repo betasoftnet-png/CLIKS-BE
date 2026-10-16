@@ -74,9 +74,15 @@ const corsOptions = {
     'Cache-Control',
     'Pragma',
     'sentry-trace',
-    'baggage'
+    'baggage',
+    'x-branch-id',
+    'X-Branch-Id',
+    'x-branch',
+    'X-Branch',
+    'branch-id',
+    'Branch-Id'
   ],
-  exposedHeaders: ['Content-Length', 'Content-Range', 'X-API-Version', 'Authorization']
+  exposedHeaders: ['Content-Length', 'Content-Range', 'X-API-Version', 'Authorization', 'x-branch-id', 'X-Branch-Id']
 };
 
 app.use(cors(corsOptions));

@@ -27,8 +27,8 @@ function errorHandler(err, req, res, _next) {
 
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
   const reqHeaders = req.headers?.['access-control-request-headers'];
-  res.setHeader('Access-Control-Allow-Headers', reqHeaders || 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Version, X-Request-Id, Cache-Control, Pragma, sentry-trace, baggage');
-  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, X-API-Version, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', reqHeaders || 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Version, X-Request-Id, Cache-Control, Pragma, sentry-trace, baggage, x-branch-id, X-Branch-Id');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, X-API-Version, Authorization, x-branch-id, X-Branch-Id');
 
   // ── Zod Validation Error ──────────────────────────────────────────────────
   if (err instanceof ZodError) {

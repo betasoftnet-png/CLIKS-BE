@@ -28,7 +28,7 @@ async function testCorsHeaders() {
                 headers: {
                     'Origin': 'https://cliksbusiness.com',
                     'Access-Control-Request-Method': 'GET',
-                    'Access-Control-Request-Headers': 'Authorization, Content-Type'
+                    'Access-Control-Request-Headers': 'Authorization, Content-Type, x-branch-id'
                 }
             };
 
