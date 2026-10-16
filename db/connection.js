@@ -76,6 +76,55 @@ if (dbType === 'postgres') {
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_biz_loyalty_user ON business_loyalty_settings(user_id);
+
+        CREATE TABLE IF NOT EXISTS branches (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          code VARCHAR(100) NOT NULL,
+          invoice_prefix VARCHAR(50) DEFAULT 'INV',
+          address TEXT,
+          city VARCHAR(100),
+          state VARCHAR(100),
+          pincode VARCHAR(20),
+          phone VARCHAR(50),
+          email VARCHAR(255),
+          gstin VARCHAR(50),
+          is_main_branch INTEGER DEFAULT 0,
+          status VARCHAR(50) DEFAULT 'active',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_branches_user ON branches(user_id);
+
+        CREATE TABLE IF NOT EXISTS branch_stock (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          branch_id INTEGER NOT NULL,
+          product_id INTEGER NOT NULL,
+          quantity NUMERIC DEFAULT 0,
+          low_stock_threshold NUMERIC DEFAULT 5,
+          rack_location VARCHAR(100),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_branch_stock_lookup ON branch_stock(branch_id, product_id);
+        CREATE INDEX IF NOT EXISTS idx_branch_stock_user ON branch_stock(user_id);
+
+        CREATE TABLE IF NOT EXISTS branch_transfers (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          transfer_no VARCHAR(100),
+          from_branch_id INTEGER NOT NULL,
+          to_branch_id INTEGER NOT NULL,
+          status VARCHAR(50) DEFAULT 'completed',
+          items TEXT NOT NULL,
+          notes TEXT,
+          dispatched_at VARCHAR(100),
+          received_at VARCHAR(100),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_transfers_user ON branch_transfers(user_id);
       `);
     } catch (e) {
       console.warn('⚠️ [PostgreSQL Connection Init Tables Note]:', e.message);
@@ -83,6 +132,10 @@ if (dbType === 'postgres') {
 
     // 2. Add columns individually to prevent one failure from blocking others
     const alterStatements = [
+      "ALTER TABLE business_invoices ADD COLUMN branch_id INTEGER",
+      "ALTER TABLE business_invoices ADD COLUMN branch_name VARCHAR(255)",
+      "ALTER TABLE business_purchases ADD COLUMN branch_id INTEGER",
+      "ALTER TABLE expenses ADD COLUMN branch_id INTEGER",
       "ALTER TABLE business_customers ADD COLUMN loyalty_points INTEGER DEFAULT 0",
       "ALTER TABLE business_products ADD COLUMN min_stock NUMERIC DEFAULT 0",
       "ALTER TABLE business_products ADD COLUMN reorder_level NUMERIC DEFAULT 0",
@@ -448,9 +501,62 @@ if (dbType === 'postgres') {
         updated_at TEXT
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_biz_loyalty_user ON business_loyalty_settings(user_id);
+
+      CREATE TABLE IF NOT EXISTS branches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        code TEXT NOT NULL,
+        invoice_prefix TEXT DEFAULT 'INV',
+        address TEXT,
+        city TEXT,
+        state TEXT,
+        pincode TEXT,
+        phone TEXT,
+        email TEXT,
+        gstin TEXT,
+        is_main_branch INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_branches_user ON branches(user_id);
+
+      CREATE TABLE IF NOT EXISTS branch_stock (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        branch_id INTEGER NOT NULL,
+        product_id INTEGER NOT NULL,
+        quantity REAL DEFAULT 0,
+        low_stock_threshold REAL DEFAULT 5,
+        rack_location TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_branch_stock_lookup ON branch_stock(branch_id, product_id);
+      CREATE INDEX IF NOT EXISTS idx_branch_stock_user ON branch_stock(user_id);
+
+      CREATE TABLE IF NOT EXISTS branch_transfers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        transfer_no TEXT,
+        from_branch_id INTEGER NOT NULL,
+        to_branch_id INTEGER NOT NULL,
+        status TEXT DEFAULT 'completed',
+        items TEXT NOT NULL,
+        notes TEXT,
+        dispatched_at TEXT,
+        received_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_transfers_user ON branch_transfers(user_id);
     `);
 
     const alterCols = [
+      "ALTER TABLE business_invoices ADD COLUMN branch_id INTEGER",
+      "ALTER TABLE business_invoices ADD COLUMN branch_name TEXT",
+      "ALTER TABLE business_purchases ADD COLUMN branch_id INTEGER",
+      "ALTER TABLE expenses ADD COLUMN branch_id INTEGER",
       "ALTER TABLE business_products ADD COLUMN unit TEXT DEFAULT 'PCS'",
       "ALTER TABLE business_products ADD COLUMN hsn_code TEXT",
       "ALTER TABLE business_products ADD COLUMN low_stock_threshold REAL DEFAULT 5",

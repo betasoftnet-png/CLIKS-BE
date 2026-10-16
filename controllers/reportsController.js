@@ -11,29 +11,64 @@ const reportsController = {
                 branchInfo = await db.prepare("SELECT id, name, code, city FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
             }
 
-            let salesQuery = "SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?";
-            let purchasesQuery = "SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?";
-            let expensesQuery = "SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')";
-            let invoicesQuery = "SELECT created_at, total_amount FROM business_invoices WHERE user_id = ?";
+            let sales = null;
+            let purchases = null;
+            let expenses = null;
+            let invoices = [];
 
-            const params = [req.user.id];
-            if (branchId) {
-                salesQuery += " AND branch_id = ?";
-                purchasesQuery += " AND branch_id = ?";
-                expensesQuery += " AND branch_id = ?";
-                invoicesQuery += " AND branch_id = ?";
-                params.push(branchId);
+            try {
+                let salesQuery = "SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?";
+                const salesParams = [req.user.id];
+                if (branchId) {
+                    salesQuery += " AND branch_id = ?";
+                    salesParams.push(branchId);
+                }
+                sales = await db.prepare(salesQuery).get(...salesParams);
+            } catch (sErr) {}
+
+            try {
+                let purchasesQuery = "SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?";
+                const purParams = [req.user.id];
+                if (branchId) {
+                    purchasesQuery += " AND branch_id = ?";
+                    purParams.push(branchId);
+                }
+                purchases = await db.prepare(purchasesQuery).get(...purParams);
+            } catch (pErr) {
+                try {
+                    purchases = await db.prepare("SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
+                } catch (e2) {}
             }
 
-            const sales = await db.prepare(salesQuery).get(...params);
-            const purchases = await db.prepare(purchasesQuery).get(...params);
-            const expenses = await db.prepare(expensesQuery).get(...params);
-            
+            try {
+                let expensesQuery = "SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')";
+                const expParams = [req.user.id];
+                if (branchId) {
+                    expensesQuery += " AND branch_id = ?";
+                    expParams.push(branchId);
+                }
+                expenses = await db.prepare(expensesQuery).get(...expParams);
+            } catch (eErr) {
+                try {
+                    expenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
+                } catch (e2) {}
+            }
+
             const salesTotal = parseFloat(sales?.total) || 0;
             const purchasesTotal = parseFloat(purchases?.total) || 0;
             const expensesTotal = parseFloat(expenses?.total) || 0;
 
-            const invoices = await db.prepare(invoicesQuery).all(...params);
+            try {
+                let invoicesQuery = "SELECT created_at, total_amount FROM business_invoices WHERE user_id = ?";
+                const invParams = [req.user.id];
+                if (branchId) {
+                    invoicesQuery += " AND branch_id = ?";
+                    invParams.push(branchId);
+                }
+                invoices = await db.prepare(invoicesQuery).all(...invParams);
+            } catch (invErr) {
+                invoices = [];
+            }
             const monthly_sales = [0,0,0,0,0,0,0,0,0,0,0,0];
             const currentYear = new Date().getFullYear();
             

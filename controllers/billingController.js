@@ -223,11 +223,11 @@ const billingController = {
                     const qty = parseFloat(it.quantity) || 1;
                     if (prodId && qty > 0) {
                         try {
-                            await db.prepare(`
-                                UPDATE branch_stock 
-                                SET quantity = MAX(0, quantity - ?), updated_at = ?
-                                WHERE branch_id = ? AND product_id = ? AND user_id = ?
-                            `).run(qty, now, resolvedBranchId, prodId, req.user.id);
+                            const bs = await db.prepare('SELECT id, quantity FROM branch_stock WHERE branch_id = ? AND product_id = ? AND user_id = ?').get(resolvedBranchId, prodId, req.user.id);
+                            if (bs) {
+                                const newBranchQty = Math.max(0, (parseFloat(bs.quantity) || 0) - qty);
+                                await db.prepare('UPDATE branch_stock SET quantity = ?, updated_at = ? WHERE id = ?').run(newBranchQty, now, bs.id);
+                            }
                         } catch (stockErr) {}
                     }
                 }

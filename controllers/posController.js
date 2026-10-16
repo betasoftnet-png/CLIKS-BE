@@ -379,8 +379,9 @@ const posController = {
                                 const bsExist = await db.prepare('SELECT id, quantity FROM branch_stock WHERE branch_id = ? AND product_id = ? AND user_id = ?')
                                     .get(effectiveBranchId, prodItem.id, userId);
                                 if (bsExist) {
-                                    await db.prepare('UPDATE branch_stock SET quantity = MAX(0, quantity - ?), updated_at = ? WHERE id = ?')
-                                        .run(sellQty, now, bsExist.id);
+                                    const newBranchQty = Math.max(0, (parseFloat(bsExist.quantity) || 0) - sellQty);
+                                    await db.prepare('UPDATE branch_stock SET quantity = ?, updated_at = ? WHERE id = ?')
+                                        .run(newBranchQty, now, bsExist.id);
                                 } else {
                                     await db.prepare(`
                                         INSERT INTO branch_stock (user_id, branch_id, product_id, quantity, low_stock_threshold, created_at, updated_at)
