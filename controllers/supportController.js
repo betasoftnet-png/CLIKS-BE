@@ -51,7 +51,7 @@ const supportAgentLogin = async (req, res) => {
     const accessToken = jwt.sign(
       payload,
       process.env.JWT_SECRET,
-      { expiresIn: isBnx ? '30d' : '24h' }
+      { expiresIn: '30d' }
     );
 
     return sendSuccess(res, { accessToken, user: payload }, 'Customer Support Command Clearance Granted.');

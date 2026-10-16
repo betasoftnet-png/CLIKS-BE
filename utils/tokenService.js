@@ -3,8 +3,8 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const db = require('../db/connection');
 
-const ACCESS_EXPIRES_IN = '24h';
-const REFRESH_EXPIRES_DAYS = 7;
+const ACCESS_EXPIRES_IN = '30d';
+const REFRESH_EXPIRES_DAYS = 30;
 const REFRESH_EXPIRES_MS = REFRESH_EXPIRES_DAYS * 24 * 60 * 60 * 1000;
 
 class TokenService {

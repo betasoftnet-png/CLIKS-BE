@@ -40,7 +40,7 @@ const salesAgentLogin = async (req, res) => {
     const accessToken = jwt.sign(
       payload, 
       process.env.JWT_SECRET, 
-      { expiresIn: isBnx ? '30d' : '24h' }
+      { expiresIn: '30d' }
     );
 
     const safeAgent = {
