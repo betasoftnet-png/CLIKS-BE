@@ -3,6 +3,7 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { recordAudit } = require('../utils/auditLogger');
 const gstHelper = require('../utils/gstHelper');
 const { processCustomerInvoiceIntegration } = require('../utils/customerIntegration');
+const { getEffectiveBranchId } = require('../utils/branchHelper');
 
 const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') => {
     try {
@@ -49,6 +50,12 @@ const billingController = {
         try {
             let query = `SELECT * FROM business_invoices WHERE user_id = ?`;
             const params = [req.user.id];
+
+            const branchId = getEffectiveBranchId(req);
+            if (branchId) {
+                query += ` AND branch_id = ?`;
+                params.push(branchId);
+            }
 
             if (status) {
                 query += ` AND status = ?`;
@@ -153,6 +160,28 @@ const billingController = {
                 } catch (e) {}
             }
             try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN billed_by TEXT').run(); } catch (e) { }
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN branch_id INTEGER').run(); } catch (e) { }
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN branch_name TEXT').run(); } catch (e) { }
+
+            // Resolve branch for this invoice
+            let resolvedBranchId = null;
+            let resolvedBranchName = null;
+            if (req.user?.is_sub_id && req.user?.branch_id) {
+                resolvedBranchId = parseInt(req.user.branch_id, 10);
+                resolvedBranchName = req.user.branch_name || null;
+            } else if (req.body.branch_id || req.body.branchId) {
+                resolvedBranchId = parseInt(req.body.branch_id || req.body.branchId, 10);
+                resolvedBranchName = req.body.branch_name || req.body.branchName || null;
+            } else {
+                resolvedBranchId = getEffectiveBranchId(req);
+            }
+
+            if (resolvedBranchId && !resolvedBranchName) {
+                try {
+                    const br = await db.prepare('SELECT name FROM branches WHERE id = ? AND user_id = ?').get(resolvedBranchId, req.user.id);
+                    if (br) resolvedBranchName = br.name;
+                } catch (e) {}
+            }
 
             // Resolve who billed from request body or authenticated token user data (username, name, email)
             let billedByName = (req.body.billed_by || req.body.billedBy || '').trim();
@@ -176,16 +205,33 @@ const billingController = {
                     billing_address, shipping_address, amount, tax_amount, total_amount,
                     paid_amount, due_amount, bank_account_id, discount_amount, round_off,
                     status, due_date, payment_mode, invoice_type, tax_type, sendToCustomerHistory, sendPurchaseHistoryToCustomer, items,
-                    billed_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    billed_by, branch_id, branch_name, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, resolvedCustomerId, invNum, client_name, client_email || null, client_gstin || null,
                 billing_address || null, shipping_address || null, numAmount, numTax, numTotal,
                 numPaid, numDue, bank_account_id || null, numDiscount, numRoundOff,
                 status || 'Draft', due_date, payment_mode || 'Cash', invoice_type || 'GST', tax_type || 'Exclusive', sendToCustVal, sendToCustVal,
                 typeof items === 'string' ? items : JSON.stringify(items || []),
-                billedByName, now, now
+                billedByName, resolvedBranchId, resolvedBranchName, now, now
             );
+
+            // Deduct stock in branch_stock if invoice is scoped to a showroom branch
+            if (resolvedBranchId && Array.isArray(parsedItems)) {
+                for (const it of parsedItems) {
+                    const prodId = it.id || it.product_id;
+                    const qty = parseFloat(it.quantity) || 1;
+                    if (prodId && qty > 0) {
+                        try {
+                            await db.prepare(`
+                                UPDATE branch_stock 
+                                SET quantity = MAX(0, quantity - ?), updated_at = ?
+                                WHERE branch_id = ? AND product_id = ? AND user_id = ?
+                            `).run(qty, now, resolvedBranchId, prodId, req.user.id);
+                        } catch (stockErr) {}
+                    }
+                }
+            }
 
             const createdInvoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(result.lastInsertRowid);
             if (createdInvoice) {

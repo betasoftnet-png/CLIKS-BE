@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { STANDARD_UNITS } = require('../utils/unitConversion');
+const { getEffectiveBranchId } = require('../utils/branchHelper');
 
 const productController = {
     // 1. Create Product
@@ -116,47 +117,72 @@ const productController = {
     getProducts: async (req, res) => {
         const { search, category, status, stock_status, warehouse_id, item_role, group_id, subgroup_id } = req.query;
         try {
-            let query = `SELECT * FROM business_products WHERE user_id = ?`;
-            const params = [req.user.id];
+            const branchId = getEffectiveBranchId(req);
+            let query = '';
+            let params = [];
+
+            if (branchId) {
+                query = `
+                    SELECT 
+                        p.*,
+                        COALESCE(bs.quantity, 0) as quantity,
+                        COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5) as low_stock_threshold,
+                        COALESCE(bs.quantity, 0) as branch_stock,
+                        b.name as branch_name,
+                        bs.branch_id
+                    FROM business_products p
+                    LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+                    LEFT JOIN branches b ON b.id = ?
+                    WHERE p.user_id = ?
+                `;
+                params.push(branchId, branchId, req.user.id);
+            } else {
+                query = `SELECT p.* FROM business_products p WHERE p.user_id = ?`;
+                params.push(req.user.id);
+            }
 
             if (warehouse_id) {
-                query += ` AND (warehouse_id = ? OR warehouse_id = ? OR warehouse_id LIKE ?)`;
+                query += ` AND (p.warehouse_id = ? OR p.warehouse_id = ? OR p.warehouse_id LIKE ?)`;
                 params.push(String(warehouse_id), `WH-0${warehouse_id}`, `%${warehouse_id}%`);
             }
             if (category) {
-                query += ` AND category = ?`;
+                query += ` AND p.category = ?`;
                 params.push(category);
             }
             if (item_role) {
-                query += ` AND item_role = ?`;
+                query += ` AND p.item_role = ?`;
                 params.push(item_role);
             }
             if (group_id) {
-                query += ` AND group_id = ?`;
+                query += ` AND p.group_id = ?`;
                 params.push(group_id);
             }
             if (subgroup_id) {
-                query += ` AND subgroup_id = ?`;
+                query += ` AND p.subgroup_id = ?`;
                 params.push(subgroup_id);
             }
             if (status) {
-                query += ` AND status = ?`;
+                query += ` AND p.status = ?`;
                 params.push(status);
             }
             if (stock_status) {
                 if (stock_status === 'low') {
-                    query += ` AND quantity <= low_stock_threshold`;
+                    if (branchId) {
+                        query += ` AND COALESCE(bs.quantity, 0) <= COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5)`;
+                    } else {
+                        query += ` AND p.quantity <= p.low_stock_threshold`;
+                    }
                 } else {
-                    query += ` AND stock_status = ?`;
+                    query += ` AND p.stock_status = ?`;
                     params.push(stock_status);
                 }
             }
             if (search) {
-                query += ` AND (name LIKE ? OR sku LIKE ? OR barcode LIKE ? OR hsn_code LIKE ?)`;
+                query += ` AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ? OR p.hsn_code LIKE ?)`;
                 params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
             }
 
-            query += ` ORDER BY name ASC`;
+            query += ` ORDER BY p.name ASC`;
             const products = await db.prepare(query).all(...params);
             return sendSuccess(res, products, 'Products retrieved successfully');
         } catch (error) {

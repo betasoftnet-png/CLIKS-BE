@@ -1,18 +1,39 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const { getEffectiveBranchId } = require('../utils/branchHelper');
 
 const reportsController = {
     getDashboardSummary: async (req, res) => {
         try {
-            const sales = await db.prepare("SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?").get(req.user.id);
-            const purchases = await db.prepare("SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
-            const expenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
+            const branchId = getEffectiveBranchId(req);
+            let branchInfo = null;
+            if (branchId) {
+                branchInfo = await db.prepare("SELECT id, name, code, city FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
+            }
+
+            let salesQuery = "SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?";
+            let purchasesQuery = "SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?";
+            let expensesQuery = "SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')";
+            let invoicesQuery = "SELECT created_at, total_amount FROM business_invoices WHERE user_id = ?";
+
+            const params = [req.user.id];
+            if (branchId) {
+                salesQuery += " AND branch_id = ?";
+                purchasesQuery += " AND branch_id = ?";
+                expensesQuery += " AND branch_id = ?";
+                invoicesQuery += " AND branch_id = ?";
+                params.push(branchId);
+            }
+
+            const sales = await db.prepare(salesQuery).get(...params);
+            const purchases = await db.prepare(purchasesQuery).get(...params);
+            const expenses = await db.prepare(expensesQuery).get(...params);
             
             const salesTotal = parseFloat(sales?.total) || 0;
             const purchasesTotal = parseFloat(purchases?.total) || 0;
             const expensesTotal = parseFloat(expenses?.total) || 0;
 
-            const invoices = await db.prepare("SELECT created_at, total_amount FROM business_invoices WHERE user_id = ?").all(req.user.id);
+            const invoices = await db.prepare(invoicesQuery).all(...params);
             const monthly_sales = [0,0,0,0,0,0,0,0,0,0,0,0];
             const currentYear = new Date().getFullYear();
             
@@ -33,6 +54,9 @@ const reportsController = {
                 total_expenses: expensesTotal + purchasesTotal,
                 monthly_sales: monthly_sales,
                 status: 'healthy',
+                branch_id: branchId,
+                branch_name: branchInfo ? branchInfo.name : (branchId ? req.user.branch_name : 'All Showrooms'),
+                is_branch_scoped: Boolean(branchId),
                 updated_at: new Date().toISOString()
             }, 'Dashboard summary compiled');
         } catch (error) {
@@ -44,17 +68,27 @@ const reportsController = {
     // Sales Reports
     getSales: async (req, res) => {
         try {
-            const list = await db.prepare(`
+            const branchId = getEffectiveBranchId(req);
+            let sql = `
                 SELECT 
                     invoice_number as order_number, 
                     client_name as customer, 
                     created_at as date, 
                     total_amount as grand_total,
-                    discount_amount
+                    discount_amount,
+                    branch_id,
+                    branch_name
                 FROM business_invoices 
-                WHERE user_id = ? 
-                ORDER BY id DESC
-            `).all(req.user.id);
+                WHERE user_id = ?
+            `;
+            const params = [req.user.id];
+            if (branchId) {
+                sql += " AND branch_id = ?";
+                params.push(branchId);
+            }
+            sql += " ORDER BY id DESC";
+
+            const list = await db.prepare(sql).all(...params);
             return sendSuccess(res, list, 'Sales records compiled');
         } catch (error) {
             console.error('Error in getSales:', error);
@@ -63,8 +97,15 @@ const reportsController = {
     },
     getSalesSummary: async (req, res) => {
         try {
-            const sales = await db.prepare("SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?").get(req.user.id);
-            return sendSuccess(res, { total_sales: sales?.total || 0, margin: '0%' }, 'Sales summary compiled');
+            const branchId = getEffectiveBranchId(req);
+            let sql = "SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?";
+            const params = [req.user.id];
+            if (branchId) {
+                sql += " AND branch_id = ?";
+                params.push(branchId);
+            }
+            const sales = await db.prepare(sql).get(...params);
+            return sendSuccess(res, { total_sales: sales?.total || 0, margin: '0%', branch_id: branchId }, 'Sales summary compiled');
         } catch (error) {
             console.error('Error in getSalesSummary:', error);
             return sendError(res, 'Failed to compile sales summary', 500);
@@ -72,7 +113,8 @@ const reportsController = {
     },
     getSalesByCustomer: async (req, res) => {
         try {
-            const list = await db.prepare(`
+            const branchId = getEffectiveBranchId(req);
+            let sql = `
                 SELECT 
                     COALESCE(c.name, i.client_name) as name, 
                     SUM(COALESCE(i.total_amount, i.amount, 0)) as total_sales 
@@ -85,9 +127,17 @@ const reportsController = {
                     )
                 WHERE i.user_id = ? 
                   AND (i.status IS NULL OR LOWER(i.status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
+            `;
+            const params = [req.user.id];
+            if (branchId) {
+                sql += " AND i.branch_id = ?";
+                params.push(branchId);
+            }
+            sql += `
                 GROUP BY COALESCE(c.name, i.client_name)
                 ORDER BY total_sales DESC
-            `).all(req.user.id);
+            `;
+            const list = await db.prepare(sql).all(...params);
             return sendSuccess(res, list || [], 'Sales by customer compiled');
         } catch (error) {
             console.error('Error in getSalesByCustomer:', error);
@@ -96,7 +146,14 @@ const reportsController = {
     },
     getSalesByProduct: async (req, res) => {
         try {
-            const invoices = await db.prepare("SELECT items FROM business_invoices WHERE user_id = ? AND items IS NOT NULL AND items != ''").all(req.user.id);
+            const branchId = getEffectiveBranchId(req);
+            let sql = "SELECT items FROM business_invoices WHERE user_id = ? AND items IS NOT NULL AND items != ''";
+            const params = [req.user.id];
+            if (branchId) {
+                sql += " AND branch_id = ?";
+                params.push(branchId);
+            }
+            const invoices = await db.prepare(sql).all(...params);
             const productMap = {};
             
             invoices.forEach(inv => {
@@ -481,10 +538,77 @@ const reportsController = {
 
     // Stock Reports
     getStock: async (req, res) => {
-        return sendSuccess(res, [], 'Stock report compiled');
+        try {
+            const branchId = getEffectiveBranchId(req);
+            if (branchId) {
+                // Return stock specifically for this showroom branch
+                const list = await db.prepare(`
+                    SELECT 
+                        p.id,
+                        p.name,
+                        p.sku,
+                        p.category,
+                        p.selling_price,
+                        COALESCE(bs.quantity, 0) as quantity,
+                        COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5) as low_stock_threshold,
+                        b.name as branch_name,
+                        bs.branch_id
+                    FROM business_products p
+                    LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+                    LEFT JOIN branches b ON b.id = ?
+                    WHERE p.user_id = ?
+                    ORDER BY p.name ASC
+                `).all(branchId, branchId, req.user.id);
+                return sendSuccess(res, list, 'Branch stock report compiled');
+            } else {
+                // Consolidated company-wide stock across all branches
+                const list = await db.prepare(`
+                    SELECT 
+                        p.id,
+                        p.name,
+                        p.sku,
+                        p.category,
+                        p.selling_price,
+                        COALESCE(SUM(bs.quantity), p.quantity, 0) as quantity,
+                        p.low_stock_threshold,
+                        'All Showrooms' as branch_name
+                    FROM business_products p
+                    LEFT JOIN branch_stock bs ON bs.product_id = p.id
+                    WHERE p.user_id = ?
+                    GROUP BY p.id
+                    ORDER BY p.name ASC
+                `).all(req.user.id);
+                return sendSuccess(res, list, 'Stock report compiled');
+            }
+        } catch (error) {
+            console.error('Error in getStock:', error);
+            return sendError(res, 'Failed to compile stock report', 500);
+        }
     },
     getStockValuation: async (req, res) => {
-        return sendSuccess(res, { total_value: 0 }, 'Stock valuation report compiled');
+        try {
+            const branchId = getEffectiveBranchId(req);
+            let totalValue = 0;
+            if (branchId) {
+                const row = await db.prepare(`
+                    SELECT SUM(bs.quantity * p.purchase_price) as val
+                    FROM branch_stock bs
+                    JOIN business_products p ON bs.product_id = p.id
+                    WHERE bs.user_id = ? AND bs.branch_id = ?
+                `).get(req.user.id, branchId);
+                totalValue = parseFloat(row?.val) || 0;
+            } else {
+                const row = await db.prepare(`
+                    SELECT SUM(quantity * purchase_price) as val
+                    FROM business_products
+                    WHERE user_id = ?
+                `).get(req.user.id);
+                totalValue = parseFloat(row?.val) || 0;
+            }
+            return sendSuccess(res, { total_value: totalValue, branch_id: branchId }, 'Stock valuation report compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to compile stock valuation', 500);
+        }
     },
     getStockMovement: async (req, res) => {
         try {
@@ -501,10 +625,55 @@ const reportsController = {
         }
     },
     getLowStock: async (req, res) => {
-        return sendSuccess(res, [], 'Low stock report compiled');
+        try {
+            const branchId = getEffectiveBranchId(req);
+            let list = [];
+            if (branchId) {
+                list = await db.prepare(`
+                    SELECT 
+                        p.id, p.name, p.sku, p.category,
+                        COALESCE(bs.quantity, 0) as quantity,
+                        COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5) as low_stock_threshold
+                    FROM business_products p
+                    JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+                    WHERE p.user_id = ? AND COALESCE(bs.quantity, 0) <= COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5) AND COALESCE(bs.quantity, 0) > 0
+                `).all(branchId, req.user.id);
+            } else {
+                list = await db.prepare(`
+                    SELECT id, name, sku, category, quantity, low_stock_threshold
+                    FROM business_products
+                    WHERE user_id = ? AND quantity <= low_stock_threshold AND quantity > 0
+                `).all(req.user.id);
+            }
+            return sendSuccess(res, list, 'Low stock report compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to compile low stock report', 500);
+        }
     },
     getOutOfStock: async (req, res) => {
-        return sendSuccess(res, [], 'Out of stock report compiled');
+        try {
+            const branchId = getEffectiveBranchId(req);
+            let list = [];
+            if (branchId) {
+                list = await db.prepare(`
+                    SELECT 
+                        p.id, p.name, p.sku, p.category,
+                        COALESCE(bs.quantity, 0) as quantity
+                    FROM business_products p
+                    LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+                    WHERE p.user_id = ? AND COALESCE(bs.quantity, 0) <= 0
+                `).all(branchId, req.user.id);
+            } else {
+                list = await db.prepare(`
+                    SELECT id, name, sku, category, quantity
+                    FROM business_products
+                    WHERE user_id = ? AND quantity <= 0
+                `).all(req.user.id);
+            }
+            return sendSuccess(res, list, 'Out of stock report compiled');
+        } catch (error) {
+            return sendError(res, 'Failed to compile out of stock report', 500);
+        }
     },
     getExpiryStock: async (req, res) => {
         return sendSuccess(res, [], 'Expiry stock report compiled');
@@ -518,7 +687,34 @@ const reportsController = {
 
     // Products Analytics
     getTopSellingProducts: async (req, res) => {
-        return sendSuccess(res, [], 'Top selling products compiled');
+        try {
+            const branchId = getEffectiveBranchId(req);
+            let sql = "SELECT items FROM business_invoices WHERE user_id = ? AND items IS NOT NULL AND items != ''";
+            const params = [req.user.id];
+            if (branchId) {
+                sql += " AND branch_id = ?";
+                params.push(branchId);
+            }
+            const invoices = await db.prepare(sql).all(...params);
+            const map = {};
+            invoices.forEach(inv => {
+                try {
+                    const items = JSON.parse(inv.items);
+                    if (Array.isArray(items)) {
+                        items.forEach(it => {
+                            const name = it.product_name || it.name || 'Unknown Product';
+                            if (!map[name]) map[name] = { name, total_quantity: 0, total_sales: 0 };
+                            map[name].total_quantity += parseFloat(it.quantity || 1);
+                            map[name].total_sales += parseFloat(it.total || it.amount || 0);
+                        });
+                    }
+                } catch (e) {}
+            });
+            const list = Object.values(map).sort((a, b) => b.total_sales - a.total_sales).slice(0, 10);
+            return sendSuccess(res, list, 'Top selling products compiled');
+        } catch (e) {
+            return sendError(res, 'Failed to compile top selling products', 500);
+        }
     },
     getSlowMovingProducts: async (req, res) => {
         return sendSuccess(res, [], 'Slow moving products compiled');
@@ -536,7 +732,8 @@ const reportsController = {
     },
     getTopCustomers: async (req, res) => {
         try {
-            const list = await db.prepare(`
+            const branchId = getEffectiveBranchId(req);
+            let sql = `
                 SELECT 
                     c.id,
                     c.name,
@@ -551,10 +748,19 @@ const reportsController = {
                         OR (i.client_name IS NOT NULL AND i.client_name != '' AND LOWER(i.client_name) = LOWER(c.name))
                     )
                     AND (i.status IS NULL OR LOWER(i.status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
+            `;
+            const params = [req.user.id];
+            if (branchId) {
+                sql += " AND i.branch_id = ?";
+                params.push(branchId);
+            }
+            sql += `
                 WHERE c.user_id = ?
                 GROUP BY c.id, c.name
                 ORDER BY total_sales DESC
-            `).all(req.user.id);
+            `;
+            params.push(req.user.id);
+            const list = await db.prepare(sql).all(...params);
             return sendSuccess(res, list || [], 'Top customers report compiled');
         } catch (error) {
             console.error('Error in getTopCustomers:', error);
@@ -736,19 +942,41 @@ const reportsController = {
 
     getChartSales: async (req, res) => {
         try {
-            const orders = await db.prepare("SELECT date, grand_total FROM business_orders WHERE user_id = ?").all(req.user.id);
+            const branchId = getEffectiveBranchId(req);
+            let invoiceSql = "SELECT created_at as date, total_amount as grand_total FROM business_invoices WHERE user_id = ?";
+            const params = [req.user.id];
+            if (branchId) {
+                invoiceSql += " AND branch_id = ?";
+                params.push(branchId);
+            }
+            const invoices = await db.prepare(invoiceSql).all(...params);
+            
+            let ordersSql = "SELECT date, grand_total FROM business_orders WHERE user_id = ?";
+            const orderParams = [req.user.id];
+            if (branchId) {
+                ordersSql += " AND branch_id = ?";
+                orderParams.push(branchId);
+            }
+            let orders = [];
+            try { orders = await db.prepare(ordersSql).all(...orderParams); } catch (e) {}
+
             const monthlyData = Array(12).fill(0);
-            orders.forEach(order => {
-                if (order.date) {
-                    const dateObj = new Date(order.date);
-                    if (!isNaN(dateObj.getTime())) {
-                        const monthIndex = dateObj.getMonth(); // 0 to 11
-                        monthlyData[monthIndex] += (parseFloat(order.grand_total) || 0);
+            const currentYear = new Date().getFullYear();
+
+            const combined = [...(invoices || []), ...(orders || [])];
+            combined.forEach(record => {
+                if (record.date) {
+                    const dateObj = new Date(record.date);
+                    if (!isNaN(dateObj.getTime()) && dateObj.getFullYear() === currentYear) {
+                        const monthIndex = dateObj.getMonth();
+                        if (monthIndex >= 0 && monthIndex < 12) {
+                            monthlyData[monthIndex] += (parseFloat(record.grand_total) || 0);
+                        }
                     }
                 }
             });
             const labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            return sendSuccess(res, { labels, data: monthlyData }, 'Sales chart data compiled');
+            return sendSuccess(res, { labels, data: monthlyData, branch_id: branchId }, 'Sales chart data compiled');
         } catch (error) {
             console.error('Error in getChartSales:', error);
             return sendError(res, 'Failed to compile sales chart data', 500);
