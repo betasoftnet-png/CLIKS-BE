@@ -36,14 +36,30 @@ async function getEffectiveBranch(req) {
     if (!branchId) return null;
 
     try {
-        const branch = await db.prepare('SELECT id, name, code, city, address, phone FROM branches WHERE id = ? AND user_id = ?').get(branchId, req.user.id);
+        const branch = await db.prepare('SELECT id, name, code, city, address, phone, is_main_branch FROM branches WHERE id = ? AND user_id = ?').get(branchId, req.user.id);
         return branch || null;
     } catch (e) {
         return null;
     }
 }
 
+/**
+ * Returns SQL clause and parameters for branch filtering:
+ * - If no branch selected: returns empty clause (consolidated company-wide).
+ * - If Main Showroom: includes matching branch_id AND unassigned legacy records (branch_id IS NULL OR branch_id = 0).
+ * - If specific secondary showroom: strictly isolates to that branch_id.
+ */
+function getBranchSqlCondition(branchId, isMainBranch, columnPrefix = '') {
+    if (!branchId) return { clause: '', params: [] };
+    const col = columnPrefix ? `${columnPrefix}.branch_id` : 'branch_id';
+    if (isMainBranch) {
+        return { clause: ` AND (${col} = ? OR ${col} IS NULL OR ${col} = 0)`, params: [branchId] };
+    }
+    return { clause: ` AND ${col} = ?`, params: [branchId] };
+}
+
 module.exports = {
     getEffectiveBranchId,
-    getEffectiveBranch
+    getEffectiveBranch,
+    getBranchSqlCondition
 };

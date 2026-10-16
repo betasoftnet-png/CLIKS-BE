@@ -1,6 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
-const { getEffectiveBranchId } = require('../utils/branchHelper');
+const { getEffectiveBranchId, getBranchSqlCondition } = require('../utils/branchHelper');
 
 const reportsController = {
     getDashboardSummary: async (req, res) => {
@@ -8,8 +8,13 @@ const reportsController = {
             const branchId = getEffectiveBranchId(req);
             let branchInfo = null;
             if (branchId) {
-                branchInfo = await db.prepare("SELECT id, name, code, city FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
+                branchInfo = await db.prepare("SELECT id, name, code, city, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
             }
+            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
+
+            const { clause: invBranchClause, params: invBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
+            const { clause: purBranchClause, params: purBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
+            const { clause: expBranchClause, params: expBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
 
             let sales = null;
             let purchases = null;
@@ -17,23 +22,13 @@ const reportsController = {
             let invoices = [];
 
             try {
-                let salesQuery = "SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?";
-                const salesParams = [req.user.id];
-                if (branchId) {
-                    salesQuery += " AND branch_id = ?";
-                    salesParams.push(branchId);
-                }
-                sales = await db.prepare(salesQuery).get(...salesParams);
+                let salesQuery = `SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?${invBranchClause}`;
+                sales = await db.prepare(salesQuery).get(req.user.id, ...invBranchParams);
             } catch (sErr) {}
 
             try {
-                let purchasesQuery = "SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?";
-                const purParams = [req.user.id];
-                if (branchId) {
-                    purchasesQuery += " AND branch_id = ?";
-                    purParams.push(branchId);
-                }
-                purchases = await db.prepare(purchasesQuery).get(...purParams);
+                let purchasesQuery = `SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?${purBranchClause}`;
+                purchases = await db.prepare(purchasesQuery).get(req.user.id, ...purBranchParams);
             } catch (pErr) {
                 try {
                     purchases = await db.prepare("SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
@@ -41,13 +36,8 @@ const reportsController = {
             }
 
             try {
-                let expensesQuery = "SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')";
-                const expParams = [req.user.id];
-                if (branchId) {
-                    expensesQuery += " AND branch_id = ?";
-                    expParams.push(branchId);
-                }
-                expenses = await db.prepare(expensesQuery).get(...expParams);
+                let expensesQuery = `SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')${expBranchClause}`;
+                expenses = await db.prepare(expensesQuery).get(req.user.id, ...expBranchParams);
             } catch (eErr) {
                 try {
                     expenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
@@ -59,13 +49,8 @@ const reportsController = {
             const expensesTotal = parseFloat(expenses?.total) || 0;
 
             try {
-                let invoicesQuery = "SELECT created_at, total_amount FROM business_invoices WHERE user_id = ?";
-                const invParams = [req.user.id];
-                if (branchId) {
-                    invoicesQuery += " AND branch_id = ?";
-                    invParams.push(branchId);
-                }
-                invoices = await db.prepare(invoicesQuery).all(...invParams);
+                let invoicesQuery = `SELECT created_at, total_amount FROM business_invoices WHERE user_id = ?${invBranchClause}`;
+                invoices = await db.prepare(invoicesQuery).all(req.user.id, ...invBranchParams);
             } catch (invErr) {
                 invoices = [];
             }
@@ -104,6 +89,13 @@ const reportsController = {
     getSales: async (req, res) => {
         try {
             const branchId = getEffectiveBranchId(req);
+            let branchInfo = null;
+            if (branchId) {
+                branchInfo = await db.prepare("SELECT id, name, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
+            }
+            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
+            const { clause: invBranchClause, params: invBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
+
             let sql = `
                 SELECT 
                     invoice_number as order_number, 
@@ -114,16 +106,10 @@ const reportsController = {
                     branch_id,
                     branch_name
                 FROM business_invoices 
-                WHERE user_id = ?
+                WHERE user_id = ?${invBranchClause}
+                ORDER BY id DESC
             `;
-            const params = [req.user.id];
-            if (branchId) {
-                sql += " AND branch_id = ?";
-                params.push(branchId);
-            }
-            sql += " ORDER BY id DESC";
-
-            const list = await db.prepare(sql).all(...params);
+            const list = await db.prepare(sql).all(req.user.id, ...invBranchParams);
             return sendSuccess(res, list, 'Sales records compiled');
         } catch (error) {
             console.error('Error in getSales:', error);
@@ -133,13 +119,15 @@ const reportsController = {
     getSalesSummary: async (req, res) => {
         try {
             const branchId = getEffectiveBranchId(req);
-            let sql = "SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?";
-            const params = [req.user.id];
+            let branchInfo = null;
             if (branchId) {
-                sql += " AND branch_id = ?";
-                params.push(branchId);
+                branchInfo = await db.prepare("SELECT id, name, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
             }
-            const sales = await db.prepare(sql).get(...params);
+            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
+            const { clause: invBranchClause, params: invBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
+
+            let sql = `SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?${invBranchClause}`;
+            const sales = await db.prepare(sql).get(req.user.id, ...invBranchParams);
             return sendSuccess(res, { total_sales: sales?.total || 0, margin: '0%', branch_id: branchId }, 'Sales summary compiled');
         } catch (error) {
             console.error('Error in getSalesSummary:', error);
@@ -149,6 +137,13 @@ const reportsController = {
     getSalesByCustomer: async (req, res) => {
         try {
             const branchId = getEffectiveBranchId(req);
+            let branchInfo = null;
+            if (branchId) {
+                branchInfo = await db.prepare("SELECT id, name, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
+            }
+            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
+            const { clause: invBranchClause, params: invBranchParams } = getBranchSqlCondition(branchId, isMainBranch, 'i');
+
             let sql = `
                 SELECT 
                     COALESCE(c.name, i.client_name) as name, 
@@ -162,17 +157,11 @@ const reportsController = {
                     )
                 WHERE i.user_id = ? 
                   AND (i.status IS NULL OR LOWER(i.status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
-            `;
-            const params = [req.user.id];
-            if (branchId) {
-                sql += " AND i.branch_id = ?";
-                params.push(branchId);
-            }
-            sql += `
+                  ${invBranchClause}
                 GROUP BY COALESCE(c.name, i.client_name)
                 ORDER BY total_sales DESC
             `;
-            const list = await db.prepare(sql).all(...params);
+            const list = await db.prepare(sql).all(req.user.id, ...invBranchParams);
             return sendSuccess(res, list || [], 'Sales by customer compiled');
         } catch (error) {
             console.error('Error in getSalesByCustomer:', error);
@@ -182,13 +171,15 @@ const reportsController = {
     getSalesByProduct: async (req, res) => {
         try {
             const branchId = getEffectiveBranchId(req);
-            let sql = "SELECT items FROM business_invoices WHERE user_id = ? AND items IS NOT NULL AND items != ''";
-            const params = [req.user.id];
+            let branchInfo = null;
             if (branchId) {
-                sql += " AND branch_id = ?";
-                params.push(branchId);
+                branchInfo = await db.prepare("SELECT id, name, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
             }
-            const invoices = await db.prepare(sql).all(...params);
+            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
+            const { clause: invBranchClause, params: invBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
+
+            let sql = `SELECT items FROM business_invoices WHERE user_id = ? AND items IS NOT NULL AND items != ''${invBranchClause}`;
+            const invoices = await db.prepare(sql).all(req.user.id, ...invBranchParams);
             const productMap = {};
             
             invoices.forEach(inv => {
@@ -724,13 +715,15 @@ const reportsController = {
     getTopSellingProducts: async (req, res) => {
         try {
             const branchId = getEffectiveBranchId(req);
-            let sql = "SELECT items FROM business_invoices WHERE user_id = ? AND items IS NOT NULL AND items != ''";
-            const params = [req.user.id];
+            let branchInfo = null;
             if (branchId) {
-                sql += " AND branch_id = ?";
-                params.push(branchId);
+                branchInfo = await db.prepare("SELECT id, name, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
             }
-            const invoices = await db.prepare(sql).all(...params);
+            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
+            const { clause: invBranchClause, params: invBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
+
+            let sql = `SELECT items FROM business_invoices WHERE user_id = ? AND items IS NOT NULL AND items != ''${invBranchClause}`;
+            const invoices = await db.prepare(sql).all(req.user.id, ...invBranchParams);
             const map = {};
             invoices.forEach(inv => {
                 try {

@@ -125,9 +125,9 @@ const productController = {
                 query = `
                     SELECT 
                         p.*,
-                        COALESCE(bs.quantity, 0) as quantity,
+                        COALESCE(bs.quantity, p.quantity, 0) as quantity,
                         COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5) as low_stock_threshold,
-                        COALESCE(bs.quantity, 0) as branch_stock,
+                        COALESCE(bs.quantity, p.quantity, 0) as branch_stock,
                         b.name as branch_name,
                         bs.branch_id
                     FROM business_products p

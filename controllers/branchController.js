@@ -113,6 +113,8 @@ const ensureDefaultBranch = async (userId) => {
         const countRow = await db.prepare("SELECT COUNT(*) as count FROM branches WHERE user_id = ? AND status != 'deleted'").get(userId);
         const count = countRow ? Number(countRow.count ?? countRow['count'] ?? 0) : 0;
 
+        let mainBranchId = null;
+
         if (count === 0) {
             const now = new Date().toISOString();
             const res = await db.prepare(`
@@ -122,10 +124,10 @@ const ensureDefaultBranch = async (userId) => {
                 ) VALUES (?, 'Main Showroom', 'MAIN-01', 'MS-', 'Central Commercial Hub', 'Chennai', 'Tamil Nadu', '600001', '', '', 1, 'active', ?, ?)
             `).run(userId, now, now);
 
-            const newBranchId = res?.lastInsertRowid || res?.id;
+            mainBranchId = res?.lastInsertRowid || res?.id;
 
             // Sync all existing products into this default branch with their current quantity
-            if (newBranchId) {
+            if (mainBranchId) {
                 try {
                     const prods = await db.prepare('SELECT id, quantity, low_stock_threshold FROM business_products WHERE user_id = ?').all(userId);
                     if (Array.isArray(prods)) {
@@ -134,7 +136,7 @@ const ensureDefaultBranch = async (userId) => {
                                 await db.prepare(`
                                     INSERT INTO branch_stock (user_id, branch_id, product_id, quantity, low_stock_threshold, created_at, updated_at)
                                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                                `).run(userId, newBranchId, p.id, p.quantity || 0, p.low_stock_threshold || 5, now, now);
+                                `).run(userId, mainBranchId, p.id, p.quantity || 0, p.low_stock_threshold || 5, now, now);
                             } catch (pErr) {}
                         }
                     }
@@ -142,8 +144,67 @@ const ensureDefaultBranch = async (userId) => {
                     console.warn('[Branch Controller] Warning fetching prods for default branch:', prodsErr.message);
                 }
             }
+        } else {
+            // Retrieve existing main branch ID
+            const mainRow = await db.prepare("SELECT id FROM branches WHERE user_id = ? AND is_main_branch = 1 AND status != 'deleted'").get(userId);
+            mainBranchId = mainRow?.id;
+            if (!mainBranchId) {
+                const firstRow = await db.prepare("SELECT id FROM branches WHERE user_id = ? AND status != 'deleted' ORDER BY id ASC LIMIT 1").get(userId);
+                mainBranchId = firstRow?.id;
+            }
+        }
 
-            return newBranchId;
+        // Backfill any existing unassigned invoices to the Main Showroom
+        if (mainBranchId) {
+            try {
+                await db.prepare(`
+                    UPDATE business_invoices 
+                    SET branch_id = ?, branch_name = 'Main Showroom'
+                    WHERE user_id = ? AND (branch_id IS NULL OR branch_id = 0)
+                `).run(mainBranchId, userId);
+            } catch (invErr) {
+                console.warn('[Branch Controller] Notice backfilling invoices:', invErr.message);
+            }
+
+            // Also backfill unassigned purchases and expenses if table columns exist
+            try {
+                await db.prepare(`
+                    UPDATE business_purchases 
+                    SET branch_id = ?
+                    WHERE user_id = ? AND (branch_id IS NULL OR branch_id = 0)
+                `).run(mainBranchId, userId);
+            } catch (purErr) {}
+
+            try {
+                await db.prepare(`
+                    UPDATE expenses 
+                    SET branch_id = ?
+                    WHERE user_id = ? AND (branch_id IS NULL OR branch_id = 0)
+                `).run(mainBranchId, userId);
+            } catch (expErr) {}
+
+            // Ensure all products have a branch_stock row for this main branch
+            try {
+                const now = new Date().toISOString();
+                const missing = await db.prepare(`
+                    SELECT p.id, p.quantity, p.low_stock_threshold 
+                    FROM business_products p 
+                    LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+                    WHERE p.user_id = ? AND bs.id IS NULL
+                `).all(mainBranchId, userId);
+                if (Array.isArray(missing)) {
+                    for (const p of missing) {
+                        try {
+                            await db.prepare(`
+                                INSERT INTO branch_stock (user_id, branch_id, product_id, quantity, low_stock_threshold, created_at, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            `).run(userId, mainBranchId, p.id, p.quantity || 0, p.low_stock_threshold || 5, now, now);
+                        } catch (e) {}
+                    }
+                }
+            } catch (syncErr) {}
+
+            return mainBranchId;
         }
     } catch (e) {
         console.warn('[Branch Controller] Error provisioning default branch:', e.message);
