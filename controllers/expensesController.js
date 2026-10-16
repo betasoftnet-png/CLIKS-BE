@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const { getEffectiveBranchId, getBranchSqlCondition } = require('../utils/branchHelper');
 const fs = require('fs');
 const path = require('path');
 
@@ -97,7 +98,9 @@ const initTableAndColumns = async () => {
         'receipt',
         'subscription_name',
         'time',
-        'team_members'
+        'team_members',
+        'branch_id',
+        'branch_name'
     ];
     for (const col of columns) {
         try {
@@ -217,8 +220,16 @@ const expensesController = {
         try {
             await autoPostDueRecurringExpenses(req.user.id);
 
-            let sql = "SELECT * FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')";
-            const params = [req.user.id];
+            const branchId = getEffectiveBranchId(req);
+            let branchInfo = null;
+            if (branchId) {
+                branchInfo = await db.prepare("SELECT id, name, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
+            }
+            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
+            const { clause: expBranchClause, params: expBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
+
+            let sql = `SELECT * FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')${expBranchClause}`;
+            const params = [req.user.id, ...expBranchParams];
 
             if (category) {
                 sql += " AND category_name = ?";
@@ -253,6 +264,15 @@ const expensesController = {
     createExpense: async (req, res) => {
         const { category_name, subcategory, payee_name, expense_amount, gst_percentage, payment_mode, transaction_reference, expense_date } = req.body;
         try {
+            const branchId = req.body.branch_id ? parseInt(req.body.branch_id) : getEffectiveBranchId(req);
+            let branchName = req.body.branch_name || '';
+            if (branchId && !branchName) {
+                try {
+                    const b = await db.prepare('SELECT name FROM branches WHERE id = ?').get(branchId);
+                    if (b) branchName = b.name;
+                } catch(e) {}
+            }
+
             const now = new Date().toISOString();
             const expNum = `EXP-2026-${Date.now().toString().slice(-3)}`;
             const amt = parseFloat(expense_amount) || 0;
@@ -265,21 +285,23 @@ const expensesController = {
                 INSERT INTO expenses (
                     user_id, amount, expense_number, expense_date, expense_status, category_name, subcategory,
                     payee_name, payee_phone, payee_gstin, expense_amount, gst_percentage, subtotal, tax_amount,
-                    payment_mode, transaction_reference, input_tax_credit, created_at, updated_at, description
-                ) VALUES (?, ?, ?, ?, 'paid', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    payment_mode, transaction_reference, input_tax_credit, created_at, updated_at, description,
+                    branch_id, branch_name
+                ) VALUES (?, ?, ?, ?, 'paid', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, amt, expNum, finalDate, category_name || 'General', subcategory || '',
                 payee_name || '', '', '', amt, gst, sub, tax, payment_mode || 'UPI', transaction_reference || `TXN-${Date.now().toString().slice(-6)}`,
-                gst > 0 ? 'Eligible (ITC Claimed)' : 'Not Applicable', now, now, subcategory || ''
+                gst > 0 ? 'Eligible (ITC Claimed)' : 'Not Applicable', now, now, subcategory || '',
+                branchId || null, branchName || ''
             );
 
             const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
             
             const normalizedMode = normalizePaymentMode(payment_mode);
             await db.prepare(`
-                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                VALUES (?, 'expense', ?, ?, ?, ?, ?, 'posted', ?, ?)
-            `).run(req.user.id, finalDate, amt, category_name || 'General', normalizedMode, subcategory ? `Expense #${expNum} - ${subcategory}` : `Expense #${expNum}`, now, now);
+                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at, branch_id, branch_name)
+                VALUES (?, 'expense', ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?)
+            `).run(req.user.id, finalDate, amt, category_name || 'General', normalizedMode, subcategory ? `Expense #${expNum} - ${subcategory}` : `Expense #${expNum}`, now, now, branchId || null, branchName || '');
 
             return sendSuccess(res, inserted, 'Expense recorded successfully', 201);
         } catch (error) {
@@ -852,13 +874,21 @@ const expensesController = {
     },
     getReportCategory: async (req, res) => {
         try {
+            const branchId = getEffectiveBranchId(req);
+            let branchInfo = null;
+            if (branchId) {
+                branchInfo = await db.prepare("SELECT id, name, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
+            }
+            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
+            const { clause: expBranchClause, params: expBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
+
             const list = await db.prepare(`
                 SELECT COALESCE(category_name, category, 'Operating') as category_name, SUM(amount) as total_amount 
                 FROM expenses 
-                WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')
+                WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')${expBranchClause}
                 GROUP BY COALESCE(category_name, category, 'Operating')
                 ORDER BY total_amount DESC
-            `).all(req.user.id);
+            `).all(req.user.id, ...expBranchParams);
             return sendSuccess(res, list, 'Category report retrieved');
         } catch (error) {
             console.error('Error in getReportCategory:', error);

@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { recordAudit } = require('../utils/auditLogger');
+const { getEffectiveBranchId, getBranchSqlCondition } = require('../utils/branchHelper');
 const gstHelper = require('../utils/gstHelper');
 
 const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') => {
@@ -72,20 +73,31 @@ const purchaseController = {
                 }
             }
 
+            const branchId = req.body.branch_id ? parseInt(req.body.branch_id) : getEffectiveBranchId(req);
+            let branchName = req.body.branch_name || '';
+            if (branchId && !branchName) {
+                try {
+                    const b = await db.prepare('SELECT name FROM branches WHERE id = ?').get(branchId);
+                    if (b) branchName = b.name;
+                } catch(e) {}
+            }
+
             const result = await db.prepare(`
                 INSERT INTO business_purchases (
                     user_id, purchase_number, purchase_type, purchase_date, due_date, doc_type, status,
                     supplier_name, supplier_gstin, billing_address, contact_number, warehouse_id,
                     purchase_by, payment_status, payment_mode, bank_account_id, paid_amount,
                     advance_amount, shipping_charge, round_off, place_of_supply, return_reason,
-                    subtotal, total_discount, total_tax, grand_total, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    subtotal, total_discount, total_tax, grand_total, created_at, updated_at,
+                    branch_id, branch_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, purchaseNum, purchase_type || 'GST', purchase_date || now.split('T')[0], due_date || now.split('T')[0], doc_type || 'PO', finalStatus,
                 supplierName, supplier_gstin || null, billing_address || null, contact_number || null, warehouse_id || 'Main Godown',
                 purchase_by || null, finalPaymentStatus, payment_mode || 'Cash', bank_account_id || null, parseFloat(paid_amount) || 0,
                 parseFloat(advance_amount) || 0, parseFloat(shipping_charge) || 0, parseFloat(round_off) || 0, place_of_supply || 'Maharashtra', return_reason || null,
-                parseFloat(subtotal) || 0, parseFloat(total_discount) || 0, parseFloat(total_tax) || 0, parseFloat(grand_total) || 0, now, now
+                parseFloat(subtotal) || 0, parseFloat(total_discount) || 0, parseFloat(total_tax) || 0, parseFloat(grand_total) || 0, now, now,
+                branchId || null, branchName || ''
             );
 
             const purchaseId = result.lastInsertRowid || result.id;
@@ -330,8 +342,16 @@ const purchaseController = {
     getPurchases: async (req, res) => {
         const { search, status, supplier_id: _supplier_id, doc_type } = req.query;
         try {
-            let query = `SELECT * FROM business_purchases WHERE user_id = ?`;
-            const params = [req.user.id];
+            const branchId = getEffectiveBranchId(req);
+            let branchInfo = null;
+            if (branchId) {
+                branchInfo = await db.prepare("SELECT id, name, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
+            }
+            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
+            const { clause: purBranchClause, params: purBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
+
+            let query = `SELECT * FROM business_purchases WHERE user_id = ?${purBranchClause}`;
+            const params = [req.user.id, ...purBranchParams];
 
             if (status) {
                 query += ` AND status = ?`;

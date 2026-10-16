@@ -30,18 +30,24 @@ const reportsController = {
                 let purchasesQuery = `SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?${purBranchClause}`;
                 purchases = await db.prepare(purchasesQuery).get(req.user.id, ...purBranchParams);
             } catch (pErr) {
-                try {
-                    purchases = await db.prepare("SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
-                } catch (e2) {}
+                console.warn('[reportsController] purchasesQuery error:', pErr.message);
+                if (!branchId) {
+                    try {
+                        purchases = await db.prepare("SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
+                    } catch (e2) {}
+                }
             }
 
             try {
                 let expensesQuery = `SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')${expBranchClause}`;
                 expenses = await db.prepare(expensesQuery).get(req.user.id, ...expBranchParams);
             } catch (eErr) {
-                try {
-                    expenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
-                } catch (e2) {}
+                console.warn('[reportsController] expensesQuery error:', eErr.message);
+                if (!branchId) {
+                    try {
+                        expenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
+                    } catch (e2) {}
+                }
             }
 
             const salesTotal = parseFloat(sales?.total) || 0;
@@ -71,7 +77,8 @@ const reportsController = {
             return sendSuccess(res, {
                 total_sales: salesTotal,
                 total_purchases: purchasesTotal,
-                total_expenses: expensesTotal + purchasesTotal,
+                total_expenses: expensesTotal,
+                operational_expenses: expensesTotal,
                 monthly_sales: monthly_sales,
                 status: 'healthy',
                 branch_id: branchId,

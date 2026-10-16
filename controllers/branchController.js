@@ -95,6 +95,29 @@ const ensureTablesInit = async () => {
                     await db.prepare(`ALTER TABLE business_invoices ADD COLUMN branch_name TEXT`).run();
                 } catch (e) {}
 
+                // Add branch columns to expenses if not exist
+                try {
+                    await db.prepare(`ALTER TABLE expenses ADD COLUMN branch_id INTEGER`).run();
+                } catch (e) {}
+                try {
+                    await db.prepare(`ALTER TABLE expenses ADD COLUMN branch_name TEXT`).run();
+                } catch (e) {}
+
+                // Add branch columns to business_purchases if not exist
+                try {
+                    await db.prepare(`ALTER TABLE business_purchases ADD COLUMN branch_id INTEGER`).run();
+                } catch (e) {}
+                try {
+                    await db.prepare(`ALTER TABLE business_purchases ADD COLUMN branch_name TEXT`).run();
+                } catch (e) {}
+
+                // Add branch columns to accounting if not exist
+                try {
+                    await db.prepare(`ALTER TABLE accounting ADD COLUMN branch_id INTEGER`).run();
+                } catch (e) {}
+                try {
+                    await db.prepare(`ALTER TABLE accounting ADD COLUMN branch_name TEXT`).run();
+                } catch (e) {}
             } catch (err) {
                 console.warn('[Branch Controller] Table init warning:', err.message);
             }
@@ -170,7 +193,7 @@ const ensureDefaultBranch = async (userId) => {
             try {
                 await db.prepare(`
                     UPDATE business_purchases 
-                    SET branch_id = ?
+                    SET branch_id = ?, branch_name = 'Main Showroom'
                     WHERE user_id = ? AND (branch_id IS NULL OR branch_id = 0)
                 `).run(mainBranchId, userId);
             } catch (purErr) {}
@@ -178,10 +201,18 @@ const ensureDefaultBranch = async (userId) => {
             try {
                 await db.prepare(`
                     UPDATE expenses 
-                    SET branch_id = ?
+                    SET branch_id = ?, branch_name = 'Main Showroom'
                     WHERE user_id = ? AND (branch_id IS NULL OR branch_id = 0)
                 `).run(mainBranchId, userId);
             } catch (expErr) {}
+
+            try {
+                await db.prepare(`
+                    UPDATE accounting 
+                    SET branch_id = ?, branch_name = 'Main Showroom'
+                    WHERE user_id = ? AND (branch_id IS NULL OR branch_id = 0)
+                `).run(mainBranchId, userId);
+            } catch (accErr) {}
 
             // Ensure all products have a branch_stock row for this main branch
             try {
