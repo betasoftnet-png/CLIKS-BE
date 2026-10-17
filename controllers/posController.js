@@ -23,10 +23,18 @@ const posController = {
         const numAmount = parseFloat(amount) || 0;
         const numTax = parseFloat(tax_amount) || 0;
         const numTotal = parseFloat(total_amount) || 0;
-        const numPaid = parseFloat(paid_amount) || numTotal;
-        const numDue = parseFloat(due_amount) || 0;
+        const numPaid = (paid_amount !== undefined && paid_amount !== null && !isNaN(parseFloat(paid_amount)))
+            ? parseFloat(paid_amount)
+            : (payment_mode === 'Credit' ? 0 : numTotal);
+        const numDue = (due_amount !== undefined && due_amount !== null && !isNaN(parseFloat(due_amount)))
+            ? parseFloat(due_amount)
+            : Math.max(0, numTotal - numPaid);
         const numDiscount = parseFloat(discount_amount) || 0;
         const numRoundOff = parseFloat(round_off) || 0;
+        const numCgst = parseFloat(req.body.cgst_amount || 0);
+        const numSgst = parseFloat(req.body.sgst_amount || 0);
+        const numIgst = parseFloat(req.body.igst_amount || 0);
+        const invoiceStatus = numDue <= 0 ? 'Paid' : (numPaid > 0 ? 'Partially Paid' : 'Credit');
 
         let isLoyaltyEnabled = true;
         try {
@@ -96,6 +104,9 @@ const posController = {
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_phone TEXT').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_email TEXT').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN shop_gstin TEXT').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN cgst_amount REAL DEFAULT 0').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN sgst_amount REAL DEFAULT 0').run(); } catch (e) { }
+        try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN igst_amount REAL DEFAULT 0').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN branch_id INTEGER').run(); } catch (e) { }
         try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN branch_name TEXT').run(); } catch (e) { }
 
@@ -243,7 +254,7 @@ const posController = {
                 `).run([
                     userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null, customerId,
                     numAmount, numTax, numTotal, numPaid, numDue,
-                    numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
+                    numDiscount, numRoundOff, invoiceStatus, now.split('T')[0], payment_mode || 'Cash',
                     'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned,
                     loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints,
                     billedByName, resolvedShopName, resolvedShopAddress, resolvedShopPhone, resolvedShopEmail, resolvedShopGstin, now, now
@@ -264,7 +275,7 @@ const posController = {
                     `).run([
                         userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null, customerId,
                         numAmount, numTax, numTotal, numPaid, numDue,
-                        numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
+                        numDiscount, numRoundOff, invoiceStatus, now.split('T')[0], payment_mode || 'Cash',
                         'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned,
                         loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints,
                         billedByName, now, now
@@ -281,7 +292,7 @@ const posController = {
                     `).run([
                         userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null,
                         numAmount, numTax, numTotal, numPaid, numDue,
-                        numDiscount, numRoundOff, 'Paid', now.split('T')[0], payment_mode || 'Cash',
+                        numDiscount, numRoundOff, invoiceStatus, now.split('T')[0], payment_mode || 'Cash',
                         'POS', JSON.stringify(items), loyaltyPointsEarned, loyaltyPointsRedeemed, billedByName, now, now
                     ]);
                     invoiceId = result.lastInsertRowid || result.id;
@@ -539,6 +550,12 @@ const posController = {
                 createdInvoice.shop_phone = createdInvoice.shop_phone || resolvedShopPhone;
                 createdInvoice.shop_email = createdInvoice.shop_email || resolvedShopEmail;
                 createdInvoice.shop_gstin = createdInvoice.shop_gstin || resolvedShopGstin;
+                createdInvoice.paid_amount = numPaid;
+                createdInvoice.due_amount = numDue;
+                createdInvoice.cgst_amount = numCgst;
+                createdInvoice.sgst_amount = numSgst;
+                createdInvoice.igst_amount = numIgst;
+                createdInvoice.status = invoiceStatus;
             }
 
             // Real-time integration to CLIKS Customer Application
