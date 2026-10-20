@@ -58,10 +58,14 @@ const purchaseController = {
         try {
             const now = new Date().toISOString();
             const purchaseNum = purchase_number || `PO-${Date.now().toString().slice(-6)}`;
+            const isInternalRequisition = purchase_type === 'INTERNAL' || purchase_type === 'REQUISITION' || String(supplierName || '').toLowerCase().includes('main showroom');
             let finalStatus = status || 'Approved';
             let finalPaymentStatus = payment_status || 'pending';
 
-            if (doc_type === 'BILL') {
+            if (isInternalRequisition) {
+                finalStatus = 'Pending Approval';
+                finalPaymentStatus = 'n/a';
+            } else if (doc_type === 'BILL') {
                 const totalPaid = (parseFloat(paid_amount) || 0) + (parseFloat(advance_amount) || 0);
                 const gTotal = parseFloat(grand_total) || 0;
                 if (payment_mode === 'Credit' || payment_mode === 'Payables' || totalPaid < gTotal) {
@@ -79,7 +83,7 @@ const purchaseController = {
                 try {
                     const b = await db.prepare('SELECT name FROM branches WHERE id = ?').get(branchId);
                     if (b) branchName = b.name;
-                } catch(e) {}
+                } catch (e) { }
             }
 
             const result = await db.prepare(`
@@ -133,7 +137,7 @@ const purchaseController = {
                     targetWh = await db.prepare(
                         'SELECT * FROM warehouses WHERE user_id = ? AND (id = ? OR LOWER(name) = ? OR LOWER(code) = ?) LIMIT 1'
                     ).get(req.user.id, targetWhName, String(targetWhName).toLowerCase(), String(targetWhName).toLowerCase());
-                } catch (e) {}
+                } catch (e) { }
 
                 const whName = targetWh ? targetWh.name : String(targetWhName);
                 const whId = targetWh ? String(targetWh.id) : String(targetWhName);
@@ -167,7 +171,7 @@ const purchaseController = {
                                 LIMIT 1
                             `).get(req.user.id, pName.toLowerCase(), whId.toLowerCase(), whName.toLowerCase(), whCode.toLowerCase());
                         }
-                    } catch (e) {}
+                    } catch (e) { }
 
                     if (existingProd) {
                         const currentQty = parseFloat(existingProd.quantity) || 0;
@@ -206,7 +210,7 @@ const purchaseController = {
                                 LIMIT 1
                             `).get(req.user.id, pName.toLowerCase(), whName.toLowerCase(), whId.toLowerCase(), whName.toLowerCase(), whId.toLowerCase());
                         }
-                    } catch (e) {}
+                    } catch (e) { }
 
                     if (existingStock) {
                         const currentStockQty = parseFloat(existingStock.quantity) || 0;
@@ -225,7 +229,7 @@ const purchaseController = {
                             const capUtil = `${Math.min(100, Math.round((totalQty / 1000) * 100))}%`;
                             await db.prepare('UPDATE warehouses SET capacity_utilization = ? WHERE id = ?').run(capUtil, targetWh.id);
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }
             }
 
@@ -301,35 +305,39 @@ const purchaseController = {
                     supplier = await db.prepare("SELECT id FROM business_suppliers WHERE user_id = ? AND name = ?").get(req.user.id, supplierName);
                 }
 
-                if (supplier) {
-                    const supId = supplier.id;
-                    await db.prepare(`
-                        INSERT INTO supplier_ledger (supplier_id, user_id, description, amount, type, created_at)
-                        VALUES (?, ?, ?, ?, 'debit', ?)
-                    `).run(supId, req.user.id, `Purchase Bill #${purchaseNum}`, grand_total, now);
-
-                    if (totalPaid > 0) {
+                if (!isInternalRequisition) {
+                    if (supplier) {
+                        const supId = supplier.id;
                         await db.prepare(`
                             INSERT INTO supplier_ledger (supplier_id, user_id, description, amount, type, created_at)
-                            VALUES (?, ?, ?, ?, 'credit', ?)
-                        `).run(supId, req.user.id, `Payment for Bill #${purchaseNum} (${payment_mode})`, totalPaid, now);
-                    }
+                            VALUES (?, ?, ?, ?, 'debit', ?)
+                        `).run(supId, req.user.id, `Purchase Bill #${purchaseNum}`, grand_total, now);
 
-                    const outstandingDiff = unpaidAmount;
-                    try { await db.prepare("UPDATE suppliers SET outstanding_balance = COALESCE(outstanding_balance, 0) + ? WHERE id = ?").run(outstandingDiff, supId); } catch (e) {}
-                    try { await db.prepare("UPDATE business_suppliers SET outstanding_balance = COALESCE(outstanding_balance, 0) + ? WHERE id = ?").run(outstandingDiff, supId); } catch (e) {}
+                        if (totalPaid > 0) {
+                            await db.prepare(`
+                                INSERT INTO supplier_ledger (supplier_id, user_id, description, amount, type, created_at)
+                                VALUES (?, ?, ?, ?, 'credit', ?)
+                            `).run(supId, req.user.id, `Payment for Bill #${purchaseNum} (${payment_mode})`, totalPaid, now);
+                        }
+
+                        const outstandingDiff = unpaidAmount;
+                        try { await db.prepare("UPDATE suppliers SET outstanding_balance = COALESCE(outstanding_balance, 0) + ? WHERE id = ?").run(outstandingDiff, supId); } catch (e) { }
+                        try { await db.prepare("UPDATE business_suppliers SET outstanding_balance = COALESCE(outstanding_balance, 0) + ? WHERE id = ?").run(outstandingDiff, supId); } catch (e) { }
+                    }
                 }
             } catch (ledgErr) {
                 console.warn('[Purchase Controller] Ledger update non-fatal warning:', ledgErr.message);
             }
 
-            try {
-                await gstHelper.syncPurchaseToGstr2b(purchaseId, req.user.id);
-            } catch (e) {}
+            if (!isInternalRequisition) {
+                try {
+                    await gstHelper.syncPurchaseToGstr2b(purchaseId, req.user.id);
+                } catch (e) { }
+            }
 
             try {
                 await logBusinessAudit(req.user.id, 'PURCHASE_CREATE', `Created purchase document ${purchaseNum} (${doc_type}) for supplier ${supplierName} (amount: ₹${grand_total})`, 'SUCCESS');
-            } catch (e) {}
+            } catch (e) { }
 
             return sendSuccess(res, created, 'Purchase document created successfully', 201);
         } catch (error) {
@@ -347,11 +355,18 @@ const purchaseController = {
             if (branchId) {
                 branchInfo = await db.prepare("SELECT id, name, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
             }
-            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
-            const { clause: purBranchClause, params: purBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
+            let query = '';
+            let params = [req.user.id];
 
-            let query = `SELECT * FROM business_purchases WHERE user_id = ?${purBranchClause}`;
-            const params = [req.user.id, ...purBranchParams];
+            if (isMainBranch) {
+                query = `SELECT * FROM business_purchases WHERE user_id = ? AND (branch_id = ? OR branch_id IS NULL OR branch_id = 0 OR purchase_type = 'INTERNAL' OR purchase_type = 'REQUISITION')`;
+                params.push(branchId);
+            } else if (branchId) {
+                query = `SELECT * FROM business_purchases WHERE user_id = ? AND branch_id = ?`;
+                params.push(branchId);
+            } else {
+                query = `SELECT * FROM business_purchases WHERE user_id = ?`;
+            }
 
             if (status) {
                 query += ` AND status = ?`;
@@ -618,7 +633,7 @@ const purchaseController = {
             }
 
             await db.prepare('UPDATE business_purchases SET paid_amount = ?, payment_mode = ?, payment_status = ?, status = ? WHERE id = ? AND user_id = ?').run(newPaidAmount, payment_mode, newPaymentStatus, newStatus, id, req.user.id);
-            
+
             // Sync to cash/bank ledger (accounting table)
             const normalizedMode = normalizePaymentMode(payment_mode);
             const now = new Date().toISOString();
@@ -741,16 +756,16 @@ const purchaseController = {
             // 1. Load the purchase bill by ID or purchase_number cleanly handling integer types
             let bill = null;
             if (idNum !== null) {
-                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND (id = ? OR purchase_number = ? OR purchase_number = ?)').get(userId, idNum, idClean, `PO-${numClean}`); } catch(e) {}
+                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND (id = ? OR purchase_number = ? OR purchase_number = ?)').get(userId, idNum, idClean, `PO-${numClean}`); } catch (e) { }
             }
             if (!bill) {
-                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND (purchase_number = ? OR purchase_number = ?)').get(userId, idClean, `PO-${numClean}`); } catch(e) {}
+                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND (purchase_number = ? OR purchase_number = ?)').get(userId, idClean, `PO-${numClean}`); } catch (e) { }
             }
             if (!bill && idNum !== null) {
-                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ?').get(idNum, idClean, `PO-${numClean}`); } catch(e) {}
+                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ?').get(idNum, idClean, `PO-${numClean}`); } catch (e) { }
             }
             if (!bill) {
-                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE purchase_number = ? OR purchase_number = ?').get(idClean, `PO-${numClean}`); } catch(e) {}
+                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE purchase_number = ? OR purchase_number = ?').get(idClean, `PO-${numClean}`); } catch (e) { }
             }
 
             if (!bill) return sendError(res, 'Purchase bill not found', 404);
@@ -762,16 +777,16 @@ const purchaseController = {
             const whIdNum = (!isNaN(Number(warehouse_id)) && warehouse_id !== null && String(warehouse_id).trim() !== '') ? Number(warehouse_id) : null;
 
             if (whIdNum !== null) {
-                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND id = ?').get(userId, whIdNum); } catch(e) {}
+                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND id = ?').get(userId, whIdNum); } catch (e) { }
             }
             if (!targetWhObj && warehouse_code) {
-                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND LOWER(code) = ?').get(userId, String(warehouse_code).toLowerCase()); } catch(e) {}
+                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND LOWER(code) = ?').get(userId, String(warehouse_code).toLowerCase()); } catch (e) { }
             }
             if (!targetWhObj && warehouse_name) {
-                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(warehouse_name).toLowerCase()); } catch(e) {}
+                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(warehouse_name).toLowerCase()); } catch (e) { }
             }
             if (!targetWhObj && warehouse_id && typeof warehouse_id === 'string') {
-                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND (LOWER(code) = ? OR LOWER(name) = ?)').get(userId, warehouse_id.toLowerCase(), warehouse_id.toLowerCase()); } catch(e) {}
+                try { targetWhObj = await db.prepare('SELECT * FROM warehouses WHERE user_id = ? AND (LOWER(code) = ? OR LOWER(name) = ?)').get(userId, warehouse_id.toLowerCase(), warehouse_id.toLowerCase()); } catch (e) { }
             }
 
             const whDbId = targetWhObj ? String(targetWhObj.id) : String(warehouse_id || '1');
@@ -798,7 +813,7 @@ const purchaseController = {
                 if (rel && rel.generated_sales_invoice_id) {
                     await db.prepare("UPDATE business_invoices SET status = 'Completed', updated_at = ? WHERE id = ?").run(now, rel.generated_sales_invoice_id);
                 }
-            } catch(e) {}
+            } catch (e) { }
 
             // 2.5 Update physical stock inventory levels for all products in this bill across BOTH business_products & stock tables
             const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(bill.id);
@@ -828,13 +843,13 @@ const purchaseController = {
                 const pIdNum = (item.product_id && !isNaN(Number(item.product_id))) ? Number(item.product_id) : null;
 
                 if (pIdNum !== null) {
-                    try { prod = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(pIdNum, userId); } catch(e) {}
+                    try { prod = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(pIdNum, userId); } catch (e) { }
                 }
                 if (!prod && pSku) {
-                    try { prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(sku) = ?').get(userId, String(pSku).toLowerCase()); } catch(e) {}
+                    try { prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(sku) = ?').get(userId, String(pSku).toLowerCase()); } catch (e) { }
                 }
                 if (!prod) {
-                    try { prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(pName).toLowerCase()); } catch(e) {}
+                    try { prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(pName).toLowerCase()); } catch (e) { }
                 }
 
                 let targetProdId = null;
@@ -869,7 +884,7 @@ const purchaseController = {
                             stock_status, warehouse_id, created_at, updated_at
                         ) VALUES (?, ?, ?, 'General', ?, ?, ?, ?, ?, ?, ?, ?)
                     `).run(userId, pName, pSku, pUnit, receivedQty, pPrice, pPrice > 0 ? (pPrice * 1.2) : 0, receivedQty > 5 ? 'In Stock' : 'Low Stock', whDbId, now, now);
-                    
+
                     targetProdId = newProdRes.lastInsertRowid;
                     console.log(`[Receive Goods Debug] Created business_products productId=${targetProdId}, sku=${pSku}, newWarehouseStock=${newWarehouseStock}, databaseUpdateResult=1`);
                 }
@@ -879,10 +894,10 @@ const purchaseController = {
                 // -------------------------------------------------------------
                 let stockRow = null;
                 if (pSku) {
-                    try { stockRow = await db.prepare('SELECT * FROM stock WHERE user_id = ? AND LOWER(sku) = ?').get(userId, String(pSku).toLowerCase()); } catch(e) {}
+                    try { stockRow = await db.prepare('SELECT * FROM stock WHERE user_id = ? AND LOWER(sku) = ?').get(userId, String(pSku).toLowerCase()); } catch (e) { }
                 }
                 if (!stockRow) {
-                    try { stockRow = await db.prepare('SELECT * FROM stock WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(pName).toLowerCase()); } catch(e) {}
+                    try { stockRow = await db.prepare('SELECT * FROM stock WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(pName).toLowerCase()); } catch (e) { }
                 }
 
                 if (stockRow) {
@@ -915,16 +930,16 @@ const purchaseController = {
                             INSERT INTO product_stock_history (product_id, user_id, quantity_changed, type, description, created_at)
                             VALUES (?, ?, ?, ?, ?, ?)
                         `).run(targetProdId, userId, receivedQty, 'in', `Received via Purchase Order #${bill.purchase_number} in ${whName}`, now);
-                    } catch(e) {}
+                    } catch (e) { }
                 }
             }
 
             // 3. Update Vendor Ledger
             try {
                 let supplier = null;
-                try { supplier = await db.prepare('SELECT id, outstanding_balance FROM suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name); } catch(e) {}
+                try { supplier = await db.prepare('SELECT id, outstanding_balance FROM suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name); } catch (e) { }
                 if (!supplier) {
-                    try { supplier = await db.prepare('SELECT id, outstanding_balance FROM business_suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name); } catch(e) {}
+                    try { supplier = await db.prepare('SELECT id, outstanding_balance FROM business_suppliers WHERE user_id = ? AND name = ?').get(userId, bill.supplier_name); } catch (e) { }
                 }
                 if (!supplier) {
                     // Auto-create supplier if not found
@@ -934,14 +949,14 @@ const purchaseController = {
                             VALUES (?, ?, ?, ?, ?, ?)
                         `).run(userId, bill.supplier_name, bill.supplier_gstin || null, parseFloat(bill.grand_total) || 0, now, now);
                         supplier = { id: newSup.lastInsertRowid, outstanding_balance: 0 };
-                    } catch(e) {
+                    } catch (e) {
                         try {
                             const newSup = await db.prepare(`
                                 INSERT INTO suppliers (user_id, name, outstanding_balance, created_at)
                                 VALUES (?, ?, ?, ?)
                             `).run(userId, bill.supplier_name, parseFloat(bill.grand_total) || 0, now);
                             supplier = { id: newSup.lastInsertRowid, outstanding_balance: 0 };
-                        } catch(e2) {
+                        } catch (e2) {
                             supplier = { id: 1, outstanding_balance: 0 };
                         }
                     }
@@ -956,12 +971,12 @@ const purchaseController = {
                         INSERT INTO supplier_ledger (supplier_id, user_id, description, amount, type, created_at)
                         VALUES (?, ?, ?, ?, 'debit', ?)
                     `).run(supId, userId, `Goods Received — Bill ${bill.purchase_number}`, billAmount, now);
-                } catch(e) {}
+                } catch (e) { }
 
                 // 4. Update supplier outstanding balance (Accounts Payable)
-                try { await db.prepare('UPDATE suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?').run(billAmount, supId); } catch(e) {}
-                try { await db.prepare('UPDATE business_suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?').run(billAmount, supId); } catch(e) {}
-            } catch(supErr) {
+                try { await db.prepare('UPDATE suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?').run(billAmount, supId); } catch (e) { }
+                try { await db.prepare('UPDATE business_suppliers SET outstanding_balance = outstanding_balance + ? WHERE id = ?').run(billAmount, supId); } catch (e) { }
+            } catch (supErr) {
                 console.warn('[Purchase Controller] Supplier ledger update warning:', supErr.message);
             }
 
@@ -989,7 +1004,7 @@ const purchaseController = {
                 await db.prepare(
                     "UPDATE accounting SET status = 'Paid' WHERE user_id = ? AND mode = 'Payables' AND notes LIKE ?"
                 ).run(userId, `%${bill.purchase_number}%`);
-            } catch(acctErr) {
+            } catch (acctErr) {
                 console.warn('[Purchase Controller] Accounting entry warning:', acctErr.message);
             }
 
@@ -998,18 +1013,196 @@ const purchaseController = {
                 if (gstHelper && typeof gstHelper.syncPurchaseToGstr2b === 'function') {
                     await gstHelper.syncPurchaseToGstr2b(bill.id, userId);
                 }
-            } catch(gstErr) {
+            } catch (gstErr) {
                 console.warn('[Purchase Controller] GSTR-2B sync warning:', gstErr.message);
             }
 
             try {
                 await logBusinessAudit(userId, 'GOODS_RECEIVED', `Goods received for Bill ${bill.purchase_number} (Supplier: ${bill.supplier_name}, Amount: ₹${bill.grand_total || 0})`, 'SUCCESS');
-            } catch(auditErr) {}
+            } catch (auditErr) { }
 
             return sendSuccess(res, { id: bill.id, purchase_number: bill.purchase_number, status: 'Completed' }, 'Goods received successfully. Inventory, Vendor Ledger, Accounts Payable, Accounting, and GSTR-2B have all been updated.');
         } catch (error) {
             console.error('[Purchase Controller] receiveGoods error:', error);
             return sendError(res, 'Failed to process goods receipt', 500);
+        }
+    },
+
+    // 13c. Fulfill Internal Stock Requisition (Branch Manager PO to Main Showroom)
+    fulfillInternalRequisition: async (req, res) => {
+        try {
+            const { id } = req.params;
+            const userId = req.user.id;
+            const now = new Date().toISOString();
+
+            // 1. Fetch the Purchase Order Requisition
+            let bill = null;
+            const idNum = (!isNaN(Number(id)) && id !== null) ? Number(id) : null;
+            if (idNum !== null) {
+                bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND (id = ? OR purchase_number = ?)').get(userId, idNum, String(id));
+            }
+            if (!bill) {
+                bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND purchase_number = ?').get(userId, String(id));
+            }
+
+            if (!bill) {
+                return sendError(res, 'Stock Requisition not found', 404);
+            }
+
+            if (bill.status === 'Completed') {
+                return sendError(res, 'This requisition is already completed and fulfilled.', 400);
+            }
+
+            // Target destination branch (The branch requesting stock)
+            const destBranchId = bill.branch_id;
+            if (!destBranchId) {
+                return sendError(res, 'No requesting branch found on this requisition.', 400);
+            }
+
+            const destBranch = await db.prepare('SELECT id, name, code FROM branches WHERE id = ?').get(destBranchId);
+            const destBranchName = destBranch ? destBranch.name : `Branch #${destBranchId}`;
+
+            // Source branch (Main Showroom / Central Warehouse)
+            let sourceBranchId = req.body.from_branch_id ? parseInt(req.body.from_branch_id) : null;
+            if (!sourceBranchId) {
+                const mb = await db.prepare('SELECT id, name FROM branches WHERE user_id = ? AND is_main_branch = 1 LIMIT 1').get(userId);
+                sourceBranchId = mb ? mb.id : 1;
+            }
+
+            if (sourceBranchId === destBranchId) {
+                return sendError(res, 'Source branch and destination branch cannot be the same', 400);
+            }
+
+            const sourceBranch = await db.prepare('SELECT id, name FROM branches WHERE id = ?').get(sourceBranchId);
+            const sourceBranchName = sourceBranch ? sourceBranch.name : 'Main Showroom';
+
+            // 2. Fetch items in this requisition
+            const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(bill.id);
+            if (!items || items.length === 0) {
+                return sendError(res, 'No items found in this requisition', 400);
+            }
+
+            // 3. Verify stock availability in Source Branch (Main Showroom)
+            const itemTransfers = [];
+            for (const item of items) {
+                const reqQty = parseFloat(item.quantity) || 0;
+                if (reqQty <= 0) continue;
+
+                const pName = item.product_name || 'Item';
+                const pSku = item.sku;
+
+                // Find matching product
+                let prod = null;
+                if (item.product_id) {
+                    prod = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(item.product_id, userId);
+                }
+                if (!prod && pSku) {
+                    prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(sku) = ?').get(userId, String(pSku).toLowerCase());
+                }
+                if (!prod && pName) {
+                    prod = await db.prepare('SELECT * FROM business_products WHERE user_id = ? AND LOWER(name) = ?').get(userId, String(pName).toLowerCase());
+                }
+
+                if (!prod) {
+                    return sendError(res, `Product "${pName}" not found in inventory catalog`, 400);
+                }
+
+                // Check source branch stock
+                const sourceBs = await db.prepare('SELECT id, quantity FROM branch_stock WHERE branch_id = ? AND product_id = ? AND user_id = ?')
+                    .get(sourceBranchId, prod.id, userId);
+
+                const availSourceQty = sourceBs ? parseFloat(sourceBs.quantity) || 0 : 0;
+                if (reqQty > availSourceQty) {
+                    return sendError(res, `Insufficient stock in ${sourceBranchName} for "${prod.name}". Available: ${availSourceQty}, Requested: ${reqQty}`, 400);
+                }
+
+                itemTransfers.push({
+                    prod,
+                    item,
+                    reqQty,
+                    sourceBs
+                });
+            }
+
+            // 4. Execute atomic transfer
+            for (const { prod, item, reqQty, sourceBs } of itemTransfers) {
+                // A. Deduct from source branch
+                const newSourceQty = Math.max(0, (parseFloat(sourceBs.quantity) || 0) - reqQty);
+                await db.prepare('UPDATE branch_stock SET quantity = ?, updated_at = ? WHERE id = ?')
+                    .run(newSourceQty, now, sourceBs.id);
+
+                // B. Add to destination branch
+                const destBs = await db.prepare('SELECT id, quantity FROM branch_stock WHERE branch_id = ? AND product_id = ? AND user_id = ?')
+                    .get(destBranchId, prod.id, userId);
+
+                if (destBs) {
+                    const newDestQty = (parseFloat(destBs.quantity) || 0) + reqQty;
+                    await db.prepare('UPDATE branch_stock SET quantity = ?, updated_at = ? WHERE id = ?')
+                        .run(newDestQty, now, destBs.id);
+                } else {
+                    await db.prepare(`
+                        INSERT INTO branch_stock (user_id, branch_id, product_id, quantity, low_stock_threshold, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, 5, ?, ?)
+                    `).run(userId, destBranchId, prod.id, reqQty, now, now);
+                }
+
+                // C. Update purchase item status
+                await db.prepare("UPDATE business_purchase_items SET received_quantity = quantity, item_status = 'COMPLETED' WHERE id = ?")
+                    .run(item.id);
+
+                // D. Log stock movements
+                try {
+                    await db.prepare(`
+                        INSERT INTO product_stock_history (product_id, user_id, quantity_changed, type, description, created_at)
+                        VALUES (?, ?, ?, 'out', ?, ?)
+                    `).run(prod.id, userId, reqQty, `Dispatched to ${destBranchName} via Requisition #${bill.purchase_number}`, now);
+
+                    await db.prepare(`
+                        INSERT INTO product_stock_history (product_id, user_id, quantity_changed, type, description, created_at)
+                        VALUES (?, ?, ?, 'in', ?, ?)
+                    `).run(prod.id, userId, reqQty, `Received from ${sourceBranchName} via Requisition #${bill.purchase_number}`, now);
+                } catch(e) {}
+            }
+
+            // 5. Create transfer history record
+            const transferNo = `TRF-${Date.now().toString().slice(-6)}`;
+            try {
+                await db.prepare(`
+                    INSERT INTO branch_transfers (
+                        user_id, transfer_no, from_branch_id, to_branch_id, status, items, notes, dispatched_at, received_at, created_at
+                    ) VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?)
+                `).run(
+                    userId, transferNo, sourceBranchId, destBranchId,
+                    JSON.stringify(items.map(it => ({ product_id: it.product_id, name: it.product_name, quantity: it.quantity }))),
+                    `Fulfilled Internal PO Requisition #${bill.purchase_number}`,
+                    now, now, now
+                );
+            } catch(e) {}
+
+            // 6. Mark Purchase as Completed
+            await db.prepare(`
+                UPDATE business_purchases 
+                SET status = 'Completed', 
+                    updated_at = ? 
+                WHERE id = ?
+            `).run(now, bill.id);
+
+            // 7. Audit log
+            try {
+                await logBusinessAudit(userId, 'REQUISITION_FULFILLED', `Internal Requisition #${bill.purchase_number} fulfilled: transferred stock from ${sourceBranchName} to ${destBranchName}`, 'SUCCESS');
+            } catch(e) {}
+
+            return sendSuccess(res, {
+                purchase_id: bill.id,
+                purchase_number: bill.purchase_number,
+                transfer_no: transferNo,
+                status: 'Completed',
+                from_branch_name: sourceBranchName,
+                to_branch_name: destBranchName
+            }, `Requisition #${bill.purchase_number} accepted! Stock successfully transferred from ${sourceBranchName} to ${destBranchName}.`);
+        } catch (error) {
+            console.error('[Purchase Controller] Error fulfilling requisition:', error);
+            return sendError(res, error.message || 'Failed to fulfill requisition', 500);
         }
     },
 
@@ -1302,7 +1495,7 @@ const purchaseController = {
             for (const p of purchases) {
                 try {
                     p.items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(p.id);
-                } catch(e) {
+                } catch (e) {
                     p.items = [];
                 }
             }
@@ -1334,19 +1527,19 @@ const purchaseController = {
             ];
             for (const tbl of tablesToEnsure) {
                 for (const colDef of colsToEnsure) {
-                    try { await db.prepare(`ALTER TABLE ${tbl} ADD COLUMN ${colDef}`).run(); } catch(e) {}
+                    try { await db.prepare(`ALTER TABLE ${tbl} ADD COLUMN ${colDef}`).run(); } catch (e) { }
                 }
             }
 
-            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN available_quantity REAL").run(); } catch(e) {}
-            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN item_availability_status TEXT").run(); } catch(e) {}
-            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN item_status TEXT").run(); } catch(e) {}
+            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN available_quantity REAL").run(); } catch (e) { }
+            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN item_availability_status TEXT").run(); } catch (e) { }
+            try { await db.prepare("ALTER TABLE business_purchase_items ADD COLUMN item_status TEXT").run(); } catch (e) { }
 
             let purchase = null;
             // 1. Direct lookup in business_purchases
             try {
                 purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ? OR purchase_number = ?').get(idClean, idClean, numClean, `PO-${numClean}`);
-            } catch (e) {}
+            } catch (e) { }
 
             // 2. Lookup via b2b_invoice_relationships
             if (!purchase) {
@@ -1359,14 +1552,14 @@ const purchaseController = {
                     if (rel && rel.source_purchase_invoice_id) {
                         purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(rel.source_purchase_invoice_id);
                     }
-                } catch (e) {}
+                } catch (e) { }
             }
 
             // 3. Lookup in business_invoices
             let invoice = null;
             try {
                 invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ? OR invoice_number = ? OR invoice_number = ? OR invoice_number = ?').get(idClean, idClean, numClean, `INV-${numClean}`);
-            } catch (e) {}
+            } catch (e) { }
 
             if (!invoice && purchase) {
                 try {
@@ -1374,7 +1567,7 @@ const purchaseController = {
                     if (rel && rel.generated_sales_invoice_id) {
                         invoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(rel.generated_sales_invoice_id);
                     }
-                } catch (e) {}
+                } catch (e) { }
             }
 
             if (!purchase && invoice) {
@@ -1383,14 +1576,14 @@ const purchaseController = {
                     if (rel && rel.source_purchase_invoice_id) {
                         purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(rel.source_purchase_invoice_id);
                     }
-                } catch (e) {}
+                } catch (e) { }
             }
 
             // 4. Fallback check on invoices table
             if (!invoice) {
                 try {
                     invoice = await db.prepare('SELECT * FROM invoices WHERE id = ? OR invoice_number = ? OR invoice_number = ?').get(idClean, idClean, `INV-${numClean}`);
-                } catch (e) {}
+                } catch (e) { }
             }
 
             if (!purchase && !invoice) {
@@ -1439,14 +1632,14 @@ const purchaseController = {
                             updated_at = ?
                         WHERE id = ?
                     `).run(
-                        status, 
-                        supplierConfirmationStatus, 
-                        response_type, 
-                        statusMsg, 
-                        expected_available_date || null, 
+                        status,
+                        supplierConfirmationStatus,
+                        response_type,
+                        statusMsg,
+                        expected_available_date || null,
                         itemsJson,
-                        now, 
-                        now, 
+                        now,
+                        now,
                         purchase.id
                     );
                 } catch (errPurUpdate) {
@@ -1457,7 +1650,7 @@ const purchaseController = {
                             SET status = ?, supplier_confirmation_status = ?, updated_at = ?
                             WHERE id = ?
                         `).run(status, supplierConfirmationStatus, now, purchase.id);
-                    } catch(e) {}
+                    } catch (e) { }
                 }
 
                 if (reqItems && Array.isArray(reqItems)) {
@@ -1471,11 +1664,11 @@ const purchaseController = {
                                     SET received_quantity = COALESCE(?, received_quantity, quantity), available_quantity = ?, item_availability_status = ? 
                                     WHERE id = ?
                                 `).run(availQty, availQty, it.item_availability_status || response_type, targetId);
-                            } catch(e) {}
+                            } catch (e) { }
                         }
                     }
                 }
-                
+
                 // If confirmed fully, set received_quantity = quantity for items
                 if (response_type === 'CONFIRMED') {
                     try {
@@ -1484,7 +1677,7 @@ const purchaseController = {
                             SET received_quantity = quantity, item_status = 'CONFIRMED' 
                             WHERE purchase_id = ?
                         `).run(purchase.id);
-                    } catch(e) {}
+                    } catch (e) { }
                 }
             }
 
@@ -1512,7 +1705,7 @@ const purchaseController = {
                         now,
                         invoice.id
                     );
-                } catch(e) {}
+                } catch (e) { }
 
                 try {
                     await db.prepare(`
@@ -1533,7 +1726,7 @@ const purchaseController = {
                         itemsJson,
                         invoice.id
                     );
-                } catch(e) {}
+                } catch (e) { }
             }
 
             // Send notification to buyer
@@ -1566,7 +1759,7 @@ const purchaseController = {
             try {
                 if (purchase) updatedPurchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(purchase.id) || {};
                 if (invoice) updatedInvoice = await db.prepare('SELECT * FROM business_invoices WHERE id = ?').get(invoice.id) || {};
-            } catch (e) {}
+            } catch (e) { }
 
             return sendSuccess(res, {
                 purchase: updatedPurchase,
@@ -1602,7 +1795,7 @@ const purchaseController = {
                 let items = [];
                 try {
                     items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(o.id);
-                } catch(e) {}
+                } catch (e) { }
                 const dealer = await db.prepare('SELECT username, business_name FROM users WHERE id = ?').get(o.user_id);
                 return {
                     ...o,
@@ -1631,7 +1824,7 @@ const purchaseController = {
             let purchase = null;
             try {
                 purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ?').get(idClean, idClean, `PO-${numClean}`);
-            } catch (e) {}
+            } catch (e) { }
 
             if (!purchase) {
                 return sendError(res, 'Purchase order not found', 404);
@@ -1653,7 +1846,7 @@ const purchaseController = {
                         await db.prepare("UPDATE business_invoices SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ? WHERE id = ?")
                             .run(newStatus, newStatus, statusMsg, now, rel.generated_sales_invoice_id);
                     }
-                } catch (e) {}
+                } catch (e) { }
 
                 const items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(purchase.id);
                 for (const it of items) {
@@ -1681,7 +1874,7 @@ const purchaseController = {
                         await db.prepare("UPDATE business_invoices SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ? WHERE id = ?")
                             .run(newStatus, newStatus, statusMsg, now, rel.generated_sales_invoice_id);
                     }
-                } catch (e) {}
+                } catch (e) { }
 
                 return sendSuccess(res, { id: purchase.id, status: newStatus }, 'Partial quantity rejected.');
             } else if (action === 'ACCEPT_DATE' || action === 'ACCEPT_AVAILABLE_DATE') {
@@ -1700,7 +1893,7 @@ const purchaseController = {
                         await db.prepare("UPDATE business_invoices SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ? WHERE id = ?")
                             .run(newStatus, newStatus, statusMsg, now, rel.generated_sales_invoice_id);
                     }
-                } catch (e) {}
+                } catch (e) { }
 
                 return sendSuccess(res, { id: purchase.id, status: newStatus }, 'Proposed available date accepted.');
             } else if (action === 'REJECT_DATE' || action === 'DECLINE_DATE') {
@@ -1719,7 +1912,7 @@ const purchaseController = {
                         await db.prepare("UPDATE business_invoices SET status = ?, supplier_confirmation_status = ?, supplier_status_message = ?, updated_at = ? WHERE id = ?")
                             .run(newStatus, newStatus, statusMsg, now, rel.generated_sales_invoice_id);
                     }
-                } catch (e) {}
+                } catch (e) { }
 
                 return sendSuccess(res, { id: purchase.id, status: newStatus }, 'Proposed available date declined.');
             } else {
