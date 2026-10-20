@@ -118,6 +118,14 @@ const ensureTablesInit = async () => {
                 try {
                     await db.prepare(`ALTER TABLE accounting ADD COLUMN branch_name TEXT`).run();
                 } catch (e) {}
+
+                // Add reverse transfer columns to branch_transfers if not exist
+                try {
+                    await db.prepare(`ALTER TABLE branch_transfers ADD COLUMN transfer_type TEXT DEFAULT 'FORWARD'`).run();
+                } catch (e) {}
+                try {
+                    await db.prepare(`ALTER TABLE branch_transfers ADD COLUMN return_reason TEXT`).run();
+                } catch (e) {}
             } catch (err) {
                 console.warn('[Branch Controller] Table init warning:', err.message);
             }
@@ -592,7 +600,7 @@ const branchController = {
         try {
             await ensureTablesInit();
             const userId = req.user.id;
-            const { from_branch_id, to_branch_id, items, notes } = req.body;
+            const { from_branch_id, to_branch_id, items, notes, transfer_type = 'FORWARD', return_reason = null } = req.body;
 
             if (!from_branch_id || !to_branch_id) {
                 return sendError(res, 'Source and destination branches are required', 400);
@@ -604,8 +612,15 @@ const branchController = {
                 return sendError(res, 'At least one item is required to transfer', 400);
             }
 
+            // Fetch branch names for logging
+            const fromBranch = await db.prepare('SELECT name FROM branches WHERE id = ? AND user_id = ?').get(from_branch_id, userId);
+            const toBranch = await db.prepare('SELECT name FROM branches WHERE id = ? AND user_id = ?').get(to_branch_id, userId);
+            const fromBranchName = fromBranch?.name || `Branch #${from_branch_id}`;
+            const toBranchName = toBranch?.name || `Branch #${to_branch_id}`;
+
             const now = new Date().toISOString();
-            const transferNo = `TRF-${Date.now().toString().slice(-6)}`;
+            const transferPrefix = transfer_type === 'RETURN_TO_MAIN' ? 'RET' : 'TRF';
+            const transferNo = `${transferPrefix}-${Date.now().toString().slice(-6)}`;
 
             // Check availability in source branch
             for (const item of items) {
@@ -652,23 +667,299 @@ const branchController = {
                         VALUES (?, ?, ?, ?, 5, ?, ?)
                     `).run(userId, to_branch_id, prodId, transferQty, now, now);
                 }
+
+                // 3. Log stock movements safely
+                try {
+                    const outDesc = transfer_type === 'RETURN_TO_MAIN'
+                        ? `Return to ${toBranchName} (${return_reason || 'Damaged/Dead Stock'}): #${transferNo}`
+                        : `Stock Transfer to ${toBranchName}: #${transferNo}`;
+                    const inDesc = transfer_type === 'RETURN_TO_MAIN'
+                        ? `Return received from ${fromBranchName} (${return_reason || 'Damaged/Dead Stock'}): #${transferNo}`
+                        : `Stock Transfer from ${fromBranchName}: #${transferNo}`;
+
+                    await db.prepare(`
+                        INSERT INTO product_stock_history (product_id, user_id, quantity_changed, type, description, created_at)
+                        VALUES (?, ?, ?, 'out', ?, ?)
+                    `).run(prodId, userId, transferQty, outDesc, now);
+
+                    await db.prepare(`
+                        INSERT INTO product_stock_history (product_id, user_id, quantity_changed, type, description, created_at)
+                        VALUES (?, ?, ?, 'in', ?, ?)
+                    `).run(prodId, userId, transferQty, inDesc, now);
+                } catch (historyErr) {
+                    console.warn('[Branch Controller] Stock history warning:', historyErr.message);
+                }
             }
 
             // Record transfer history
             const result = await db.prepare(`
                 INSERT INTO branch_transfers (
-                    user_id, transfer_no, from_branch_id, to_branch_id, status, items, notes, dispatched_at, received_at, created_at
-                ) VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?)
-            `).run(userId, transferNo, from_branch_id, to_branch_id, JSON.stringify(items), notes || '', now, now, now);
+                    user_id, transfer_no, from_branch_id, to_branch_id, status, items, notes, transfer_type, return_reason, dispatched_at, received_at, created_at
+                ) VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?)
+            `).run(userId, transferNo, from_branch_id, to_branch_id, JSON.stringify(items), notes || '', transfer_type, return_reason, now, now, now);
 
             return sendSuccess(res, {
                 id: result.lastInsertRowid || result.id,
                 transfer_no: transferNo,
+                transfer_type,
+                return_reason,
                 status: 'completed'
-            }, 'Stock transfer executed successfully', 201);
+            }, transfer_type === 'RETURN_TO_MAIN' ? 'Reverse stock return to Main Showroom processed' : 'Stock transfer executed successfully', 201);
         } catch (error) {
             console.error('[Branch Controller] Error transferring stock:', error);
             return sendError(res, 'Failed to transfer stock', 500);
+        }
+    },
+
+    // 8b. POST /api/v1/branches/transfers/return-to-main - Dedicated reverse stock return
+    createReverseTransfer: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            let { from_branch_id, to_branch_id, items, return_reason, notes } = req.body;
+
+            if (!from_branch_id) {
+                return sendError(res, 'Source branch is required for return', 400);
+            }
+
+            // If to_branch_id not provided, automatically find Main Showroom
+            if (!to_branch_id) {
+                const mainBranch = await db.prepare("SELECT id FROM branches WHERE user_id = ? AND is_main_branch = 1 AND status != 'deleted' LIMIT 1").get(userId)
+                    || await db.prepare("SELECT id FROM branches WHERE user_id = ? AND status != 'deleted' ORDER BY id ASC LIMIT 1").get(userId);
+                if (!mainBranch) {
+                    return sendError(res, 'Main Showroom not found to return items to', 400);
+                }
+                to_branch_id = mainBranch.id;
+            }
+
+            // Delegate to createTransfer with RETURN_TO_MAIN
+            req.body.to_branch_id = to_branch_id;
+            req.body.transfer_type = 'RETURN_TO_MAIN';
+            req.body.return_reason = return_reason || 'Damaged / Dead Stock';
+            return branchController.createTransfer(req, res);
+        } catch (error) {
+            console.error('[Branch Controller] Error in reverse transfer:', error);
+            return sendError(res, 'Failed to process reverse transfer', 500);
+        }
+    },
+
+    // 8c. GET /api/v1/branches/:id/low-stock - Identify low stock & suggested reorders
+    getBranchLowStock: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            const branchId = parseInt(req.params.id);
+
+            const branch = await db.prepare("SELECT id, name, code, is_main_branch FROM branches WHERE id = ? AND user_id = ? AND status != 'deleted'").get(branchId, userId);
+            if (!branch) {
+                return sendError(res, 'Branch not found', 404);
+            }
+
+            // Find Main Showroom
+            const mainBranch = await db.prepare("SELECT id, name, code FROM branches WHERE user_id = ? AND is_main_branch = 1 AND status != 'deleted' LIMIT 1").get(userId)
+                || await db.prepare("SELECT id, name, code FROM branches WHERE user_id = ? AND status != 'deleted' ORDER BY id ASC LIMIT 1").get(userId);
+            const mainBranchId = mainBranch?.id || branchId;
+
+            // Query products where quantity <= threshold
+            const rows = await db.prepare(`
+                SELECT 
+                    p.id,
+                    p.name,
+                    p.sku,
+                    p.category,
+                    p.unit,
+                    p.selling_price,
+                    p.purchase_price,
+                    COALESCE(bs.quantity, 0) as current_quantity,
+                    COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5) as low_stock_threshold,
+                    bs.rack_location,
+                    COALESCE(ms.quantity, 0) as main_showroom_stock
+                FROM business_products p
+                LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ? AND bs.user_id = ?
+                LEFT JOIN branch_stock ms ON ms.product_id = p.id AND ms.branch_id = ? AND ms.user_id = ?
+                WHERE p.user_id = ? AND p.status != 'deleted'
+                  AND (COALESCE(bs.quantity, 0) <= COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5))
+                ORDER BY COALESCE(bs.quantity, 0) ASC, p.name ASC
+            `).all(branchId, userId, mainBranchId, userId, userId);
+
+            const items = (Array.isArray(rows) ? rows : []).map(r => {
+                const currentQty = parseFloat(r.current_quantity) || 0;
+                const threshold = parseFloat(r.low_stock_threshold) || 5;
+                const mainStock = parseFloat(r.main_showroom_stock) || 0;
+                
+                // Suggested target: 2x threshold or minimum 10
+                const targetStock = Math.max(Math.ceil(threshold * 2), 10);
+                const suggestedReorder = Math.max(1, targetStock - Math.floor(currentQty));
+                const urgency = currentQty <= 0 ? 'CRITICAL_OUT_OF_STOCK' : 'LOW_STOCK';
+                const canFulfillFromMain = mainStock >= suggestedReorder;
+
+                return {
+                    id: r.id,
+                    product_id: r.id,
+                    name: r.name,
+                    sku: r.sku,
+                    category: r.category,
+                    unit: r.unit || 'pcs',
+                    selling_price: parseFloat(r.selling_price) || 0,
+                    purchase_price: parseFloat(r.purchase_price) || 0,
+                    current_quantity: currentQty,
+                    low_stock_threshold: threshold,
+                    rack_location: r.rack_location || '-',
+                    main_showroom_stock: mainStock,
+                    suggested_reorder_qty: suggestedReorder,
+                    urgency,
+                    can_fulfill_from_main: canFulfillFromMain
+                };
+            });
+
+            const outOfStockCount = items.filter(i => i.urgency === 'CRITICAL_OUT_OF_STOCK').length;
+            const fulfillableCount = items.filter(i => i.can_fulfill_from_main).length;
+
+            return sendSuccess(res, {
+                branch,
+                main_branch: mainBranch,
+                items,
+                summary: {
+                    total_low_stock_items: items.length,
+                    out_of_stock_count: outOfStockCount,
+                    fulfillable_from_main_count: fulfillableCount
+                }
+            }, 'Branch low stock items calculated');
+        } catch (error) {
+            console.error('[Branch Controller] Error calculating low stock:', error);
+            return sendError(res, 'Failed to fetch low stock items', 500);
+        }
+    },
+
+    // 8d. POST /api/v1/branches/:id/auto-requisition - 1-Click Auto Requisition from Main Showroom
+    createAutoRequisition: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            const branchId = parseInt(req.params.id);
+
+            const branch = await db.prepare("SELECT id, name, code FROM branches WHERE id = ? AND user_id = ? AND status != 'deleted'").get(branchId, userId);
+            if (!branch) {
+                return sendError(res, 'Branch not found', 404);
+            }
+
+            // Find Main Showroom
+            const mainBranch = await db.prepare("SELECT id, name, code FROM branches WHERE user_id = ? AND is_main_branch = 1 AND status != 'deleted' LIMIT 1").get(userId)
+                || await db.prepare("SELECT id, name, code FROM branches WHERE user_id = ? AND status != 'deleted' ORDER BY id ASC LIMIT 1").get(userId);
+            
+            if (mainBranch && mainBranch.id === branchId) {
+                return sendError(res, 'Main Showroom cannot create an internal requisition to itself', 400);
+            }
+
+            let requisitionItems = [];
+
+            // If explicit items provided in body, use them
+            if (req.body.items && Array.isArray(req.body.items) && req.body.items.length > 0) {
+                for (const item of req.body.items) {
+                    const prod = await db.prepare('SELECT id, name, purchase_price, tax_percentage FROM business_products WHERE id = ? AND user_id = ?')
+                        .get(item.product_id || item.id, userId);
+                    if (prod) {
+                        const qty = parseFloat(item.quantity || item.suggested_reorder_qty) || 1;
+                        const price = parseFloat(item.unit_price || prod.purchase_price) || 0;
+                        requisitionItems.push({
+                            product_id: prod.id,
+                            item_name: prod.name,
+                            quantity: qty,
+                            unit_price: price,
+                            tax_percentage: parseFloat(prod.tax_percentage) || 0,
+                            total_price: qty * price
+                        });
+                    }
+                }
+            } else {
+                // Otherwise auto-fetch all low-stock items for this branch
+                const lowStockRows = await db.prepare(`
+                    SELECT 
+                        p.id,
+                        p.name,
+                        p.purchase_price,
+                        p.tax_percentage,
+                        COALESCE(bs.quantity, 0) as current_quantity,
+                        COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5) as low_stock_threshold
+                    FROM business_products p
+                    LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ? AND bs.user_id = ?
+                    WHERE p.user_id = ? AND p.status != 'deleted'
+                      AND (COALESCE(bs.quantity, 0) <= COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5))
+                `).all(branchId, userId, userId);
+
+                for (const r of (Array.isArray(lowStockRows) ? lowStockRows : [])) {
+                    const currentQty = parseFloat(r.current_quantity) || 0;
+                    const threshold = parseFloat(r.low_stock_threshold) || 5;
+                    const targetStock = Math.max(Math.ceil(threshold * 2), 10);
+                    const suggestedReorder = Math.max(1, targetStock - Math.floor(currentQty));
+                    const price = parseFloat(r.purchase_price) || 0;
+
+                    requisitionItems.push({
+                        product_id: r.id,
+                        item_name: r.name,
+                        quantity: suggestedReorder,
+                        unit_price: price,
+                        tax_percentage: parseFloat(r.tax_percentage) || 0,
+                        total_price: suggestedReorder * price
+                    });
+                }
+            }
+
+            if (requisitionItems.length === 0) {
+                return sendError(res, 'No low-stock items detected to reorder for this branch', 400);
+            }
+
+            const now = new Date().toISOString();
+            const todayStr = now.split('T')[0];
+            const purchaseNumber = `REQ-AUTO-${Date.now().toString().slice(-6)}`;
+            const supplierName = mainBranch?.name || 'Main Showroom';
+
+            // Calculate totals
+            const subtotal = requisitionItems.reduce((acc, it) => acc + it.total_price, 0);
+            const taxAmount = requisitionItems.reduce((acc, it) => acc + (it.total_price * (it.tax_percentage / 100)), 0);
+            const grandTotal = subtotal + taxAmount;
+
+            // Insert into business_purchases
+            const poResult = await db.prepare(`
+                INSERT INTO business_purchases (
+                    user_id, purchase_number, supplier_name, purchase_date,
+                    due_date, status, subtotal, tax_amount, grand_total,
+                    notes, purchase_type, doc_type, branch_id, branch_name, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'Pending Approval', ?, ?, ?, ?, 'INTERNAL', 'PO', ?, ?, ?, ?)
+            `).run(
+                userId, purchaseNumber, supplierName, todayStr,
+                todayStr, subtotal, taxAmount, grandTotal,
+                `1-Click Automated Replenishment Requisition for ${branch.name}`,
+                branch.id, branch.name, now, now
+            );
+
+            const purchaseId = poResult.lastInsertRowid || poResult.id;
+
+            // Insert line items
+            for (const item of requisitionItems) {
+                await db.prepare(`
+                    INSERT INTO business_purchase_items (
+                        purchase_id, product_id, item_name, quantity, unit_price,
+                        tax_percentage, total_price, item_status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
+                `).run(
+                    purchaseId, item.product_id, item.item_name, item.quantity, item.unit_price,
+                    item.tax_percentage, item.total_price, now
+                );
+            }
+
+            return sendSuccess(res, {
+                purchase_id: purchaseId,
+                purchase_number: purchaseNumber,
+                branch_id: branch.id,
+                branch_name: branch.name,
+                item_count: requisitionItems.length,
+                grand_total: grandTotal,
+                status: 'Pending Approval'
+            }, `1-Click Auto-Requisition #${purchaseNumber} successfully drafted to Main Showroom`, 201);
+        } catch (error) {
+            console.error('[Branch Controller] Error creating auto-requisition:', error);
+            return sendError(res, 'Failed to create auto-requisition', 500);
         }
     },
 
