@@ -374,6 +374,9 @@ const customerController = {
             const preferred_contact = body.preferred_contact || 'WhatsApp';
             const reminder_enabled = body.reminder_enabled !== undefined ? (body.reminder_enabled ? 1 : 0) : 1;
             const loyalty_points = parseInt(body.loyalty_points) || 0;
+            const branch_id = body.branch_id ? parseInt(body.branch_id) : null;
+            const branch_name = body.branch_name || null;
+            const store_credit = parseFloat(body.store_credit || body.storeCredit) || 0;
             const now = new Date().toISOString();
 
             const sql = `
@@ -382,8 +385,8 @@ const customerController = {
                     alternate_phone, website, customer_type, tax_type, place_of_supply, address, billing_address,
                     shipping_address, city, state, country, pincode, opening_balance, credit_limit, 
                     status, customer_code, due_days, notes, preferred_contact, reminder_enabled, 
-                    loyalty_points, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    loyalty_points, branch_id, branch_name, store_credit, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const params = [
@@ -391,7 +394,7 @@ const customerController = {
                 alternate_phone, website, customer_type, tax_type, place_of_supply, address, billing_address,
                 shipping_address, city, state, country, pincode, opening_balance, credit_limit,
                 status, customer_code, due_days, notes, preferred_contact, reminder_enabled,
-                loyalty_points, now, now
+                loyalty_points, branch_id, branch_name, store_credit, now, now
             ];
 
             const result = await db.prepare(sql).run(...params);
@@ -533,6 +536,9 @@ const customerController = {
             if (body.reminder_enabled !== undefined) { updates.push('reminder_enabled = ?'); params.push(body.reminder_enabled ? 1 : 0); }
             if (body.loyalty_points !== undefined) { updates.push('loyalty_points = ?'); params.push(parseInt(body.loyalty_points)); }
             if (body.total_spent !== undefined) { updates.push('total_spent = ?'); params.push(parseFloat(body.total_spent)); }
+            if (body.branch_id !== undefined) { updates.push('branch_id = ?'); params.push(body.branch_id ? parseInt(body.branch_id) : null); }
+            if (body.branch_name !== undefined) { updates.push('branch_name = ?'); params.push(body.branch_name || null); }
+            if (body.store_credit !== undefined || body.storeCredit !== undefined) { updates.push('store_credit = ?'); params.push(parseFloat(body.store_credit !== undefined ? body.store_credit : body.storeCredit) || 0); }
 
             if (updates.length === 0) return sendError(res, 'No fields to update', 400);
 

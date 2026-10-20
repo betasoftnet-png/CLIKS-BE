@@ -126,6 +126,88 @@ const ensureTablesInit = async () => {
                 try {
                     await db.prepare(`ALTER TABLE branch_transfers ADD COLUMN return_reason TEXT`).run();
                 } catch (e) {}
+
+                // Create showroom promotions / local discounts table
+                try {
+                    await db.prepare(`
+                        CREATE TABLE IF NOT EXISTS showroom_promotions (
+                            id ${idType},
+                            user_id INTEGER NOT NULL,
+                            branch_id INTEGER NOT NULL,
+                            branch_name TEXT,
+                            title TEXT NOT NULL,
+                            promotion_type TEXT NOT NULL,
+                            discount_value ${numType} NOT NULL,
+                            applies_to TEXT NOT NULL,
+                            target_id INTEGER,
+                            target_name TEXT,
+                            min_order_amount ${numType} DEFAULT 0,
+                            start_date TEXT,
+                            end_date TEXT,
+                            reason TEXT,
+                            status TEXT DEFAULT 'PENDING_APPROVAL',
+                            rejection_reason TEXT,
+                            requested_by TEXT,
+                            approved_by TEXT,
+                            created_at ${timeType} DEFAULT CURRENT_TIMESTAMP,
+                            updated_at ${timeType} DEFAULT CURRENT_TIMESTAMP
+                        )
+                    `).run();
+                    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_promos_branch ON showroom_promotions(branch_id, status)`).run();
+                } catch (e) {
+                    console.warn('[Branch Controller] showroom_promotions table check notice:', e.message);
+                }
+
+                // Create cross-branch customer transactions ledger (loyalty & store credit)
+                try {
+                    await db.prepare(`
+                        CREATE TABLE IF NOT EXISTS customer_cross_branch_transactions (
+                            id ${idType},
+                            user_id INTEGER NOT NULL,
+                            customer_id INTEGER NOT NULL,
+                            customer_name TEXT,
+                            source_branch_id INTEGER,
+                            source_branch_name TEXT,
+                            transacting_branch_id INTEGER NOT NULL,
+                            transacting_branch_name TEXT NOT NULL,
+                            transaction_type TEXT NOT NULL,
+                            amount ${numType} DEFAULT 0,
+                            points ${numType} DEFAULT 0,
+                            reference_invoice_id INTEGER,
+                            reference_invoice_no TEXT,
+                            notes TEXT,
+                            created_at ${timeType} DEFAULT CURRENT_TIMESTAMP
+                        )
+                    `).run();
+                    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_cross_branch_cust ON customer_cross_branch_transactions(customer_id)`).run();
+                } catch (e) {
+                    console.warn('[Branch Controller] customer_cross_branch_transactions table check notice:', e.message);
+                }
+
+                // Add cross-branch customer columns
+                try {
+                    await db.prepare(`ALTER TABLE business_customers ADD COLUMN branch_id INTEGER`).run();
+                } catch (e) {}
+                try {
+                    await db.prepare(`ALTER TABLE business_customers ADD COLUMN branch_name TEXT`).run();
+                } catch (e) {}
+                try {
+                    await db.prepare(`ALTER TABLE business_customers ADD COLUMN store_credit ${numType} DEFAULT 0`).run();
+                } catch (e) {}
+
+                // Add invoice promo and store credit columns
+                try {
+                    await db.prepare(`ALTER TABLE business_invoices ADD COLUMN store_credit_redeemed ${numType} DEFAULT 0`).run();
+                } catch (e) {}
+                try {
+                    await db.prepare(`ALTER TABLE business_invoices ADD COLUMN showroom_promo_id INTEGER`).run();
+                } catch (e) {}
+                try {
+                    await db.prepare(`ALTER TABLE business_invoices ADD COLUMN showroom_promo_name TEXT`).run();
+                } catch (e) {}
+                try {
+                    await db.prepare(`ALTER TABLE business_invoices ADD COLUMN showroom_promo_discount ${numType} DEFAULT 0`).run();
+                } catch (e) {}
             } catch (err) {
                 console.warn('[Branch Controller] Table init warning:', err.message);
             }
@@ -994,6 +1076,363 @@ const branchController = {
         } catch (error) {
             console.error('[Branch Controller] Error fetching transfers:', error);
             return sendError(res, 'Failed to fetch transfers', 500);
+        }
+    },
+
+    // ==========================================
+    // 3. SALES & CUSTOMER MODULES
+    // ==========================================
+
+    // 10. POST /api/v1/branches/promotions/request - Request local discount / price override for a showroom
+    requestShowroomPromotion: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            const isOwner = !req.user.is_sub_id && req.user.role !== 'sub_id' && req.user.role !== 'SUB_ID';
+
+            const {
+                branch_id,
+                title,
+                promotion_type = 'PERCENTAGE', // 'PERCENTAGE' | 'FLAT_AMOUNT' | 'CUSTOM_PRICE'
+                discount_value,
+                applies_to = 'ALL_PRODUCTS', // 'ALL_PRODUCTS' | 'CATEGORY' | 'SPECIFIC_PRODUCT'
+                target_id = null,
+                target_name = null,
+                min_order_amount = 0,
+                start_date = null,
+                end_date = null,
+                reason = ''
+            } = req.body;
+
+            if (!branch_id || !title || discount_value === undefined) {
+                return sendError(res, 'Showroom branch, title, and discount value are required', 400);
+            }
+
+            const branch = await db.prepare("SELECT id, name FROM branches WHERE id = ? AND user_id = ? AND status != 'deleted'").get(branch_id, userId);
+            if (!branch) {
+                return sendError(res, 'Showroom branch not found', 404);
+            }
+
+            const now = new Date().toISOString();
+            // If submitted directly by the owner, auto-approve; if manager, requires Main Branch approval
+            const initialStatus = isOwner ? 'APPROVED' : 'PENDING_APPROVAL';
+            const requestedBy = req.user.username || req.user.name || req.user.email || 'Branch Manager';
+            const approvedBy = isOwner ? (req.user.username || 'Owner') : null;
+
+            const result = await db.prepare(`
+                INSERT INTO showroom_promotions (
+                    user_id, branch_id, branch_name, title, promotion_type,
+                    discount_value, applies_to, target_id, target_name, min_order_amount,
+                    start_date, end_date, reason, status, requested_by, approved_by,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                userId, branch.id, branch.name, title, promotion_type,
+                parseFloat(discount_value) || 0, applies_to, target_id || null, target_name || null, parseFloat(min_order_amount) || 0,
+                start_date || now.split('T')[0], end_date || null, reason, initialStatus, requestedBy, approvedBy,
+                now, now
+            );
+
+            return sendSuccess(res, {
+                id: result.lastInsertRowid || result.id,
+                status: initialStatus,
+                branch_id: branch.id,
+                branch_name: branch.name,
+                title,
+                discount_value
+            }, isOwner ? 'Showroom promotion created and activated' : 'Promotion discount requested successfully. Awaiting Main Branch approval.', 201);
+        } catch (error) {
+            console.error('[Branch Controller] Error requesting promotion:', error);
+            return sendError(res, 'Failed to submit promotion request', 500);
+        }
+    },
+
+    // 11. GET /api/v1/branches/promotions - List all showroom promotions / discount requests
+    getShowroomPromotions: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            const { branch_id, status } = req.query;
+
+            let query = `
+                SELECT 
+                    sp.*,
+                    b.name as showroom_name,
+                    b.code as showroom_code,
+                    b.is_main_branch
+                FROM showroom_promotions sp
+                JOIN branches b ON b.id = sp.branch_id
+                WHERE sp.user_id = ?
+            `;
+            const params = [userId];
+
+            if (branch_id) {
+                query += ' AND sp.branch_id = ?';
+                params.push(parseInt(branch_id));
+            }
+            if (status) {
+                query += ' AND sp.status = ?';
+                params.push(status);
+            }
+
+            query += ' ORDER BY sp.id DESC';
+            const rows = await db.prepare(query).all(...params);
+
+            const now = new Date().toISOString().split('T')[0];
+            const promotions = (Array.isArray(rows) ? rows : []).map(p => {
+                const isDateValid = (!p.start_date || p.start_date <= now) && (!p.end_date || p.end_date >= now);
+                const isEffectivelyActive = (p.status === 'APPROVED' || p.status === 'ACTIVE') && isDateValid;
+                return {
+                    ...p,
+                    is_active: isEffectivelyActive
+                };
+            });
+
+            return sendSuccess(res, promotions, 'Showroom promotions retrieved successfully');
+        } catch (error) {
+            console.error('[Branch Controller] Error fetching promotions:', error);
+            return sendError(res, 'Failed to fetch showroom promotions', 500);
+        }
+    },
+
+    // 12. PUT /api/v1/branches/promotions/:id/status - Approve or Reject discount request (Main Branch / Owner)
+    updateShowroomPromotionStatus: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            const promoId = parseInt(req.params.id);
+            const { status, rejection_reason } = req.body;
+
+            const isOwner = !req.user.is_sub_id && req.user.role !== 'sub_id' && req.user.role !== 'SUB_ID';
+            if (!isOwner) {
+                return sendError(res, 'Only the Main Branch Owner can approve or reject showroom promotions', 403);
+            }
+
+            if (!status || !['APPROVED', 'REJECTED', 'ACTIVE', 'PAUSED'].includes(status.toUpperCase())) {
+                return sendError(res, 'Valid status is required (APPROVED, REJECTED, ACTIVE, PAUSED)', 400);
+            }
+
+            const promo = await db.prepare('SELECT * FROM showroom_promotions WHERE id = ? AND user_id = ?').get(promoId, userId);
+            if (!promo) {
+                return sendError(res, 'Promotion not found', 404);
+            }
+
+            const now = new Date().toISOString();
+            const approverName = req.user.username || req.user.name || 'Owner';
+
+            await db.prepare(`
+                UPDATE showroom_promotions 
+                SET status = ?, rejection_reason = ?, approved_by = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+            `).run(status.toUpperCase(), rejection_reason || null, approverName, now, promoId, userId);
+
+            return sendSuccess(res, {
+                id: promoId,
+                status: status.toUpperCase(),
+                approved_by: approverName
+            }, `Showroom promotion ${status.toLowerCase()} successfully`);
+        } catch (error) {
+            console.error('[Branch Controller] Error updating promotion status:', error);
+            return sendError(res, 'Failed to update promotion status', 500);
+        }
+    },
+
+    // 13. DELETE /api/v1/branches/promotions/:id - Delete promotion
+    deleteShowroomPromotion: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            const promoId = parseInt(req.params.id);
+
+            await db.prepare('DELETE FROM showroom_promotions WHERE id = ? AND user_id = ?').run(promoId, userId);
+            return sendSuccess(res, { id: promoId }, 'Promotion deleted successfully');
+        } catch (error) {
+            console.error('[Branch Controller] Error deleting promotion:', error);
+            return sendError(res, 'Failed to delete promotion', 500);
+        }
+    },
+
+    // 14. GET /api/v1/branches/:id/active-promotions - Fetch approved promotions active for a branch (Used by POS)
+    getActiveBranchPromotions: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            const branchId = parseInt(req.params.id);
+            const today = new Date().toISOString().split('T')[0];
+
+            const rows = await db.prepare(`
+                SELECT * FROM showroom_promotions
+                WHERE user_id = ? AND branch_id = ? 
+                  AND status IN ('APPROVED', 'ACTIVE')
+                  AND (start_date IS NULL OR start_date <= ?)
+                  AND (end_date IS NULL OR end_date >= ?)
+                ORDER BY id DESC
+            `).all(userId, branchId, today, today);
+
+            return sendSuccess(res, Array.isArray(rows) ? rows : [], 'Active showroom promotions retrieved');
+        } catch (error) {
+            console.error('[Branch Controller] Error fetching active branch promos:', error);
+            return sendError(res, 'Failed to fetch active branch promotions', 500);
+        }
+    },
+
+    // 15. GET /api/v1/branches/customers/cross-branch - Unified customer loyalty & cross-branch store credit registry
+    getCrossBranchCustomers: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            const { q } = req.query;
+
+            let query = `
+                SELECT 
+                    c.id,
+                    c.name,
+                    c.email,
+                    c.phone,
+                    c.company,
+                    COALESCE(c.loyalty_points, 0) as loyalty_points,
+                    COALESCE(c.store_credit, 0) as store_credit,
+                    COALESCE(c.total_spent, 0) as total_spent,
+                    COALESCE(c.outstanding_balance, 0) as outstanding_balance,
+                    c.branch_id as origin_branch_id,
+                    COALESCE(c.branch_name, b.name, 'Main Showroom') as origin_branch_name,
+                    c.created_at
+                FROM business_customers c
+                LEFT JOIN branches b ON b.id = c.branch_id
+                WHERE c.user_id = ?
+            `;
+            const params = [userId];
+
+            if (q) {
+                query += ' AND (c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)';
+                params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+            }
+
+            query += ' ORDER BY c.id DESC LIMIT 100';
+            const customers = await db.prepare(query).all(...params);
+
+            // Fetch recent cross-branch transactions
+            const recentTx = await db.prepare(`
+                SELECT * FROM customer_cross_branch_transactions
+                WHERE user_id = ?
+                ORDER BY id DESC LIMIT 30
+            `).all(userId);
+
+            const custList = Array.isArray(customers) ? customers : [];
+            const totalLoyaltyPoints = custList.reduce((sum, c) => sum + (parseFloat(c.loyalty_points) || 0), 0);
+            const totalStoreCredit = custList.reduce((sum, c) => sum + (parseFloat(c.store_credit) || 0), 0);
+
+            return sendSuccess(res, {
+                customers: custList,
+                recent_transactions: Array.isArray(recentTx) ? recentTx : [],
+                summary: {
+                    total_customers: custList.length,
+                    total_loyalty_points: totalLoyaltyPoints,
+                    total_store_credit: totalStoreCredit
+                }
+            }, 'Cross-branch customer registry fetched successfully');
+        } catch (error) {
+            console.error('[Branch Controller] Error fetching cross-branch customers:', error);
+            return sendError(res, 'Failed to fetch cross-branch customer data', 500);
+        }
+    },
+
+    // 16. POST /api/v1/branches/customers/:id/store-credit - Issue or adjust Store Credit at any showroom
+    issueCrossBranchStoreCredit: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            const customerId = parseInt(req.params.id);
+            const {
+                amount,
+                branch_id,
+                transaction_type = 'STORE_CREDIT_ISSUE', // 'STORE_CREDIT_ISSUE' | 'STORE_CREDIT_REDEEM'
+                notes = '',
+                reference_invoice_no = ''
+            } = req.body;
+
+            const creditAmount = parseFloat(amount);
+            if (!creditAmount || isNaN(creditAmount) || creditAmount <= 0) {
+                return sendError(res, 'Valid positive credit amount is required', 400);
+            }
+
+            const customer = await db.prepare('SELECT id, name, branch_id, branch_name, store_credit FROM business_customers WHERE id = ? AND user_id = ?').get(customerId, userId);
+            if (!customer) {
+                return sendError(res, 'Customer not found', 404);
+            }
+
+            const transactingBranch = await db.prepare('SELECT id, name FROM branches WHERE id = ? AND user_id = ?').get(branch_id || customer.branch_id || 1, userId);
+            const transactingBranchName = transactingBranch?.name || 'Showroom';
+            const originBranchName = customer.branch_name || 'Main Showroom';
+
+            const currentCredit = parseFloat(customer.store_credit) || 0;
+            const now = new Date().toISOString();
+
+            let newBalance = currentCredit;
+            if (transaction_type === 'STORE_CREDIT_REDEEM') {
+                if (creditAmount > currentCredit) {
+                    return sendError(res, `Cannot redeem ₹${creditAmount}. Customer only has ₹${currentCredit} store credit available.`, 400);
+                }
+                newBalance = Math.max(0, currentCredit - creditAmount);
+            } else {
+                newBalance = currentCredit + creditAmount;
+            }
+
+            // Update customer store credit
+            await db.prepare('UPDATE business_customers SET store_credit = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+                .run(newBalance, now, customerId, userId);
+
+            // Record in cross-branch transactions
+            await db.prepare(`
+                INSERT INTO customer_cross_branch_transactions (
+                    user_id, customer_id, customer_name, source_branch_id, source_branch_name,
+                    transacting_branch_id, transacting_branch_name, transaction_type,
+                    amount, notes, reference_invoice_no, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                userId, customer.id, customer.name, customer.branch_id || null, originBranchName,
+                transactingBranch?.id || 1, transactingBranchName, transaction_type,
+                creditAmount, notes || (transaction_type === 'STORE_CREDIT_ISSUE' ? 'Store credit / return note issued' : 'Store credit redeemed'),
+                reference_invoice_no || null, now
+            );
+
+            return sendSuccess(res, {
+                customer_id: customer.id,
+                customer_name: customer.name,
+                new_store_credit_balance: newBalance,
+                transacting_branch: transactingBranchName
+            }, `Store credit ${transaction_type === 'STORE_CREDIT_ISSUE' ? 'issued' : 'redeemed'} successfully`);
+        } catch (error) {
+            console.error('[Branch Controller] Error updating store credit:', error);
+            return sendError(res, 'Failed to process store credit', 500);
+        }
+    },
+
+    // 17. GET /api/v1/branches/customers/:id/history - Audit trail of cross-branch loyalty & credit movements
+    getCustomerCrossBranchHistory: async (req, res) => {
+        try {
+            await ensureTablesInit();
+            const userId = req.user.id;
+            const customerId = parseInt(req.params.id);
+
+            const customer = await db.prepare('SELECT id, name, email, phone, loyalty_points, store_credit, branch_id, branch_name FROM business_customers WHERE id = ? AND user_id = ?').get(customerId, userId);
+            if (!customer) {
+                return sendError(res, 'Customer not found', 404);
+            }
+
+            const transactions = await db.prepare(`
+                SELECT * FROM customer_cross_branch_transactions
+                WHERE user_id = ? AND customer_id = ?
+                ORDER BY id DESC
+            `).all(userId, customerId);
+
+            return sendSuccess(res, {
+                customer,
+                transactions: Array.isArray(transactions) ? transactions : []
+            }, 'Cross-branch customer history retrieved');
+        } catch (error) {
+            console.error('[Branch Controller] Error fetching customer cross-branch history:', error);
+            return sendError(res, 'Failed to fetch customer history', 500);
         }
     }
 };

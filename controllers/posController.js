@@ -347,10 +347,74 @@ const posController = {
                     if (updatedCustRow && updatedCustRow.loyalty_points !== undefined && updatedCustRow.loyalty_points !== null) {
                         freshLoyaltyBalance = parseFloat(updatedCustRow.loyalty_points) || 0;
                     }
+
+                    // Log cross-branch loyalty points movement
+                    try {
+                        const targetCustId = updatedCustRow?.id || parsedCustId;
+                        if (targetCustId && effectiveBranchId) {
+                            if (loyaltyPointsRedeemed > 0) {
+                                await db.prepare(`
+                                    INSERT INTO customer_cross_branch_transactions (
+                                        user_id, customer_id, customer_name, transacting_branch_id, transacting_branch_name,
+                                        transaction_type, points, reference_invoice_id, reference_invoice_no, notes, created_at
+                                    ) VALUES (?, ?, ?, ?, ?, 'LOYALTY_REDEEM', ?, ?, ?, ?, ?)
+                                `).run(userId, targetCustId, client_name, effectiveBranchId, branchRow?.name || 'Showroom', loyaltyPointsRedeemed, invoiceId, invoiceNumber, `Redeemed ${loyaltyPointsRedeemed} pts at ${branchRow?.name || 'Showroom'}`, now);
+                            }
+                            if (loyaltyPointsEarned > 0) {
+                                await db.prepare(`
+                                    INSERT INTO customer_cross_branch_transactions (
+                                        user_id, customer_id, customer_name, transacting_branch_id, transacting_branch_name,
+                                        transaction_type, points, reference_invoice_id, reference_invoice_no, notes, created_at
+                                    ) VALUES (?, ?, ?, ?, ?, 'LOYALTY_EARN', ?, ?, ?, ?, ?)
+                                `).run(userId, targetCustId, client_name, effectiveBranchId, branchRow?.name || 'Showroom', loyaltyPointsEarned, invoiceId, invoiceNumber, `Earned ${loyaltyPointsEarned} pts at ${branchRow?.name || 'Showroom'}`, now);
+                            }
+                        }
+                    } catch (cbErr) {}
                 } catch (errLoyalty) {
                     console.error('[POS Controller] Error updating customer loyalty points:', errLoyalty);
                 }
             }
+
+            // 1.6 Cross-Branch Store Credit Redemption
+            const storeCreditRedeemed = parseFloat(req.body.store_credit_redeemed) || 0;
+            if (storeCreditRedeemed > 0 && customerId) {
+                try {
+                    await db.prepare(`
+                        UPDATE business_customers 
+                        SET store_credit = MAX(0, COALESCE(store_credit, 0) - ?), updated_at = ?
+                        WHERE id = ? AND user_id = ?
+                    `).run(storeCreditRedeemed, now, customerId, userId);
+
+                    await db.prepare(`
+                        INSERT INTO customer_cross_branch_transactions (
+                            user_id, customer_id, customer_name, transacting_branch_id, transacting_branch_name,
+                            transaction_type, amount, reference_invoice_id, reference_invoice_no, notes, created_at
+                        ) VALUES (?, ?, ?, ?, ?, 'STORE_CREDIT_REDEEM', ?, ?, ?, ?, ?)
+                    `).run(
+                        userId, customerId, client_name, effectiveBranchId || 1, branchRow?.name || 'Showroom',
+                        storeCreditRedeemed, invoiceId, invoiceNumber, `Redeemed ₹${storeCreditRedeemed} store credit at ${branchRow?.name || 'Showroom'}`, now
+                    );
+                } catch (scErr) {
+                    console.warn('[POS Controller] Error redeeming store credit:', scErr.message);
+                }
+            }
+
+            // 1.7 Attach branch, promotion and store credit details to invoice
+            try {
+                await db.prepare(`
+                    UPDATE business_invoices 
+                    SET branch_id = ?, branch_name = ?, store_credit_redeemed = ?,
+                        showroom_promo_id = ?, showroom_promo_name = ?, showroom_promo_discount = ?
+                    WHERE id = ?
+                `).run(
+                    effectiveBranchId || null, branchRow?.name || null,
+                    storeCreditRedeemed,
+                    req.body.showroom_promo_id || null,
+                    req.body.showroom_promo_name || null,
+                    parseFloat(req.body.showroom_promo_discount) || 0,
+                    invoiceId
+                );
+            } catch (updErr) {}
 
             // 2. Comprehensive multi-table stock deduction for each sold item
             for (const item of items) {
