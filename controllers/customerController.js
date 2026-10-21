@@ -7,12 +7,14 @@ const { validatePhone, validateEmail, validateGstin, validatePan } = require('..
 const customerController = {
     lookupCustomerByEmail: async (req, res) => {
         try {
-            const { email } = req.query;
-            if (!email || !String(email).trim()) {
+            const queryParam = req.query.query || req.query.email || req.query.phone;
+            if (!queryParam || !String(queryParam).trim()) {
                 return sendSuccess(res, { exists: false, loyalty_points: 0 });
             }
 
-            const emailLower = String(email).trim().toLowerCase();
+            const cleanQuery = String(queryParam).trim();
+            const emailLower = cleanQuery.toLowerCase();
+            const phoneClean = cleanQuery.replace(/\D/g, '');
 
             let isLoyaltyEnabled = true;
             try {
@@ -23,20 +25,35 @@ const customerController = {
             } catch (e) {}
 
             // 1. Search merchant's business_customers table FIRST for merchant context
-            const crmCust = await db.prepare('SELECT id, name, email, loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, req.user.id);
+            let crmCust = null;
+            if (cleanQuery.includes('@')) {
+                crmCust = await db.prepare('SELECT id, name, email, phone, phone_number, loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, req.user.id);
+            } else if (phoneClean && phoneClean.length >= 7) {
+                crmCust = await db.prepare('SELECT id, name, email, phone, phone_number, loyalty_points FROM business_customers WHERE (REPLACE(REPLACE(phone_number, " ", ""), "-", "") LIKE ? OR REPLACE(REPLACE(phone, " ", ""), "-", "") LIKE ?) AND user_id = ?')
+                    .get(`%${phoneClean}%`, `%${phoneClean}%`, req.user.id);
+            } else {
+                crmCust = await db.prepare('SELECT id, name, email, phone, phone_number, loyalty_points FROM business_customers WHERE (LOWER(email) = ? OR LOWER(name) = ?) AND user_id = ?')
+                    .get(emailLower, emailLower, req.user.id);
+            }
 
             if (crmCust) {
                 return sendSuccess(res, {
                     exists: true,
                     user_id: crmCust.id,
                     email: crmCust.email,
+                    phone: crmCust.phone_number || crmCust.phone,
                     customer_name: crmCust.name,
                     loyalty_points: isLoyaltyEnabled ? (parseFloat(crmCust.loyalty_points || 0) || 0) : 0
                 });
             }
 
             // 2. Search users table for registered CLIKS customer user account as fallback
-            const user = await db.prepare('SELECT id, email, username, loyalty_points FROM users WHERE LOWER(email) = ?').get(emailLower);
+            let user = null;
+            if (cleanQuery.includes('@')) {
+                user = await db.prepare('SELECT id, email, username, loyalty_points FROM users WHERE LOWER(email) = ?').get(emailLower);
+            } else if (phoneClean && phoneClean.length >= 7) {
+                user = await db.prepare('SELECT id, email, username, loyalty_points FROM users WHERE (phone LIKE ? OR phone_number LIKE ?)').get(`%${phoneClean}%`, `%${phoneClean}%`);
+            }
 
             if (user) {
                 // Check customer_loyalty_wallets table for live balance
@@ -47,6 +64,7 @@ const customerController = {
                     exists: true,
                     user_id: user.id,
                     email: user.email,
+                    phone: user.phone || user.phone_number,
                     customer_name: user.username,
                     loyalty_points: isLoyaltyEnabled ? (parseFloat(pts || 0) || 0) : 0
                 });

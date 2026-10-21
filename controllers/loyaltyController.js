@@ -1,9 +1,23 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 
+let ensureColumnsInit = false;
+const ensureLoyaltyColumns = async () => {
+  if (ensureColumnsInit) return;
+  try {
+    await db.prepare('ALTER TABLE business_loyalty_settings ADD COLUMN print_show_loyalty INTEGER DEFAULT 0').run();
+  } catch (e) {}
+  try {
+    await db.prepare('ALTER TABLE business_loyalty_settings ADD COLUMN print_show_credit INTEGER DEFAULT 0').run();
+  } catch (e) {}
+  ensureColumnsInit = true;
+};
+ensureLoyaltyColumns();
+
 // ── GET /api/v1/loyalty/program-settings ──────────────────────────────────────────
 const getProgramSettings = async (req, res) => {
   try {
+    await ensureLoyaltyColumns();
     const userId = req.user.id;
     let row = await db.prepare('SELECT * FROM business_loyalty_settings WHERE user_id = ?').get(userId);
 
@@ -22,13 +36,15 @@ const getProgramSettings = async (req, res) => {
       const rsPer1Point = Number(legacySettings.loyaltyRsPer1Point) || 100;
       const pointsPer1Rs = Number(legacySettings.loyaltyPointsPer1Rs) || 100;
       const maxClaimPct = Number(legacySettings.loyaltyMaxClaimPercent) || 50;
+      const printShowLoyalty = legacySettings.print_show_loyalty !== undefined ? (legacySettings.print_show_loyalty ? 1 : 0) : 0;
+      const printShowCredit = legacySettings.print_show_credit !== undefined ? (legacySettings.print_show_credit ? 1 : 0) : 0;
 
       const now = new Date().toISOString();
       try {
         await db.prepare(`
-          INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(userId, isEnabled, rsPer1Point, pointsPer1Rs, maxClaimPct, now, now);
+          INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(userId, isEnabled, rsPer1Point, pointsPer1Rs, maxClaimPct, printShowLoyalty, printShowCredit, now, now);
       } catch (insertErr) {
         // Ignored if race condition inserted it
       }
@@ -39,6 +55,8 @@ const getProgramSettings = async (req, res) => {
         rs_per_point: rsPer1Point,
         points_per_rs: pointsPer1Rs,
         max_claim_percent: maxClaimPct,
+        print_show_loyalty: printShowLoyalty,
+        print_show_credit: printShowCredit,
         created_at: now,
         updated_at: now
       };
@@ -51,6 +69,10 @@ const getProgramSettings = async (req, res) => {
       loyaltyRsPer1Point: Number(row.rs_per_point) || 100,
       loyaltyPointsPer1Rs: Number(row.points_per_rs) || 100,
       loyaltyMaxClaimPercent: Number(row.max_claim_percent) || 50,
+      printShowLoyalty: Boolean(row.print_show_loyalty),
+      print_show_loyalty: Boolean(row.print_show_loyalty),
+      printShowCredit: Boolean(row.print_show_credit),
+      print_show_credit: Boolean(row.print_show_credit),
       updatedAt: row.updated_at
     }, 'Loyalty program settings fetched');
   } catch (error) {
@@ -62,6 +84,7 @@ const getProgramSettings = async (req, res) => {
 // ── PATCH /api/v1/loyalty/program-settings ────────────────────────────────────────
 const updateProgramSettings = async (req, res) => {
   try {
+    await ensureLoyaltyColumns();
     const userId = req.user.id;
     const body = req.body || {};
 
@@ -89,17 +112,25 @@ const updateProgramSettings = async (req, res) => {
       ? Number(body.loyaltyMaxClaimPercent) 
       : (existing ? existing.max_claim_percent : 50);
 
+    const printShowLoyaltyVal = (body.printShowLoyalty !== undefined || body.print_show_loyalty !== undefined)
+      ? ((body.printShowLoyalty ?? body.print_show_loyalty) ? 1 : 0)
+      : (existing ? (existing.print_show_loyalty || 0) : 0);
+
+    const printShowCreditVal = (body.printShowCredit !== undefined || body.print_show_credit !== undefined)
+      ? ((body.printShowCredit ?? body.print_show_credit) ? 1 : 0)
+      : (existing ? (existing.print_show_credit || 0) : 0);
+
     if (existing) {
       await db.prepare(`
         UPDATE business_loyalty_settings 
-        SET loyalty_enabled = ?, rs_per_point = ?, points_per_rs = ?, max_claim_percent = ?, updated_at = ?
+        SET loyalty_enabled = ?, rs_per_point = ?, points_per_rs = ?, max_claim_percent = ?, print_show_loyalty = ?, print_show_credit = ?, updated_at = ?
         WHERE user_id = ?
-      `).run(enabledVal, rsPerPoint, pointsPerRs, maxClaimPct, now, userId);
+      `).run(enabledVal, rsPerPoint, pointsPerRs, maxClaimPct, printShowLoyaltyVal, printShowCreditVal, now, userId);
     } else {
       await db.prepare(`
-        INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(userId, enabledVal, rsPerPoint, pointsPerRs, maxClaimPct, now, now);
+        INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(userId, enabledVal, rsPerPoint, pointsPerRs, maxClaimPct, printShowLoyaltyVal, printShowCreditVal, now, now);
     }
 
     // Keep users.settings in sync
@@ -114,6 +145,10 @@ const updateProgramSettings = async (req, res) => {
       s.loyaltyRsPer1Point = rsPerPoint;
       s.loyaltyPointsPer1Rs = pointsPerRs;
       s.loyaltyMaxClaimPercent = maxClaimPct;
+      s.print_show_loyalty = Boolean(printShowLoyaltyVal);
+      s.printShowLoyalty = Boolean(printShowLoyaltyVal);
+      s.print_show_credit = Boolean(printShowCreditVal);
+      s.printShowCredit = Boolean(printShowCreditVal);
       await db.prepare('UPDATE users SET settings = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify(s), now, userId);
     } catch (e) {}
@@ -125,6 +160,10 @@ const updateProgramSettings = async (req, res) => {
       loyaltyRsPer1Point: rsPerPoint,
       loyaltyPointsPer1Rs: pointsPerRs,
       loyaltyMaxClaimPercent: maxClaimPct,
+      printShowLoyalty: Boolean(printShowLoyaltyVal),
+      print_show_loyalty: Boolean(printShowLoyaltyVal),
+      printShowCredit: Boolean(printShowCreditVal),
+      print_show_credit: Boolean(printShowCreditVal),
       updatedAt: now
     }, 'Loyalty program settings updated');
   } catch (error) {

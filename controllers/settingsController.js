@@ -25,11 +25,19 @@ const getSettings = async (req, res) => {
       settings.loyaltyRsPer1Point = Number(lRow.rs_per_point) || 100;
       settings.loyaltyPointsPer1Rs = Number(lRow.points_per_rs) || 100;
       settings.loyaltyMaxClaimPercent = Number(lRow.max_claim_percent) || 50;
+      settings.print_show_loyalty = Boolean(lRow.print_show_loyalty);
+      settings.printShowLoyalty = Boolean(lRow.print_show_loyalty);
+      settings.print_show_credit = Boolean(lRow.print_show_credit);
+      settings.printShowCredit = Boolean(lRow.print_show_credit);
     } else {
       if (settings.loyaltyEnabled === undefined && settings.loyalty === undefined) {
         settings.loyaltyEnabled = true;
         settings.loyalty = true;
       }
+      settings.print_show_loyalty = Boolean(settings.print_show_loyalty || settings.printShowLoyalty);
+      settings.printShowLoyalty = settings.print_show_loyalty;
+      settings.print_show_credit = Boolean(settings.print_show_credit || settings.printShowCredit);
+      settings.printShowCredit = settings.print_show_credit;
     }
   } catch (e) {
     console.warn('[Settings] Error checking business_loyalty_settings:', e.message);
@@ -56,7 +64,7 @@ const updateSettings = async (req, res) => {
   const merged = { ...existing, ...incoming };
 
   // Sync loyalty keys to business_loyalty_settings table in database
-  if (incoming.loyaltyEnabled !== undefined || incoming.loyalty !== undefined || incoming.loyaltyRsPer1Point !== undefined || incoming.loyaltyPointsPer1Rs !== undefined || incoming.loyaltyMaxClaimPercent !== undefined) {
+  if (incoming.loyaltyEnabled !== undefined || incoming.loyalty !== undefined || incoming.loyaltyRsPer1Point !== undefined || incoming.loyaltyPointsPer1Rs !== undefined || incoming.loyaltyMaxClaimPercent !== undefined || incoming.print_show_loyalty !== undefined || incoming.printShowLoyalty !== undefined || incoming.print_show_credit !== undefined || incoming.printShowCredit !== undefined) {
     try {
       const now = new Date().toISOString();
       const existingL = await db.prepare('SELECT * FROM business_loyalty_settings WHERE user_id = ?').get(req.user.id);
@@ -66,16 +74,33 @@ const updateSettings = async (req, res) => {
       const rsPoint = incoming.loyaltyRsPer1Point !== undefined ? Number(incoming.loyaltyRsPer1Point) : (existingL ? existingL.rs_per_point : 100);
       const ptRs = incoming.loyaltyPointsPer1Rs !== undefined ? Number(incoming.loyaltyPointsPer1Rs) : (existingL ? existingL.points_per_rs : 100);
       const maxClaim = incoming.loyaltyMaxClaimPercent !== undefined ? Number(incoming.loyaltyMaxClaimPercent) : (existingL ? existingL.max_claim_percent : 50);
+      const printLoyaltyVal = (incoming.print_show_loyalty !== undefined || incoming.printShowLoyalty !== undefined)
+        ? ((incoming.print_show_loyalty ?? incoming.printShowLoyalty) ? 1 : 0)
+        : (existingL ? (existingL.print_show_loyalty || 0) : 0);
+      const printCreditVal = (incoming.print_show_credit !== undefined || incoming.printShowCredit !== undefined)
+        ? ((incoming.print_show_credit ?? incoming.printShowCredit) ? 1 : 0)
+        : (existingL ? (existingL.print_show_credit || 0) : 0);
+
+      try {
+        await db.prepare('ALTER TABLE business_loyalty_settings ADD COLUMN print_show_loyalty INTEGER DEFAULT 0').run();
+      } catch (e) {}
+      try {
+        await db.prepare('ALTER TABLE business_loyalty_settings ADD COLUMN print_show_credit INTEGER DEFAULT 0').run();
+      } catch (e) {}
 
       if (existingL) {
-        await db.prepare('UPDATE business_loyalty_settings SET loyalty_enabled = ?, rs_per_point = ?, points_per_rs = ?, max_claim_percent = ?, updated_at = ? WHERE user_id = ?')
-          .run(isEnabled, rsPoint, ptRs, maxClaim, now, req.user.id);
+        await db.prepare('UPDATE business_loyalty_settings SET loyalty_enabled = ?, rs_per_point = ?, points_per_rs = ?, max_claim_percent = ?, print_show_loyalty = ?, print_show_credit = ?, updated_at = ? WHERE user_id = ?')
+          .run(isEnabled, rsPoint, ptRs, maxClaim, printLoyaltyVal, printCreditVal, now, req.user.id);
       } else {
-        await db.prepare('INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(req.user.id, isEnabled, rsPoint, ptRs, maxClaim, now, now);
+        await db.prepare('INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(req.user.id, isEnabled, rsPoint, ptRs, maxClaim, printLoyaltyVal, printCreditVal, now, now);
       }
       merged.loyaltyEnabled = Boolean(isEnabled);
       merged.loyalty = Boolean(isEnabled);
+      merged.print_show_loyalty = Boolean(printLoyaltyVal);
+      merged.printShowLoyalty = Boolean(printLoyaltyVal);
+      merged.print_show_credit = Boolean(printCreditVal);
+      merged.printShowCredit = Boolean(printCreditVal);
     } catch (e) {
       console.warn('[Settings] Failed to sync business_loyalty_settings table:', e.message);
     }
