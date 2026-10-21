@@ -7,11 +7,11 @@ let db;
 
 if (dbType === 'postgres') {
   const pool = new Pool({
-    host:     process.env.DB_HOST     || 'localhost',
-    port:     Number(process.env.DB_PORT) || 5432,
-    user:     process.env.DB_USER     || 'postgres',
+    host: process.env.DB_HOST || 'localhost',
+    port: Number(process.env.DB_PORT) || 5432,
+    user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME     || 'books_finance'
+    database: process.env.DB_NAME || 'books_finance'
   });
 
   // Auto-run schema migrations for PostgreSQL to ensure missing columns are added automatically
@@ -203,19 +203,19 @@ if (dbType === 'postgres') {
         // Ignored: column or index already exists, or table doesn't exist yet
       }
     }
-    
+
     console.log('✅ [PostgreSQL Connection] Applied all isolated schema checks');
   })();
 
 
   const convertQuery = (sql) => {
     let pgSql = sql;
-    
+
     // Replace SQLite strftime with PostgreSQL TO_CHAR
     // Specifically handle the formats used in the project: strftime('%Y-%m', ...)
     pgSql = pgSql.replace(/strftime\('%Y-%m',\s*date\)/gi, "TO_CHAR(date::timestamp, 'YYYY-MM')");
     pgSql = pgSql.replace(/strftime\('%Y-%m',\s*'now'\)/gi, "TO_CHAR(CURRENT_DATE, 'YYYY-MM')");
-    
+
     // Replace SQLite date('now') with PostgreSQL CURRENT_DATE
     pgSql = pgSql.replace(/date\('now'\)/gi, "CURRENT_DATE");
 
@@ -283,7 +283,7 @@ if (dbType === 'postgres') {
           // will actually use the main pool rather than the isolated connection client.
           // True isolated PG transactions would require rewriting how `db` is accessed inside `fn`.
           // But it works sequentially. To be perfectly strict, we should pass `client` wrapper.
-          
+
           const result = await fn(...args);
           await client.query('COMMIT');
           return result;
@@ -301,7 +301,7 @@ if (dbType === 'postgres') {
   const Database = require('better-sqlite3');
   const dbPath = process.env.NODE_ENV === 'test' ? ':memory:' : (process.env.DB_PATH || './db/books_finance.db');
   const sqliteDb = new Database(dbPath);
-  
+
   db = {
     // Expose original db for legacy or advanced usage
     raw: sqliteDb,
@@ -635,7 +635,7 @@ if (dbType === 'postgres') {
       "ALTER TABLE audit_logs ADD COLUMN customer_id INTEGER"
     ];
     for (const sql of alterCols) {
-      try { rawDb.exec(sql); } catch (e) {}
+      try { rawDb.exec(sql); } catch (e) { }
     }
   } catch (err) {
     console.error('[DB Initialization] Schema optimization warning:', err.message);

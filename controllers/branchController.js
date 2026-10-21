@@ -230,12 +230,42 @@ const ensureDefaultBranch = async (userId) => {
 
         if (count === 0) {
             const now = new Date().toISOString();
+            let defaultName = 'Main Showroom';
+            let defaultAddress = 'Central Commercial Hub';
+            let defaultCity = 'Chennai';
+            let defaultState = 'Tamil Nadu';
+            let defaultPincode = '600001';
+            let defaultPhone = '';
+            let defaultEmail = '';
+            let defaultGstin = '';
+
+            try {
+                const uRow = await db.prepare('SELECT email, business_name, settings FROM users WHERE id = ?').get(userId);
+                if (uRow) {
+                    if (uRow.business_name) defaultName = `${uRow.business_name} (Main)`;
+                    defaultEmail = uRow.email || '';
+                    if (uRow.settings) {
+                        try {
+                            const s = JSON.parse(uRow.settings);
+                            if (s.companyName) defaultName = `${s.companyName} (Main)`;
+                            if (s.registeredAddress || s.address) defaultAddress = s.registeredAddress || s.address;
+                            if (s.city) defaultCity = s.city;
+                            if (s.state) defaultState = s.state;
+                            if (s.pincode) defaultPincode = s.pincode;
+                            if (s.phone) defaultPhone = s.phone;
+                            if (s.email) defaultEmail = s.email;
+                            if (s.gstinRef || s.pos_shop_gstin) defaultGstin = s.gstinRef || s.pos_shop_gstin;
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+
             const res = await db.prepare(`
                 INSERT INTO branches (
                     user_id, name, code, invoice_prefix, address, city, state, pincode, 
-                    phone, email, is_main_branch, status, created_at, updated_at
-                ) VALUES (?, 'Main Showroom', 'MAIN-01', 'MS-', 'Central Commercial Hub', 'Chennai', 'Tamil Nadu', '600001', '', '', 1, 'active', ?, ?)
-            `).run(userId, now, now);
+                    phone, email, gstin, is_main_branch, status, created_at, updated_at
+                ) VALUES (?, ?, 'MAIN-01', 'MS-', ?, ?, ?, ?, ?, ?, ?, 1, 'active', ?, ?)
+            `).run(userId, defaultName, defaultAddress, defaultCity, defaultState, defaultPincode, defaultPhone, defaultEmail, defaultGstin, now, now);
 
             mainBranchId = res?.lastInsertRowid || res?.id;
 

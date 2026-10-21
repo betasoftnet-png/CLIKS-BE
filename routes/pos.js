@@ -10,5 +10,6 @@ router.use(businessOnly);
 router.post('/checkout', posController.checkout);
 router.get('/today-summary', posController.getTodaySummary);
 router.get('/orders', posController.getOrders);
+router.get('/shop-details', posController.getShopDetails);
 
 module.exports = router;

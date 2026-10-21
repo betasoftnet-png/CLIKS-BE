@@ -115,12 +115,17 @@ const posController = {
         let branchRow = null;
         if (effectiveBranchId) {
             try {
-                branchRow = await db.prepare('SELECT id, name, address, phone, email, gstin, invoice_prefix FROM branches WHERE id = ? AND user_id = ?').get(effectiveBranchId, userId);
+                branchRow = await db.prepare('SELECT id, name, code, invoice_prefix, address, city, state, pincode, phone, email, gstin, is_main_branch FROM branches WHERE id = ? AND user_id = ?').get(effectiveBranchId, userId);
             } catch (e) {}
         }
         if (!branchRow) {
             try {
-                branchRow = await db.prepare('SELECT id, name, address, phone, email, gstin, invoice_prefix FROM branches WHERE user_id = ? AND is_main_branch = 1 LIMIT 1').get(userId);
+                branchRow = await db.prepare('SELECT id, name, code, invoice_prefix, address, city, state, pincode, phone, email, gstin, is_main_branch FROM branches WHERE user_id = ? AND is_main_branch = 1 LIMIT 1').get(userId);
+            } catch (e) {}
+        }
+        if (!branchRow) {
+            try {
+                branchRow = await db.prepare("SELECT id, name, code, invoice_prefix, address, city, state, pincode, phone, email, gstin, is_main_branch FROM branches WHERE user_id = ? AND status != 'deleted' ORDER BY id ASC LIMIT 1").get(userId);
             } catch (e) {}
         }
         if (branchRow) {
@@ -232,11 +237,15 @@ const posController = {
             try { userSettingsObj = JSON.parse(userRow.settings); } catch (e) { }
         }
 
-        const resolvedShopName = branchRow?.name || req.body.shop_name || userSettingsObj.pos_shop_name || userSettingsObj.companyName || userRow?.business_name || null;
-        const resolvedShopAddress = branchRow?.address || req.body.shop_address || userSettingsObj.pos_shop_address || userSettingsObj.registeredAddress || null;
-        const resolvedShopPhone = branchRow?.phone || req.body.shop_phone || userSettingsObj.pos_shop_phone || userSettingsObj.phone || null;
-        const resolvedShopEmail = branchRow?.email || req.body.shop_email || userSettingsObj.pos_shop_email || userSettingsObj.email || userRow?.email || null;
-        const resolvedShopGstin = branchRow?.gstin || req.body.shop_gstin || userSettingsObj.pos_shop_gstin || userSettingsObj.gstinRef || null;
+        const branchFullAddress = branchRow ? (
+            [branchRow.address, branchRow.city, branchRow.state, branchRow.pincode].filter(Boolean).join(', ') || branchRow.address
+        ) : null;
+
+        const resolvedShopName = branchRow?.name || req.body.shop_name || userSettingsObj.pos_shop_name || userSettingsObj.companyName || userRow?.business_name || 'Retail Showroom';
+        const resolvedShopAddress = branchFullAddress || req.body.shop_address || userSettingsObj.pos_shop_address || userSettingsObj.registeredAddress || 'Commercial Center, Main Road';
+        const resolvedShopPhone = branchRow?.phone || req.body.shop_phone || userSettingsObj.pos_shop_phone || userSettingsObj.phone || '';
+        const resolvedShopEmail = branchRow?.email || req.body.shop_email || userSettingsObj.pos_shop_email || userSettingsObj.email || userRow?.email || '';
+        const resolvedShopGstin = branchRow?.gstin || req.body.shop_gstin || userSettingsObj.pos_shop_gstin || userSettingsObj.gstinRef || '33AAAAA0000A1Z5';
 
         // Generate aligned, sequential monotonic bill number (e.g. POS-000014, or showroom prefix TMB-000001)
         const posPrefix = branchRow?.invoice_prefix ? `${branchRow.invoice_prefix.trim().toUpperCase()}-` : 'POS-';
@@ -259,15 +268,15 @@ const posController = {
                         discount_amount, round_off, status, due_date, payment_mode,
                         invoice_type, items, existing_loyalty_points, loyalty_points_earned, 
                         loyalty_points_redeemed, loyalty_discount_amount, remaining_loyalty_points, 
-                        billed_by, shop_name, shop_address, shop_phone, shop_email, shop_gstin, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        billed_by, branch_id, branch_name, shop_name, shop_address, shop_phone, shop_email, shop_gstin, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run([
                     userId, invoiceNumber, client_name || 'Walk-in Customer', client_email || null, customerId,
                     numAmount, numTax, numTotal, numPaid, numDue,
                     numDiscount, numRoundOff, invoiceStatus, now.split('T')[0], payment_mode || 'Cash',
                     'POS', JSON.stringify(items), existingLoyaltyPoints, loyaltyPointsEarned,
                     loyaltyPointsRedeemed, loyaltyDiscountAmount, remainingLoyaltyPoints,
-                    billedByName, resolvedShopName, resolvedShopAddress, resolvedShopPhone, resolvedShopEmail, resolvedShopGstin, now, now
+                    billedByName, effectiveBranchId || null, branchRow?.name || null, resolvedShopName, resolvedShopAddress, resolvedShopPhone, resolvedShopEmail, resolvedShopGstin, now, now
                 ]);
                 invoiceId = result.lastInsertRowid || result.id;
             } catch (errIns) {
@@ -759,6 +768,68 @@ const posController = {
         } catch (error) {
             console.error('[POS Controller] Orders history error:', error);
             return sendError(res, 'Failed to fetch order history', 500);
+        }
+    },
+
+    // 4. GET /api/v1/pos/shop-details - Fetch active POS shop/branch details for printing & display
+    getShopDetails: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const effectiveBranchId = req.query.branch_id || req.user.branch_id || null;
+
+            let branchRow = null;
+            if (effectiveBranchId) {
+                try {
+                    branchRow = await db.prepare('SELECT id, name, code, invoice_prefix, address, city, state, pincode, phone, email, gstin, is_main_branch FROM branches WHERE id = ? AND user_id = ?').get(effectiveBranchId, userId);
+                } catch (e) {}
+            }
+            if (!branchRow) {
+                try {
+                    branchRow = await db.prepare('SELECT id, name, code, invoice_prefix, address, city, state, pincode, phone, email, gstin, is_main_branch FROM branches WHERE user_id = ? AND is_main_branch = 1 LIMIT 1').get(userId);
+                } catch (e) {}
+            }
+            if (!branchRow) {
+                try {
+                    branchRow = await db.prepare("SELECT id, name, code, invoice_prefix, address, city, state, pincode, phone, email, gstin, is_main_branch FROM branches WHERE user_id = ? AND status != 'deleted' ORDER BY id ASC LIMIT 1").get(userId);
+                } catch (e) {}
+            }
+
+            let userRow = null;
+            try {
+                userRow = await db.prepare('SELECT business_name, settings, email FROM users WHERE id = ?').get(userId);
+            } catch (e) {}
+
+            let userSettingsObj = {};
+            if (userRow?.settings) {
+                try { userSettingsObj = JSON.parse(userRow.settings); } catch (e) {}
+            }
+
+            const branchFullAddress = branchRow ? (
+                [branchRow.address, branchRow.city, branchRow.state, branchRow.pincode].filter(Boolean).join(', ') || branchRow.address
+            ) : null;
+
+            const companyFullAddress = [userSettingsObj.registeredAddress || userSettingsObj.address, userSettingsObj.city, userSettingsObj.state, userSettingsObj.pincode].filter(Boolean).join(', ') || userSettingsObj.registeredAddress || userSettingsObj.address || null;
+
+            const shopDetails = {
+                branch_id: branchRow?.id || null,
+                branch_name: branchRow?.name || null,
+                branch_code: branchRow?.code || null,
+                shop_name: branchRow?.name || userSettingsObj.pos_shop_name || userSettingsObj.companyName || userRow?.business_name || 'Retail Showroom',
+                address: branchFullAddress || companyFullAddress || userSettingsObj.pos_shop_address || 'Commercial Center, Main Road',
+                city: branchRow?.city || userSettingsObj.city || '',
+                state: branchRow?.state || userSettingsObj.state || '',
+                pincode: branchRow?.pincode || userSettingsObj.pincode || '',
+                phone: branchRow?.phone || userSettingsObj.pos_shop_phone || userSettingsObj.phone || '',
+                email: branchRow?.email || userSettingsObj.pos_shop_email || userSettingsObj.email || userRow?.email || '',
+                gstin: branchRow?.gstin || userSettingsObj.pos_shop_gstin || userSettingsObj.gstinRef || '33AAAAA0000A1Z5',
+                invoice_prefix: branchRow?.invoice_prefix || 'POS-',
+                is_main_branch: Boolean(branchRow?.is_main_branch)
+            };
+
+            return sendSuccess(res, shopDetails, 'Shop and branch details retrieved');
+        } catch (error) {
+            console.error('[POS Controller] Error fetching shop details:', error);
+            return sendError(res, 'Failed to fetch shop details', 500);
         }
     }
 };
