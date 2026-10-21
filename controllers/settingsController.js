@@ -29,6 +29,10 @@ const getSettings = async (req, res) => {
       settings.printShowLoyalty = Boolean(lRow.print_show_loyalty);
       settings.print_show_credit = Boolean(lRow.print_show_credit);
       settings.printShowCredit = Boolean(lRow.print_show_credit);
+      settings.print_show_gst = lRow.print_show_gst !== undefined ? Boolean(lRow.print_show_gst) : true;
+      settings.printShowGst = settings.print_show_gst;
+      settings.receipt_printer_size = lRow.receipt_printer_size || '3inch';
+      settings.receiptPrinterSize = settings.receipt_printer_size;
     } else {
       if (settings.loyaltyEnabled === undefined && settings.loyalty === undefined) {
         settings.loyaltyEnabled = true;
@@ -38,6 +42,10 @@ const getSettings = async (req, res) => {
       settings.printShowLoyalty = settings.print_show_loyalty;
       settings.print_show_credit = Boolean(settings.print_show_credit || settings.printShowCredit);
       settings.printShowCredit = settings.print_show_credit;
+      settings.print_show_gst = settings.print_show_gst !== undefined ? Boolean(settings.print_show_gst) : true;
+      settings.printShowGst = settings.print_show_gst;
+      settings.receipt_printer_size = settings.receipt_printer_size || '3inch';
+      settings.receiptPrinterSize = settings.receipt_printer_size;
     }
   } catch (e) {
     console.warn('[Settings] Error checking business_loyalty_settings:', e.message);
@@ -80,6 +88,10 @@ const updateSettings = async (req, res) => {
       const printCreditVal = (incoming.print_show_credit !== undefined || incoming.printShowCredit !== undefined)
         ? ((incoming.print_show_credit ?? incoming.printShowCredit) ? 1 : 0)
         : (existingL ? (existingL.print_show_credit || 0) : 0);
+      const printGstVal = (incoming.print_show_gst !== undefined || incoming.printShowGst !== undefined)
+        ? ((incoming.print_show_gst ?? incoming.printShowGst) ? 1 : 0)
+        : (existingL && existingL.print_show_gst !== undefined ? existingL.print_show_gst : 1);
+      const receiptPrinterSizeVal = String(incoming.receiptPrinterSize || incoming.receipt_printer_size || (existingL ? existingL.receipt_printer_size : '3inch') || '3inch').toLowerCase();
 
       try {
         await db.prepare('ALTER TABLE business_loyalty_settings ADD COLUMN print_show_loyalty INTEGER DEFAULT 0').run();
@@ -87,13 +99,19 @@ const updateSettings = async (req, res) => {
       try {
         await db.prepare('ALTER TABLE business_loyalty_settings ADD COLUMN print_show_credit INTEGER DEFAULT 0').run();
       } catch (e) {}
+      try {
+        await db.prepare('ALTER TABLE business_loyalty_settings ADD COLUMN print_show_gst INTEGER DEFAULT 1').run();
+      } catch (e) {}
+      try {
+        await db.prepare("ALTER TABLE business_loyalty_settings ADD COLUMN receipt_printer_size TEXT DEFAULT '3inch'").run();
+      } catch (e) {}
 
       if (existingL) {
-        await db.prepare('UPDATE business_loyalty_settings SET loyalty_enabled = ?, rs_per_point = ?, points_per_rs = ?, max_claim_percent = ?, print_show_loyalty = ?, print_show_credit = ?, updated_at = ? WHERE user_id = ?')
-          .run(isEnabled, rsPoint, ptRs, maxClaim, printLoyaltyVal, printCreditVal, now, req.user.id);
+        await db.prepare('UPDATE business_loyalty_settings SET loyalty_enabled = ?, rs_per_point = ?, points_per_rs = ?, max_claim_percent = ?, print_show_loyalty = ?, print_show_credit = ?, print_show_gst = ?, receipt_printer_size = ?, updated_at = ? WHERE user_id = ?')
+          .run(isEnabled, rsPoint, ptRs, maxClaim, printLoyaltyVal, printCreditVal, printGstVal, receiptPrinterSizeVal, now, req.user.id);
       } else {
-        await db.prepare('INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-          .run(req.user.id, isEnabled, rsPoint, ptRs, maxClaim, printLoyaltyVal, printCreditVal, now, now);
+        await db.prepare('INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, print_show_gst, receipt_printer_size, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(req.user.id, isEnabled, rsPoint, ptRs, maxClaim, printLoyaltyVal, printCreditVal, printGstVal, receiptPrinterSizeVal, now, now);
       }
       merged.loyaltyEnabled = Boolean(isEnabled);
       merged.loyalty = Boolean(isEnabled);
@@ -101,6 +119,10 @@ const updateSettings = async (req, res) => {
       merged.printShowLoyalty = Boolean(printLoyaltyVal);
       merged.print_show_credit = Boolean(printCreditVal);
       merged.printShowCredit = Boolean(printCreditVal);
+      merged.print_show_gst = Boolean(printGstVal);
+      merged.printShowGst = Boolean(printGstVal);
+      merged.receipt_printer_size = receiptPrinterSizeVal;
+      merged.receiptPrinterSize = receiptPrinterSizeVal;
     } catch (e) {
       console.warn('[Settings] Failed to sync business_loyalty_settings table:', e.message);
     }
