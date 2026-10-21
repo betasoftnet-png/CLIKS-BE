@@ -3,6 +3,7 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { recordAudit } = require('../utils/auditLogger');
 const { getEffectiveBranchId, getBranchSqlCondition } = require('../utils/branchHelper');
 const gstHelper = require('../utils/gstHelper');
+const { getNextSequence } = require('../utils/sequenceGenerator');
 
 const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') => {
     try {
@@ -57,7 +58,16 @@ const purchaseController = {
 
         try {
             const now = new Date().toISOString();
-            const purchaseNum = purchase_number || `PO-${Date.now().toString().slice(-6)}`;
+            let purchaseNum = purchase_number ? String(purchase_number).trim() : '';
+            if (!purchaseNum || /^(PO|BILL|PUR)-\d{6,}$/i.test(purchaseNum)) {
+                purchaseNum = await getNextSequence({
+                    userId: req.user.id,
+                    branchId: req.user.branch_id || req.body.branch_id || null,
+                    docType: 'PURCHASE',
+                    prefix: 'PO-',
+                    padding: 6
+                });
+            }
             const isInternalRequisition = purchase_type === 'INTERNAL' || purchase_type === 'REQUISITION' || String(supplierName || '').toLowerCase().includes('main showroom');
             let finalStatus = status || 'Approved';
             let finalPaymentStatus = payment_status || 'pending';

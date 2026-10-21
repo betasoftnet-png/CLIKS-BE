@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const gstHelper = require('../utils/gstHelper');
+const { getNextSequence } = require('../utils/sequenceGenerator');
 
 const initGstTableAndColumns = async () => {
     const columns = [
@@ -222,7 +223,12 @@ const gstController = {
             const sgst = isLocal ? tax / 2 : 0;
             const igst = isLocal ? 0 : tax;
             
-            const invoice_number = `GST-${Date.now().toString().slice(-6)}`;
+            const invoice_number = req.body.invoice_number || await getNextSequence({
+                userId: req.user.id,
+                docType: 'GST',
+                prefix: 'GST-',
+                padding: 6
+            });
             const irn = `IRN-${Date.now().toString()}`;
             
             // 1. Insert into gst_invoices

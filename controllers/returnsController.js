@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
+const { getNextSequence } = require('../utils/sequenceGenerator');
 
 const syncReturnItemsToWarehouse = async (userId, warehouseId, items, returnRecord = {}) => {
     if (!warehouseId || String(warehouseId).trim() === '') return;
@@ -264,7 +265,15 @@ const returnsController = {
 
         try {
             const now = new Date().toISOString();
-            const retNum = return_number || `RET-${Date.now().toString().slice(-6)}`;
+            let retNum = return_number ? String(return_number).trim() : '';
+            if (!retNum || /^RET-\d{6,}$/i.test(retNum)) {
+                retNum = await getNextSequence({
+                    userId: req.user.id,
+                    docType: 'RETURN',
+                    prefix: 'RET-',
+                    padding: 6
+                });
+            }
             const retDate = return_date || now;
 
             const resolvedInvoiceId = invoice_id || invoice_number || null;

@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { processCustomerInvoiceIntegration } = require('../utils/customerIntegration');
+const { getNextSequence } = require('../utils/sequenceGenerator');
 
 const orderController = {
     // 1. Create Sales Order
@@ -15,7 +16,12 @@ const orderController = {
         if (!customer) return sendError(res, 'Customer name is required', 400);
 
         try {
-            const order_number = `SO-${Date.now().toString().slice(-6)}`;
+            const order_number = await getNextSequence({
+                userId: req.user.id,
+                docType: 'ORDER',
+                prefix: 'SO-',
+                padding: 6
+            });
             const now = new Date().toISOString();
 
             const result = await db.prepare(`
@@ -296,7 +302,12 @@ const orderController = {
             const orderItems = await db.prepare('SELECT * FROM business_order_items WHERE order_id = ?').all(id);
             
             const now = new Date().toISOString();
-            const invoiceNumber = `INV-${Date.now().toString().slice(-6)}`;
+            const invoiceNumber = await getNextSequence({
+                userId: req.user.id,
+                docType: 'INVOICE',
+                prefix: 'INV-',
+                padding: 6
+            });
 
             // Map items to expected invoice structure format
             const mappedItems = orderItems.map(item => ({

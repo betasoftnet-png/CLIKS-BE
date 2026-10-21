@@ -4,6 +4,7 @@ const { recordAudit } = require('../utils/auditLogger');
 const gstHelper = require('../utils/gstHelper');
 const { processCustomerInvoiceIntegration } = require('../utils/customerIntegration');
 const { getEffectiveBranchId } = require('../utils/branchHelper');
+const { getNextSequence, peekNextSequence } = require('../utils/sequenceGenerator');
 
 const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') => {
     try {
@@ -140,7 +141,6 @@ const billingController = {
 
         try {
             const now = new Date().toISOString();
-            const invNum = invoice_number || `INV-${Date.now().toString().slice(-6)}`;
 
             let resolvedCustomerId = customer_id || client_id || business_customer_id || null;
             if (!resolvedCustomerId && (client_email || client_name)) {
@@ -198,6 +198,50 @@ const billingController = {
                 }
             }
             if (!billedByName) billedByName = 'Admin';
+
+            // Sequential Aligned Invoice Numbering
+            let invNum = invoice_number ? String(invoice_number).trim() : '';
+            const isTimestampLike = /^(INV|POS|EST|PRO|BILL|SO|PO|RET)-\d{6,}$/i.test(invNum) || /^\d{10,}$/.test(invNum);
+            
+            let isDuplicate = false;
+            if (invNum) {
+                const existing = await db.prepare('SELECT id FROM business_invoices WHERE user_id = ? AND invoice_number = ?').get(req.user.id, invNum);
+                if (existing) isDuplicate = true;
+            }
+
+            if (!invNum || isTimestampLike || isDuplicate) {
+                let docType = 'INVOICE';
+                let prefix = 'INV-';
+
+                if (invoice_type === 'Quotation' || invoice_type === 'Estimate') {
+                    docType = 'ESTIMATE';
+                    prefix = 'EST-';
+                } else if (invoice_type === 'Proforma') {
+                    docType = 'PROFORMA';
+                    prefix = 'PRO-';
+                } else if (invoice_type === 'Return' || invoice_type === 'CreditNote') {
+                    docType = 'RETURN';
+                    prefix = 'RET-';
+                } else if (invoice_type === 'POS') {
+                    docType = 'POS';
+                    prefix = 'POS-';
+                } else if (resolvedBranchId) {
+                    try {
+                        const br = await db.prepare('SELECT invoice_prefix FROM branches WHERE id = ? AND user_id = ?').get(resolvedBranchId, req.user.id);
+                        if (br && br.invoice_prefix) {
+                            prefix = `${br.invoice_prefix.trim().toUpperCase()}-`;
+                        }
+                    } catch (e) {}
+                }
+
+                invNum = await getNextSequence({
+                    userId: req.user.id,
+                    branchId: resolvedBranchId,
+                    docType,
+                    prefix,
+                    padding: 6
+                });
+            }
 
             const result = await db.prepare(`
                 INSERT INTO business_invoices (
@@ -632,7 +676,12 @@ const billingController = {
             if (!src) return sendError(res, 'Source invoice not found', 404);
 
             const now = new Date().toISOString();
-            const invNum = `INV-${Date.now().toString().slice(-6)}`;
+            const invNum = await getNextSequence({
+                userId: req.user.id,
+                docType: 'INVOICE',
+                prefix: 'INV-',
+                padding: 6
+            });
 
             const result = await db.prepare(`
                 INSERT INTO business_invoices (
@@ -868,6 +917,51 @@ const billingController = {
             const count = await db.prepare('SELECT COUNT(*) as count FROM business_invoices WHERE user_id = ?').get(req.user.id);
             return sendSuccess(res, count, 'Summary loaded');
         } catch (e) { return sendError(res, 'Summary failed', 500); }
+    },
+
+    // 16. Next Sequential Document Number Preview
+    getNextNumber: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const { type = 'GST', branch_id } = req.query;
+            let docType = 'INVOICE';
+            let prefix = 'INV-';
+
+            if (type === 'Quotation' || type === 'Estimate') {
+                docType = 'ESTIMATE';
+                prefix = 'EST-';
+            } else if (type === 'Proforma') {
+                docType = 'PROFORMA';
+                prefix = 'PRO-';
+            } else if (type === 'Return' || type === 'CreditNote') {
+                docType = 'RETURN';
+                prefix = 'RET-';
+            } else if (type === 'POS') {
+                docType = 'POS';
+                prefix = 'POS-';
+            } else {
+                const effBranchId = branch_id || req.user?.branch_id;
+                if (effBranchId) {
+                    try {
+                        const br = await db.prepare('SELECT invoice_prefix FROM branches WHERE id = ? AND user_id = ?').get(effBranchId, userId);
+                        if (br && br.invoice_prefix) {
+                            prefix = `${br.invoice_prefix.trim().toUpperCase()}-`;
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            const nextInvoiceNumber = await peekNextSequence({
+                userId,
+                docType,
+                prefix,
+                padding: 6
+            });
+
+            return sendSuccess(res, { invoice_number: nextInvoiceNumber, prefix, doc_type: docType }, 'Next invoice number fetched successfully');
+        } catch (e) {
+            return sendError(res, e.message || 'Failed to fetch next invoice number', 500);
+        }
     }
 };
 

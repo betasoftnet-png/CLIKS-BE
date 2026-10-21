@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const gstHelper = require('../utils/gstHelper');
+const { getNextSequence } = require('../utils/sequenceGenerator');
 
 const hasFinancePermission = async (req) => {
     if (!req.user) return false;
@@ -227,9 +228,15 @@ const accountingController = {
 
             if (entry_type === 'income') {
                 // Income / Sales (Cash Sale or Credit Sale)
-                if (!customer_name) return sendError(res, 'Customer name is required', 400);
-
-                const invNum = invoice_number || `INV-${Date.now().toString().slice(-6)}`;
+                let invNum = invoice_number ? String(invoice_number).trim() : '';
+                if (!invNum || /^(INV|POS|EST|PRO|BILL|SO|PO|RET)-\d{6,}$/i.test(invNum)) {
+                    invNum = await getNextSequence({
+                        userId: req.user.id,
+                        docType: 'INVOICE',
+                        prefix: 'INV-',
+                        padding: 6
+                    });
+                }
                 
                 const isCreditSale = mode === 'Accounts Receivable (Credit Sale)' || 
                                      (mode && typeof mode === 'string' && 
@@ -369,9 +376,15 @@ const accountingController = {
             else if (entry_type === 'credit_purchase') {
                 // Credit Purchase
                 if (!supplier_name) return sendError(res, 'Supplier name is required', 400);
-                if (!due_date) return sendError(res, 'Due date is required', 400);
-
-                const billNum = bill_number || `BILL-${Date.now().toString().slice(-6)}`;
+                let billNum = bill_number ? String(bill_number).trim() : '';
+                if (!billNum || /^(BILL|PO|EXP)-\d{6,}$/i.test(billNum)) {
+                    billNum = await getNextSequence({
+                        userId: req.user.id,
+                        docType: 'PURCHASE',
+                        prefix: 'BILL-',
+                        padding: 6
+                    });
+                }
 
                 // Prevent duplicate bill numbers
                 const exists = await db.prepare('SELECT id FROM business_purchases WHERE purchase_number = ? AND user_id = ?').get(billNum, req.user.id);

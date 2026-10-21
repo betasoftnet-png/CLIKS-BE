@@ -19,8 +19,10 @@ router.get('/export', billingController.exportInvoices);
 router.get('/analytics', billingController.getAnalytics);
 router.get('/dashboard-summary', billingController.getDashboardSummary);
 
-// ── Invoices search ────────
+// ── Invoices search & Sequential Number ────────
 router.get('/invoices/search', billingController.searchInvoices);
+router.get('/next-number', billingController.getNextNumber);
+router.get('/invoices/next-number', billingController.getNextNumber);
 
 // ── Invoices CRUD (Both /billing and /billing/invoices endpoints) ────────
 // POST /billing or /billing/invoices

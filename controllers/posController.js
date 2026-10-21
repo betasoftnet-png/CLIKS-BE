@@ -2,6 +2,7 @@ const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { processCustomerInvoiceIntegration } = require('../utils/customerIntegration');
 const { convertUnit } = require('../utils/unitConversion');
+const { getNextSequence } = require('../utils/sequenceGenerator');
 
 const posController = {
     // POS Checkout: Create Invoice and Decrement stock
@@ -18,7 +19,6 @@ const posController = {
 
         const userId = req.user.id;
         const now = new Date().toISOString();
-        const invoiceNumber = `POS-${Date.now().toString().slice(-6)}`;
 
         const numAmount = parseFloat(amount) || 0;
         const numTax = parseFloat(tax_amount) || 0;
@@ -237,6 +237,16 @@ const posController = {
         const resolvedShopPhone = branchRow?.phone || req.body.shop_phone || userSettingsObj.pos_shop_phone || userSettingsObj.phone || null;
         const resolvedShopEmail = branchRow?.email || req.body.shop_email || userSettingsObj.pos_shop_email || userSettingsObj.email || userRow?.email || null;
         const resolvedShopGstin = branchRow?.gstin || req.body.shop_gstin || userSettingsObj.pos_shop_gstin || userSettingsObj.gstinRef || null;
+
+        // Generate aligned, sequential monotonic bill number (e.g. POS-000014, or showroom prefix TMB-000001)
+        const posPrefix = branchRow?.invoice_prefix ? `${branchRow.invoice_prefix.trim().toUpperCase()}-` : 'POS-';
+        const invoiceNumber = await getNextSequence({
+            userId,
+            branchId: effectiveBranchId,
+            docType: 'POS',
+            prefix: posPrefix,
+            padding: 6
+        });
 
         try {
             // 1. Insert into business_invoices

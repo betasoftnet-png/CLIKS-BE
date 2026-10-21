@@ -608,6 +608,8 @@ if (dbType === 'postgres') {
       "ALTER TABLE gst_invoices ADD COLUMN pdf_url TEXT",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_inv_num ON invoices(invoice_number)",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_gst_invoices_inv_num ON gst_invoices(invoice_number)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_biz_invoices_user_inv ON business_invoices(user_id, invoice_number)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_biz_purchases_user_num ON business_purchases(user_id, purchase_number)",
       "ALTER TABLE warehouse_transfers ADD COLUMN reference TEXT",
       "ALTER TABLE warehouse_transfers ADD COLUMN carrier_name TEXT",
       "ALTER TABLE warehouse_transfers ADD COLUMN tracking_number TEXT",
