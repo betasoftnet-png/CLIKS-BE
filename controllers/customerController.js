@@ -27,23 +27,39 @@ const customerController = {
             // 1. Search merchant's business_customers table FIRST for merchant context
             let crmCust = null;
             if (cleanQuery.includes('@')) {
-                crmCust = await db.prepare('SELECT id, name, email, phone, phone_number, loyalty_points FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, req.user.id);
+                crmCust = await db.prepare('SELECT id, name, email, phone, phone_number, loyalty_points, store_credit, credit_limit FROM business_customers WHERE LOWER(email) = ? AND user_id = ?').get(emailLower, req.user.id);
             } else if (phoneClean && phoneClean.length >= 7) {
-                crmCust = await db.prepare('SELECT id, name, email, phone, phone_number, loyalty_points FROM business_customers WHERE (REPLACE(REPLACE(phone_number, " ", ""), "-", "") LIKE ? OR REPLACE(REPLACE(phone, " ", ""), "-", "") LIKE ?) AND user_id = ?')
+                crmCust = await db.prepare('SELECT id, name, email, phone, phone_number, loyalty_points, store_credit, credit_limit FROM business_customers WHERE (REPLACE(REPLACE(phone_number, " ", ""), "-", "") LIKE ? OR REPLACE(REPLACE(phone, " ", ""), "-", "") LIKE ?) AND user_id = ?')
                     .get(`%${phoneClean}%`, `%${phoneClean}%`, req.user.id);
             } else {
-                crmCust = await db.prepare('SELECT id, name, email, phone, phone_number, loyalty_points FROM business_customers WHERE (LOWER(email) = ? OR LOWER(name) = ?) AND user_id = ?')
+                crmCust = await db.prepare('SELECT id, name, email, phone, phone_number, loyalty_points, store_credit, credit_limit FROM business_customers WHERE (LOWER(email) = ? OR LOWER(name) = ?) AND user_id = ?')
                     .get(emailLower, emailLower, req.user.id);
             }
 
             if (crmCust) {
+                let dueBalance = 0;
+                try {
+                    const dueRow = await db.prepare(
+                        'SELECT COALESCE(SUM(due_amount), 0) as total_due FROM business_invoices WHERE user_id = ? AND (customer_id = ? OR (client_email IS NOT NULL AND LOWER(client_email) = ?) OR (client_name IS NOT NULL AND LOWER(client_name) = ?))'
+                    ).get(req.user.id, crmCust.id, (crmCust.email || '').toLowerCase(), (crmCust.name || '').toLowerCase());
+                    dueBalance = parseFloat(dueRow?.total_due || 0) || 0;
+                } catch (e) {}
+
+                const storeCredit = parseFloat(crmCust.store_credit || 0) || 0;
+                const creditLimit = parseFloat(crmCust.credit_limit || 0) || 0;
+
                 return sendSuccess(res, {
                     exists: true,
                     user_id: crmCust.id,
                     email: crmCust.email,
                     phone: crmCust.phone_number || crmCust.phone,
                     customer_name: crmCust.name,
-                    loyalty_points: isLoyaltyEnabled ? (parseFloat(crmCust.loyalty_points || 0) || 0) : 0
+                    loyalty_points: isLoyaltyEnabled ? (parseFloat(crmCust.loyalty_points || 0) || 0) : 0,
+                    credit_held: dueBalance,
+                    outstanding_balance: dueBalance,
+                    due_balance: dueBalance,
+                    store_credit: storeCredit,
+                    credit_limit: creditLimit
                 });
             }
 
@@ -60,20 +76,38 @@ const customerController = {
                 const wallet = await db.prepare('SELECT points_balance FROM customer_loyalty_wallets WHERE user_id = ?').get(user.id);
                 const pts = wallet ? (wallet.points_balance || 0) : (user.loyalty_points || 0);
 
+                let userDueBalance = 0;
+                try {
+                    const dueRow = await db.prepare(
+                        'SELECT COALESCE(SUM(due_amount), 0) as total_due FROM business_invoices WHERE user_id = ? AND ((client_email IS NOT NULL AND LOWER(client_email) = ?) OR (client_name IS NOT NULL AND LOWER(client_name) = ?))'
+                    ).get(req.user.id, (user.email || '').toLowerCase(), (user.username || '').toLowerCase());
+                    userDueBalance = parseFloat(dueRow?.total_due || 0) || 0;
+                } catch (e) {}
+
                 return sendSuccess(res, {
                     exists: true,
                     user_id: user.id,
                     email: user.email,
                     phone: user.phone || user.phone_number,
                     customer_name: user.username,
-                    loyalty_points: isLoyaltyEnabled ? (parseFloat(pts || 0) || 0) : 0
+                    loyalty_points: isLoyaltyEnabled ? (parseFloat(pts || 0) || 0) : 0,
+                    credit_held: userDueBalance,
+                    outstanding_balance: userDueBalance,
+                    due_balance: userDueBalance,
+                    store_credit: 0,
+                    credit_limit: 0
                 });
             }
 
             return sendSuccess(res, {
                 exists: false,
                 email: emailLower,
-                loyalty_points: 0
+                loyalty_points: 0,
+                credit_held: 0,
+                outstanding_balance: 0,
+                due_balance: 0,
+                store_credit: 0,
+                credit_limit: 0
             });
         } catch (error) {
             console.error('[Customer Lookup Error]', error);
@@ -134,25 +168,39 @@ const customerController = {
                 if (conn.customer_email) connMapByEmail.set(String(conn.customer_email).toLowerCase(), status);
             });
 
-            // Batch aggregate sales
-            let salesRows = [];
+            // Batch aggregate sales & due balance
+            let salesByEmail = new Map();
+            let salesByName = new Map();
+            let dueByCustId = new Map();
+            let dueByEmail = new Map();
+            let dueByName = new Map();
             try {
-                salesRows = await db.prepare(`
-                    SELECT LOWER(client_email) as email, LOWER(client_name) as name, SUM(COALESCE(total_amount, amount, 0)) as total_sales
+                const salesRows = await db.prepare(`
+                    SELECT customer_id, LOWER(client_email) as email, LOWER(client_name) as name, 
+                           SUM(COALESCE(total_amount, amount, 0)) as total_sales,
+                           SUM(COALESCE(due_amount, 0)) as total_due
                     FROM business_invoices
                     WHERE user_id = ?
                       AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
-                    GROUP BY LOWER(client_email), LOWER(client_name)
+                    GROUP BY customer_id, LOWER(client_email), LOWER(client_name)
                 `).all(userId);
-            } catch (e) {}
 
-            const salesByEmail = new Map();
-            const salesByName = new Map();
-            (salesRows || []).forEach(r => {
-                const val = parseFloat(r.total_sales) || 0;
-                if (r.email) salesByEmail.set(r.email, (salesByEmail.get(r.email) || 0) + val);
-                if (r.name) salesByName.set(r.name, (salesByName.get(r.name) || 0) + val);
-            });
+                (salesRows || []).forEach(r => {
+                    const salesVal = parseFloat(r.total_sales) || 0;
+                    const dueVal = parseFloat(r.total_due) || 0;
+                    if (r.customer_id) {
+                        dueByCustId.set(r.customer_id, (dueByCustId.get(r.customer_id) || 0) + dueVal);
+                    }
+                    if (r.email) {
+                        salesByEmail.set(r.email, (salesByEmail.get(r.email) || 0) + salesVal);
+                        dueByEmail.set(r.email, (dueByEmail.get(r.email) || 0) + dueVal);
+                    }
+                    if (r.name) {
+                        salesByName.set(r.name, (salesByName.get(r.name) || 0) + salesVal);
+                        dueByName.set(r.name, (dueByName.get(r.name) || 0) + dueVal);
+                    }
+                });
+            } catch (e) {}
 
             let isLoyaltyEnabled = true;
             try {
@@ -173,6 +221,14 @@ const customerController = {
                 const totalSales = (emailLower ? salesByEmail.get(emailLower) : 0) || (nameLower ? salesByName.get(nameLower) : 0) || 0;
                 const loyaltyPts = isLoyaltyEnabled ? (parseFloat(c.loyalty_points || 0) || 0) : 0;
 
+                const dueFromInvoices = (c.id && dueByCustId.has(c.id))
+                    ? dueByCustId.get(c.id)
+                    : ((emailLower && dueByEmail.get(emailLower)) || (nameLower && dueByName.get(nameLower)) || 0);
+                const openingBal = parseFloat(c.opening_balance) || 0;
+                const creditHeld = Math.max(0, dueFromInvoices + (openingBal > 0 ? openingBal : 0));
+                const storeCredit = parseFloat(c.store_credit) || 0;
+                const creditLimit = parseFloat(c.credit_limit) || 0;
+
                 return {
                     ...c,
                     loyalty_points: loyaltyPts,
@@ -187,7 +243,14 @@ const customerController = {
                     connectionStatus: connStatus,
                     total_sales: totalSales,
                     totalSales: totalSales,
-                    total_spent: totalSales
+                    total_spent: totalSales,
+                    credit_held: creditHeld,
+                    outstanding_balance: creditHeld,
+                    due_balance: dueFromInvoices,
+                    current_credit: creditHeld,
+                    credit_balance: creditHeld,
+                    credit_limit: creditLimit,
+                    store_credit: storeCredit
                 };
             });
 
@@ -271,7 +334,25 @@ const customerController = {
             }
             const phoneVal = customer.phone_number || customer.phone || '';
             const panVal = customer.pan_number || customer.pan || '';
-            const addrVal = customer.billing_address || customer.address || '';
+            let dueVal = 0;
+            try {
+                const emailLower = customer.email ? String(customer.email).toLowerCase().trim() : '';
+                const nameLower = customer.name ? String(customer.name).toLowerCase().trim() : '';
+                const invDue = await db.prepare(`
+                    SELECT SUM(COALESCE(due_amount, 0)) as total_due
+                    FROM business_invoices
+                    WHERE user_id = ?
+                      AND (customer_id = ? OR (client_email IS NOT NULL AND LOWER(client_email) = ?) OR (client_name IS NOT NULL AND LOWER(client_name) = ?))
+                      AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'canceled', 'deleted', 'trash'))
+                `).get(req.user.id, customer.id, emailLower, nameLower);
+                dueVal = parseFloat(invDue?.total_due) || 0;
+            } catch (e) {}
+
+            const openingBal = parseFloat(customer.opening_balance) || 0;
+            const creditHeld = Math.max(0, dueVal + (openingBal > 0 ? openingBal : 0));
+            const storeCredit = parseFloat(customer.store_credit) || 0;
+            const creditLimit = parseFloat(customer.credit_limit) || 0;
+
             const normalized = {
                 ...customer,
                 phone: phoneVal,
@@ -279,7 +360,14 @@ const customerController = {
                 pan: panVal,
                 pan_number: panVal,
                 address: addrVal,
-                billing_address: addrVal
+                billing_address: addrVal,
+                credit_held: creditHeld,
+                outstanding_balance: creditHeld,
+                due_balance: dueVal,
+                current_credit: creditHeld,
+                credit_balance: creditHeld,
+                credit_limit: creditLimit,
+                store_credit: storeCredit
             };
             return sendSuccess(res, normalized, 'Customer fetched successfully');
         } catch (error) {
