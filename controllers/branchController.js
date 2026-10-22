@@ -368,7 +368,7 @@ const branchController = {
     getBranches: async (req, res) => {
         try {
             const userId = req.user.id;
-            await ensureDefaultBranch(userId);
+            await ensureTablesInit();
 
             let branches = [];
             try {
