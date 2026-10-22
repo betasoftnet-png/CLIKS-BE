@@ -308,9 +308,30 @@ const paymentController = {
             const ledger = await db.prepare('SELECT * FROM business_payments WHERE user_id = ? ORDER BY id DESC').all(req.user.id);
             const accounts = await db.prepare('SELECT id as bank_account_id, name as bank_account_name, balance as current_balance, type FROM accounts WHERE user_id = ?').all(req.user.id);
             
+            let customerInvoices = [];
+            try {
+                customerInvoices = await db.prepare(`
+                    SELECT * FROM business_invoices 
+                    WHERE user_id = ? 
+                    ORDER BY COALESCE(created_at, updated_at) DESC, id DESC
+                `).all(req.user.id);
+            } catch (err) {
+                console.warn('[Payment Controller] Error querying business_invoices:', err.message);
+            }
+
+            let supplierPurchases = [];
+            try {
+                supplierPurchases = await db.prepare(`
+                    SELECT * FROM business_purchases 
+                    WHERE user_id = ? 
+                    ORDER BY COALESCE(purchase_date, created_at) DESC, id DESC
+                `).all(req.user.id);
+            } catch (err) {
+                console.warn('[Payment Controller] Error querying business_purchases:', err.message);
+            }
+
             let overdueInvoices = [];
             try {
-                const todayStr = new Date().toISOString().split('T')[0];
                 overdueInvoices = await db.prepare(`
                     SELECT 
                         id, 
@@ -325,18 +346,100 @@ const paymentController = {
                     FROM business_invoices 
                     WHERE user_id = ? 
                       AND (status IS NULL OR LOWER(status) NOT IN ('paid', 'completed', 'settled'))
-                      AND due_date IS NOT NULL 
-                      AND due_date < ?
-                    ORDER BY due_date ASC
-                `).all(req.user.id, todayStr);
+                      AND (total_amount > COALESCE(paid_amount, 0) OR due_amount > 0)
+                    ORDER BY COALESCE(due_date, created_at) ASC
+                `).all(req.user.id);
             } catch (err) {
-                console.warn('[Payment Controller] Error querying business_invoices:', err.message);
+                console.warn('[Payment Controller] Error querying overdue business_invoices:', err.message);
             }
 
-            const receivables = ledger.filter(l => l.type === 'receive');
-            const payables = ledger.filter(l => l.type === 'pay');
+            const paymentReceivables = ledger.filter(l => l.type === 'receive');
+            const linkedPaymentInvKeys = new Set(paymentReceivables.map(p => String(p.invoice_id || '').trim().toLowerCase()).filter(Boolean));
 
-            return sendSuccess(res, { receivables, payables, accounts, overdueInvoices }, 'Payment reports fetched successfully');
+            const invoiceReceivables = (customerInvoices || []).map(inv => {
+                const tot = parseFloat(inv.total_amount || inv.amount || 0);
+                const paid = parseFloat(inv.paid_amount !== undefined && inv.paid_amount !== null ? inv.paid_amount : (inv.status && inv.status.toLowerCase() === 'paid' ? tot : 0));
+                const isMatched = paid >= tot && tot > 0;
+                const isPartial = paid > 0 && paid < tot;
+                const invNum = inv.invoice_number || `INV-${inv.id}`;
+
+                return {
+                    id: `inv-${inv.id}`,
+                    payment_id: `inv-${inv.id}`,
+                    type: 'receive',
+                    party_name: inv.client_name || 'General Customer',
+                    customer_name: inv.client_name || 'General Customer',
+                    invoice_id: invNum,
+                    invoiceLinkedId: invNum,
+                    amount: paid,
+                    paid_amount: paid,
+                    total_amount: tot,
+                    total_original: tot,
+                    total_original_amount: tot,
+                    pending_amount: Math.max(0, tot - paid),
+                    payment_mode: inv.payment_mode || 'Cash',
+                    reference_number: invNum,
+                    receipt_number: `RCT-${inv.id}`,
+                    status: inv.status || (isMatched ? 'Paid' : 'Pending'),
+                    reconciliation_status: isMatched ? 'matched' : (isPartial ? 'partially matched' : 'unreconciled'),
+                    created_at: inv.created_at || new Date().toISOString(),
+                    is_invoice_bill: true
+                };
+            });
+
+            // Combine payment receipts and invoices, deduplicating if invoice is already linked in a payment record
+            const allReceivables = [...paymentReceivables, ...invoiceReceivables.filter(invRec => {
+                const num = String(invRec.invoice_id || '').trim().toLowerCase();
+                return !linkedPaymentInvKeys.has(num);
+            })];
+
+            const paymentPayables = ledger.filter(l => l.type === 'pay');
+            const linkedPaymentPurKeys = new Set(paymentPayables.map(p => String(p.invoice_id || '').trim().toLowerCase()).filter(Boolean));
+
+            const purchasePayables = (supplierPurchases || []).map(p => {
+                const tot = parseFloat(p.grand_total || p.subtotal || p.total_amount || 0);
+                const paid = parseFloat(p.paid_amount !== undefined && p.paid_amount !== null ? p.paid_amount : (p.advance_amount || (p.status && p.status.toLowerCase() === 'paid' ? tot : 0)));
+                const isMatched = paid >= tot && tot > 0;
+                const isPartial = paid > 0 && paid < tot;
+                const purNum = p.purchase_number || `PO-${p.id}`;
+
+                return {
+                    id: `pur-${p.id}`,
+                    payment_id: `pur-${p.id}`,
+                    type: 'pay',
+                    party_name: p.supplier_name || 'General Supplier',
+                    supplier_name: p.supplier_name || 'General Supplier',
+                    invoice_id: purNum,
+                    purchase_id: purNum,
+                    amount: paid,
+                    paid_amount: paid,
+                    total_amount: tot,
+                    total_original: tot,
+                    total_original_amount: tot,
+                    pending_amount: Math.max(0, tot - paid),
+                    payment_mode: p.payment_mode || 'Bank Transfer',
+                    reference_number: purNum,
+                    cheque_number: purNum,
+                    status: p.status || (isMatched ? 'Paid' : 'Pending'),
+                    reconciliation_status: isMatched ? 'matched' : (isPartial ? 'partially matched' : 'unreconciled'),
+                    created_at: p.purchase_date || p.created_at || new Date().toISOString(),
+                    is_purchase_bill: true
+                };
+            });
+
+            const allPayables = [...paymentPayables, ...purchasePayables.filter(purRec => {
+                const num = String(purRec.invoice_id || '').trim().toLowerCase();
+                return !linkedPaymentPurKeys.has(num);
+            })];
+
+            return sendSuccess(res, { 
+                receivables: allReceivables, 
+                payables: allPayables, 
+                accounts, 
+                overdueInvoices,
+                invoices: customerInvoices,
+                purchases: supplierPurchases
+            }, 'Payment reports fetched successfully');
         } catch (error) {
             console.error('[Payment Controller] Error fetching reports:', error);
             return sendError(res, 'Failed to fetch payment reports', 500);
