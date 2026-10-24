@@ -365,6 +365,7 @@ const purchaseController = {
             if (branchId) {
                 branchInfo = await db.prepare("SELECT id, name, is_main_branch FROM branches WHERE id = ? AND user_id = ?").get(branchId, req.user.id);
             }
+            const isMainBranch = Boolean(branchInfo?.is_main_branch === 1 || branchInfo?.is_main_branch === true || branchInfo?.is_main_branch === '1');
             let query = '';
             let params = [req.user.id];
 
