@@ -25,6 +25,9 @@ const ensureLoyaltyColumns = async () => {
   try {
     await db.prepare('ALTER TABLE business_loyalty_settings ADD COLUMN pos_allow_credit INTEGER DEFAULT 1').run();
   } catch (e) {}
+  try {
+    await db.prepare("ALTER TABLE business_loyalty_settings ADD COLUMN pos_kiosk_config TEXT DEFAULT '{}'").run();
+  } catch (e) {}
   ensureColumnsInit = true;
 };
 ensureLoyaltyColumns();
@@ -58,13 +61,14 @@ const getProgramSettings = async (req, res) => {
       const posKioskPin = legacySettings.pos_kiosk_pin || legacySettings.posKioskPin || '1234';
       const posKioskEnabled = legacySettings.pos_kiosk_enabled !== undefined ? (legacySettings.pos_kiosk_enabled ? 1 : 0) : 1;
       const posAllowCredit = legacySettings.pos_allow_credit !== undefined ? (legacySettings.pos_allow_credit ? 1 : 0) : 1;
+      const posKioskConfig = legacySettings.pos_kiosk_config || legacySettings.posKioskConfig || '{}';
 
       const now = new Date().toISOString();
       try {
         await db.prepare(`
-          INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, print_show_gst, receipt_printer_size, pos_kiosk_pin, pos_kiosk_enabled, pos_allow_credit, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(userId, isEnabled, rsPer1Point, pointsPer1Rs, maxClaimPct, printShowLoyalty, printShowCredit, printShowGst, receiptPrinterSize, posKioskPin, posKioskEnabled, posAllowCredit, now, now);
+          INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, print_show_gst, receipt_printer_size, pos_kiosk_pin, pos_kiosk_enabled, pos_allow_credit, pos_kiosk_config, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(userId, isEnabled, rsPer1Point, pointsPer1Rs, maxClaimPct, printShowLoyalty, printShowCredit, printShowGst, receiptPrinterSize, posKioskPin, posKioskEnabled, posAllowCredit, typeof posKioskConfig === 'object' ? JSON.stringify(posKioskConfig) : posKioskConfig, now, now);
       } catch (insertErr) {
         // Ignored if race condition inserted it
       }
@@ -82,12 +86,22 @@ const getProgramSettings = async (req, res) => {
         pos_kiosk_pin: posKioskPin,
         pos_kiosk_enabled: posKioskEnabled,
         pos_allow_credit: posAllowCredit,
+        pos_kiosk_config: typeof posKioskConfig === 'object' ? JSON.stringify(posKioskConfig) : posKioskConfig,
         created_at: now,
         updated_at: now
       };
     }
 
     const loyaltyEnabled = Boolean(row.loyalty_enabled);
+    let parsedKioskConfig = {};
+    try {
+      if (row.pos_kiosk_config) {
+        parsedKioskConfig = typeof row.pos_kiosk_config === 'string' ? JSON.parse(row.pos_kiosk_config) : row.pos_kiosk_config;
+      }
+    } catch (e) {
+      parsedKioskConfig = {};
+    }
+
     return sendSuccess(res, {
       loyaltyEnabled: loyaltyEnabled,
       loyalty: loyaltyEnabled,
@@ -108,6 +122,8 @@ const getProgramSettings = async (req, res) => {
       pos_kiosk_enabled: row.pos_kiosk_enabled !== undefined ? Boolean(row.pos_kiosk_enabled) : true,
       posAllowCredit: row.pos_allow_credit !== undefined ? Boolean(row.pos_allow_credit) : true,
       pos_allow_credit: row.pos_allow_credit !== undefined ? Boolean(row.pos_allow_credit) : true,
+      posKioskConfig: parsedKioskConfig,
+      pos_kiosk_config: parsedKioskConfig,
       updatedAt: row.updated_at
     }, 'Loyalty program settings fetched');
   } catch (error) {
@@ -171,17 +187,23 @@ const updateProgramSettings = async (req, res) => {
       ? ((body.posAllowCredit ?? body.pos_allow_credit) ? 1 : 0)
       : (existing && existing.pos_allow_credit !== undefined ? existing.pos_allow_credit : 1);
 
+    let posKioskConfigVal = existing ? (existing.pos_kiosk_config || '{}') : '{}';
+    if (body.posKioskConfig !== undefined || body.pos_kiosk_config !== undefined) {
+      const incomingCfg = body.posKioskConfig !== undefined ? body.posKioskConfig : body.pos_kiosk_config;
+      posKioskConfigVal = typeof incomingCfg === 'object' ? JSON.stringify(incomingCfg) : String(incomingCfg || '{}');
+    }
+
     if (existing) {
       await db.prepare(`
         UPDATE business_loyalty_settings 
-        SET loyalty_enabled = ?, rs_per_point = ?, points_per_rs = ?, max_claim_percent = ?, print_show_loyalty = ?, print_show_credit = ?, print_show_gst = ?, receipt_printer_size = ?, pos_kiosk_pin = ?, pos_kiosk_enabled = ?, pos_allow_credit = ?, updated_at = ?
+        SET loyalty_enabled = ?, rs_per_point = ?, points_per_rs = ?, max_claim_percent = ?, print_show_loyalty = ?, print_show_credit = ?, print_show_gst = ?, receipt_printer_size = ?, pos_kiosk_pin = ?, pos_kiosk_enabled = ?, pos_allow_credit = ?, pos_kiosk_config = ?, updated_at = ?
         WHERE user_id = ?
-      `).run(enabledVal, rsPerPoint, pointsPerRs, maxClaimPct, printShowLoyaltyVal, printShowCreditVal, printShowGstVal, receiptPrinterSizeVal, posKioskPinVal, posKioskEnabledVal, posAllowCreditVal, now, userId);
+      `).run(enabledVal, rsPerPoint, pointsPerRs, maxClaimPct, printShowLoyaltyVal, printShowCreditVal, printShowGstVal, receiptPrinterSizeVal, posKioskPinVal, posKioskEnabledVal, posAllowCreditVal, posKioskConfigVal, now, userId);
     } else {
       await db.prepare(`
-        INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, print_show_gst, receipt_printer_size, pos_kiosk_pin, pos_kiosk_enabled, pos_allow_credit, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(userId, enabledVal, rsPerPoint, pointsPerRs, maxClaimPct, printShowLoyaltyVal, printShowCreditVal, printShowGstVal, receiptPrinterSizeVal, posKioskPinVal, posKioskEnabledVal, posAllowCreditVal, now, now);
+        INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, print_show_gst, receipt_printer_size, pos_kiosk_pin, pos_kiosk_enabled, pos_allow_credit, pos_kiosk_config, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(userId, enabledVal, rsPerPoint, pointsPerRs, maxClaimPct, printShowLoyaltyVal, printShowCreditVal, printShowGstVal, receiptPrinterSizeVal, posKioskPinVal, posKioskEnabledVal, posAllowCreditVal, posKioskConfigVal, now, now);
     }
 
     // Keep users.settings in sync
@@ -210,9 +232,18 @@ const updateProgramSettings = async (req, res) => {
       s.posKioskEnabled = Boolean(posKioskEnabledVal);
       s.pos_allow_credit = Boolean(posAllowCreditVal);
       s.posAllowCredit = Boolean(posAllowCreditVal);
+      s.pos_kiosk_config = posKioskConfigVal;
+      s.posKioskConfig = posKioskConfigVal;
       await db.prepare('UPDATE users SET settings = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify(s), now, userId);
     } catch (e) {}
+
+    let parsedSavedConfig = {};
+    try {
+      parsedSavedConfig = typeof posKioskConfigVal === 'string' ? JSON.parse(posKioskConfigVal) : posKioskConfigVal;
+    } catch (e) {
+      parsedSavedConfig = {};
+    }
 
     const loyaltyEnabled = Boolean(enabledVal);
     return sendSuccess(res, {
@@ -229,6 +260,14 @@ const updateProgramSettings = async (req, res) => {
       print_show_gst: Boolean(printShowGstVal),
       receiptPrinterSize: receiptPrinterSizeVal,
       receipt_printer_size: receiptPrinterSizeVal,
+      posKioskPin: posKioskPinVal,
+      pos_kiosk_pin: posKioskPinVal,
+      posKioskEnabled: Boolean(posKioskEnabledVal),
+      pos_kiosk_enabled: Boolean(posKioskEnabledVal),
+      posAllowCredit: Boolean(posAllowCreditVal),
+      pos_allow_credit: Boolean(posAllowCreditVal),
+      posKioskConfig: parsedSavedConfig,
+      pos_kiosk_config: parsedSavedConfig,
       updatedAt: now
     }, 'Loyalty program settings updated');
   } catch (error) {

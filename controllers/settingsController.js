@@ -112,6 +112,12 @@ const updateSettings = async (req, res) => {
         ? ((incoming.posAllowCredit ?? incoming.pos_allow_credit) ? 1 : 0)
         : (existingL && existingL.pos_allow_credit !== undefined ? existingL.pos_allow_credit : 1);
 
+      let posKioskConfigVal = existingL ? (existingL.pos_kiosk_config || '{}') : '{}';
+      if (incoming.posKioskConfig !== undefined || incoming.pos_kiosk_config !== undefined) {
+        const incCfg = incoming.posKioskConfig !== undefined ? incoming.posKioskConfig : incoming.pos_kiosk_config;
+        posKioskConfigVal = typeof incCfg === 'object' ? JSON.stringify(incCfg) : String(incCfg || '{}');
+      }
+
       try {
         await db.prepare('ALTER TABLE business_loyalty_settings ADD COLUMN print_show_loyalty INTEGER DEFAULT 0').run();
       } catch (e) {}
@@ -133,13 +139,16 @@ const updateSettings = async (req, res) => {
       try {
         await db.prepare('ALTER TABLE business_loyalty_settings ADD COLUMN pos_allow_credit INTEGER DEFAULT 1').run();
       } catch (e) {}
+      try {
+        await db.prepare("ALTER TABLE business_loyalty_settings ADD COLUMN pos_kiosk_config TEXT DEFAULT '{}'").run();
+      } catch (e) {}
 
       if (existingL) {
-        await db.prepare('UPDATE business_loyalty_settings SET loyalty_enabled = ?, rs_per_point = ?, points_per_rs = ?, max_claim_percent = ?, print_show_loyalty = ?, print_show_credit = ?, print_show_gst = ?, receipt_printer_size = ?, pos_kiosk_pin = ?, pos_kiosk_enabled = ?, pos_allow_credit = ?, updated_at = ? WHERE user_id = ?')
-          .run(isEnabled, rsPoint, ptRs, maxClaim, printLoyaltyVal, printCreditVal, printGstVal, receiptPrinterSizeVal, posKioskPinVal, posKioskEnabledVal, posAllowCreditVal, now, req.user.id);
+        await db.prepare('UPDATE business_loyalty_settings SET loyalty_enabled = ?, rs_per_point = ?, points_per_rs = ?, max_claim_percent = ?, print_show_loyalty = ?, print_show_credit = ?, print_show_gst = ?, receipt_printer_size = ?, pos_kiosk_pin = ?, pos_kiosk_enabled = ?, pos_allow_credit = ?, pos_kiosk_config = ?, updated_at = ? WHERE user_id = ?')
+          .run(isEnabled, rsPoint, ptRs, maxClaim, printLoyaltyVal, printCreditVal, printGstVal, receiptPrinterSizeVal, posKioskPinVal, posKioskEnabledVal, posAllowCreditVal, posKioskConfigVal, now, req.user.id);
       } else {
-        await db.prepare('INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, print_show_gst, receipt_printer_size, pos_kiosk_pin, pos_kiosk_enabled, pos_allow_credit, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-          .run(req.user.id, isEnabled, rsPoint, ptRs, maxClaim, printLoyaltyVal, printCreditVal, printGstVal, receiptPrinterSizeVal, posKioskPinVal, posKioskEnabledVal, posAllowCreditVal, now, now);
+        await db.prepare('INSERT INTO business_loyalty_settings (user_id, loyalty_enabled, rs_per_point, points_per_rs, max_claim_percent, print_show_loyalty, print_show_credit, print_show_gst, receipt_printer_size, pos_kiosk_pin, pos_kiosk_enabled, pos_allow_credit, pos_kiosk_config, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(req.user.id, isEnabled, rsPoint, ptRs, maxClaim, printLoyaltyVal, printCreditVal, printGstVal, receiptPrinterSizeVal, posKioskPinVal, posKioskEnabledVal, posAllowCreditVal, posKioskConfigVal, now, now);
       }
       merged.loyaltyEnabled = Boolean(isEnabled);
       merged.loyalty = Boolean(isEnabled);
@@ -157,6 +166,10 @@ const updateSettings = async (req, res) => {
       merged.posKioskEnabled = Boolean(posKioskEnabledVal);
       merged.pos_allow_credit = Boolean(posAllowCreditVal);
       merged.posAllowCredit = Boolean(posAllowCreditVal);
+      let parsedCfg = {};
+      try { parsedCfg = typeof posKioskConfigVal === 'string' ? JSON.parse(posKioskConfigVal) : posKioskConfigVal; } catch(e) {}
+      merged.pos_kiosk_config = parsedCfg;
+      merged.posKioskConfig = parsedCfg;
     } catch (e) {
       console.warn('[Settings] Failed to sync business_loyalty_settings table:', e.message);
     }
