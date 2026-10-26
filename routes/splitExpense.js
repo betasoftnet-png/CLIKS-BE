@@ -15,7 +15,10 @@ const {
   createExpense,
   deleteExpense,
   updateExpense,
-  uploadAttachment
+  uploadAttachment,
+  respondInvite,
+  updateMemberRole,
+  inviteMember
 } = require('../controllers/splitExpenseController');
 
 // ── Summary / helper routes (must be before /:id) ────────────────────────────
@@ -45,6 +48,17 @@ router.patch('/:id', updateSplitExpense);
 
 // DELETE /split-expenses/:id                                  — Delete a split expense and its participants
 router.delete('/:id', deleteSplitExpense);
+
+// ── Invitation & Role management sub-routes ───────────────────────────────────
+
+// PATCH  /split-expenses/:id/respond-invite                   — Accept or decline an invitation to join split
+router.patch('/:id/respond-invite', respondInvite);
+
+// PATCH  /split-expenses/:id/member-role                      — Admin updates a member's role (viewer vs editor)
+router.patch('/:id/member-role', updateMemberRole);
+
+// POST   /split-expenses/:id/invite                           — Admin invites a new @bnxmail.com member
+router.post('/:id/invite', inviteMember);
 
 // ── Participant sub-routes ────────────────────────────────────────────────────
 

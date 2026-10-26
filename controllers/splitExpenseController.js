@@ -3,20 +3,64 @@ const fs = require('fs');
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 
+const BNX_EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@bnxmail\.com$/i;
+
+// Helper to normalize participant objects and guarantee backward compatibility
+const normalizeParticipant = (p, defaultRole = 'viewer', defaultStatus = 'pending', isAdmin = false) => {
+  if (typeof p === 'string') {
+    const emailMatch = p.match(/\(([^)]+@bnxmail\.com)\)/i);
+    const email = emailMatch ? emailMatch[1] : (p.includes('@bnxmail.com') ? p : '');
+    const name = p.replace(/\s*\([^)]+@bnxmail\.com\)/i, '').trim();
+    const isYou = name.toLowerCase() === 'you';
+    return {
+      name: name || 'Participant',
+      email: email || '',
+      role: isYou ? 'editor' : defaultRole,
+      status: isYou ? 'accepted' : defaultStatus,
+      isAdmin: isYou || isAdmin
+    };
+  }
+  return {
+    name: p.name || (p.email ? p.email.split('@')[0] : 'Member'),
+    email: p.email || '',
+    role: p.role === 'editor' ? 'editor' : 'viewer',
+    status: p.status || defaultStatus,
+    isAdmin: !!p.isAdmin
+  };
+};
+
 // ── GET / ─────────────────────────────────────────────────────────────────────
 const getSplitExpenses = async (req, res) => {
   try {
-    const tickets = await db.prepare("SELECT * FROM split_tickets WHERE user_id = ? ORDER BY created_at DESC").all(req.user.id);
+    const userEmail = (req.user?.email || '').toLowerCase();
+    const userId = req.user?.id;
+    const allTickets = await db.prepare("SELECT * FROM split_tickets ORDER BY created_at DESC").all();
+    
+    // Creator or invited member whose bnxmail is present in participants
+    const tickets = allTickets.filter(ticket => {
+      if (ticket.user_id == userId) return true;
+      try {
+        const parts = JSON.parse(ticket.participants || '[]');
+        return parts.some(p => {
+          const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
+          return pEmail && pEmail === userEmail;
+        });
+      } catch (e) {
+        return false;
+      }
+    });
+
     for (const ticket of tickets) {
       try {
-        ticket.participants = JSON.parse(ticket.participants || '[]');
+        const rawParts = JSON.parse(ticket.participants || '[]');
+        ticket.participants = rawParts.map(p => normalizeParticipant(p));
       } catch (e) {
         ticket.participants = [];
       }
       ticket.currencySymbol = ticket.currency_symbol;
       delete ticket.currency_symbol;
 
-      const expenses = await db.prepare("SELECT * FROM split_ticket_expenses WHERE split_ticket_id = ? AND user_id = ? ORDER BY created_at DESC").all(ticket.id, req.user.id);
+      const expenses = await db.prepare("SELECT * FROM split_ticket_expenses WHERE split_ticket_id = ? ORDER BY created_at DESC").all(ticket.id);
       for (const exp of expenses) {
         try {
           exp.shares = JSON.parse(exp.shares || '{}');
@@ -32,7 +76,6 @@ const getSplitExpenses = async (req, res) => {
         exp.documentUrl = exp.document_url || (exp.attachment ? (exp.attachment.startsWith('/') ? exp.attachment : `/uploads/${exp.attachment}`) : '');
         delete exp.document_name;
         delete exp.document_url;
-        // Keep attachment synced for backward compatibility
         if (!exp.attachment && exp.documentUrl) {
           exp.attachment = exp.documentUrl;
         }
@@ -54,13 +97,57 @@ const createSplitExpense = async (req, res) => {
       return sendError(res, 'Title is required', 400, 'BAD_REQUEST');
     }
 
+    // Validate email domain: Only official @bnxmail.com domain is permitted
+    for (const p of participants) {
+      const email = typeof p === 'string' 
+        ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) 
+        : (p.email || '');
+      if (email && !BNX_EMAIL_REGEX.test(email.trim())) {
+        return sendError(res, `Invalid email '${email}'. Only official @bnxmail.com domain emails are allowed.`, 400, 'INVALID_BNXMAIL');
+      }
+    }
+
     const ticketId = id || 'split-' + Date.now();
     const now = new Date().toISOString();
+
+    const creatorEmail = (req.user?.email || 'admin@bnxmail.com').toLowerCase();
+    const creatorName = req.user?.username || req.user?.name || 'You';
+
+    const cleanParticipants = [];
+    let hasAdmin = false;
+
+    for (const p of participants) {
+      const norm = normalizeParticipant(p, 'viewer', 'pending');
+      if (norm.email && norm.email.toLowerCase() === creatorEmail) {
+        norm.isAdmin = true;
+        norm.role = 'editor';
+        norm.status = 'accepted';
+        hasAdmin = true;
+      }
+      if (norm.name.toLowerCase() === 'you') {
+        norm.isAdmin = true;
+        norm.role = 'editor';
+        norm.status = 'accepted';
+        norm.email = norm.email || creatorEmail;
+        hasAdmin = true;
+      }
+      cleanParticipants.push(norm);
+    }
+
+    if (!hasAdmin) {
+      cleanParticipants.unshift({
+        name: creatorName,
+        email: creatorEmail,
+        role: 'editor',
+        status: 'accepted',
+        isAdmin: true
+      });
+    }
 
     await db.prepare(`
       INSERT INTO split_tickets (id, user_id, title, currency, currency_symbol, description, participants, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(ticketId, req.user.id, title, currency || 'INR', currencySymbol || '₹', description || '', JSON.stringify(participants), now, now);
+    `).run(ticketId, req.user.id, title, currency || 'INR', currencySymbol || '₹', description || '', JSON.stringify(cleanParticipants), now, now);
 
     const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
     ticket.participants = JSON.parse(ticket.participants);
@@ -79,9 +166,16 @@ const createSplitExpense = async (req, res) => {
 const deleteSplitExpense = async (req, res) => {
   try {
     const ticketId = req.params.id;
+    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
+    if (!ticket) return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
+
+    if (ticket.user_id != req.user.id) {
+      return sendError(res, 'Only the split ticket admin can delete this ticket', 403, 'FORBIDDEN');
+    }
+
     await db.transaction(async () => {
-      await db.prepare("DELETE FROM split_ticket_expenses WHERE split_ticket_id = ? AND user_id = ?").run(ticketId, req.user.id);
-      await db.prepare("DELETE FROM split_tickets WHERE id = ? AND user_id = ?").run(ticketId, req.user.id);
+      await db.prepare("DELETE FROM split_ticket_expenses WHERE split_ticket_id = ?").run(ticketId);
+      await db.prepare("DELETE FROM split_tickets WHERE id = ?").run(ticketId);
     })();
     return res.status(204).end();
   } catch (error) {
@@ -98,6 +192,38 @@ const createExpense = async (req, res) => {
 
     if (!title || amount === undefined) {
       return sendError(res, 'Title and amount are required', 400, 'BAD_REQUEST');
+    }
+
+    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(splitTicketId);
+    if (!ticket) {
+      return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
+    }
+
+    // Access control check: Only Admin or Editor members who accepted can record expenses
+    const isOwner = ticket.user_id == req.user.id;
+    if (!isOwner) {
+      let participants = [];
+      try { participants = JSON.parse(ticket.participants || '[]'); } catch (e) {}
+      const userEmail = (req.user?.email || '').toLowerCase();
+      const member = participants.find(p => {
+        const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
+        return pEmail && pEmail === userEmail;
+      });
+
+      if (!member) {
+        return sendError(res, 'You are not a member of this split ticket', 403, 'FORBIDDEN');
+      }
+
+      const role = typeof member === 'object' ? (member.role || 'viewer') : 'editor';
+      const status = typeof member === 'object' ? (member.status || 'pending') : 'accepted';
+
+      if (status !== 'accepted') {
+        return sendError(res, 'You must accept the split invitation before recording expenses', 403, 'INVITATION_PENDING');
+      }
+
+      if (role === 'viewer') {
+        return sendError(res, 'You have view-only access to this split. Only editors can record expenses.', 403, 'VIEW_ONLY');
+      }
     }
 
     const expId = id || 'exp-' + Date.now();
@@ -152,7 +278,21 @@ const createExpense = async (req, res) => {
 const deleteExpense = async (req, res) => {
   try {
     const { id, expenseId } = req.params;
-    await db.prepare("DELETE FROM split_ticket_expenses WHERE id = ? AND split_ticket_id = ? AND user_id = ?").run(expenseId, id, req.user.id);
+    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(id);
+    if (!ticket) return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
+
+    const exp = await db.prepare("SELECT * FROM split_ticket_expenses WHERE id = ? AND split_ticket_id = ?").get(expenseId, id);
+    if (!exp) return sendError(res, 'Expense not found', 404, 'NOT_FOUND');
+
+    // Access control: ticket owner OR expense creator who is editor
+    const isOwner = ticket.user_id == req.user.id;
+    const isCreator = exp.user_id == req.user.id;
+
+    if (!isOwner && !isCreator) {
+      return sendError(res, 'You do not have permission to delete this expense', 403, 'FORBIDDEN');
+    }
+
+    await db.prepare("DELETE FROM split_ticket_expenses WHERE id = ? AND split_ticket_id = ?").run(expenseId, id);
     return res.status(204).end();
   } catch (error) {
     console.error('Error deleting expense:', error);
@@ -170,6 +310,30 @@ const updateExpense = async (req, res) => {
       return sendError(res, 'Title and amount are required', 400, 'BAD_REQUEST');
     }
 
+    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(id);
+    if (!ticket) return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
+
+    const existingExp = await db.prepare("SELECT * FROM split_ticket_expenses WHERE id = ? AND split_ticket_id = ?").get(expenseId, id);
+    if (!existingExp) return sendError(res, 'Expense not found', 404, 'NOT_FOUND');
+
+    // Access control
+    const isOwner = ticket.user_id == req.user.id;
+    const isCreator = existingExp.user_id == req.user.id;
+    if (!isOwner && !isCreator) {
+      let participants = [];
+      try { participants = JSON.parse(ticket.participants || '[]'); } catch (e) {}
+      const userEmail = (req.user?.email || '').toLowerCase();
+      const member = participants.find(p => {
+        const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
+        return pEmail && pEmail === userEmail;
+      });
+      const role = typeof member === 'object' ? (member.role || 'viewer') : 'editor';
+      const status = typeof member === 'object' ? (member.status || 'pending') : 'accepted';
+      if (status !== 'accepted' || role === 'viewer') {
+        return sendError(res, 'You do not have permission to edit expenses', 403, 'FORBIDDEN');
+      }
+    }
+
     const now = new Date().toISOString();
     const finalDocUrl = documentUrl || (attachment ? (attachment.startsWith('/') ? attachment : `/uploads/${attachment}`) : null);
     const finalDocName = documentName || (attachment ? path.basename(attachment).replace(/^\d+_/, '') : null);
@@ -177,7 +341,7 @@ const updateExpense = async (req, res) => {
     await db.prepare(`
       UPDATE split_ticket_expenses 
       SET title = ?, amount = ?, paid_by = ?, date = ?, attachment = ?, document_name = ?, document_url = ?, split_type = ?, shares = ?, updated_at = ?
-      WHERE id = ? AND split_ticket_id = ? AND user_id = ?
+      WHERE id = ? AND split_ticket_id = ?
     `).run(
       title, 
       parseFloat(amount), 
@@ -190,15 +354,10 @@ const updateExpense = async (req, res) => {
       JSON.stringify(shares || {}), 
       now, 
       expenseId, 
-      id, 
-      req.user.id
+      id
     );
 
-    const exp = await db.prepare("SELECT * FROM split_ticket_expenses WHERE id = ? AND split_ticket_id = ? AND user_id = ?").get(expenseId, id, req.user.id);
-    if (!exp) {
-      return sendError(res, 'Expense not found', 404, 'NOT_FOUND');
-    }
-
+    const exp = await db.prepare("SELECT * FROM split_ticket_expenses WHERE id = ? AND split_ticket_id = ?").get(expenseId, id);
     exp.shares = JSON.parse(exp.shares || '{}');
     exp.paidBy = exp.paid_by;
     delete exp.paid_by;
@@ -220,10 +379,164 @@ const updateExpense = async (req, res) => {
   }
 };
 
-// ── DUMMY FALLBACK EXPORTS FOR OLD SYSTEM COMPATIBILITY ───────────────────────
-const getSplitSummary = async (req, res) => sendSuccess(res, []);
-const settleFriend = async (req, res) => sendSuccess(res, {});
-const getSplitExpense = async (req, res) => sendSuccess(res, {});
+// ── PATCH /:id/respond-invite ─────────────────────────────────────────────────
+const respondInvite = async (req, res) => {
+  try {
+    const ticketId = req.params.id;
+    const { status, email } = req.body; // status: 'accepted' | 'rejected'
+    const targetEmail = (email || req.user?.email || '').toLowerCase();
+
+    if (!['accepted', 'rejected'].includes(status)) {
+      return sendError(res, "Status must be 'accepted' or 'rejected'", 400, 'BAD_REQUEST');
+    }
+
+    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
+    if (!ticket) return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
+
+    let participants = [];
+    try { participants = JSON.parse(ticket.participants || '[]'); } catch (e) {}
+
+    let found = false;
+    participants = participants.map(p => {
+      const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
+      if (pEmail === targetEmail) {
+        found = true;
+        if (typeof p === 'string') {
+          return { name: p.replace(/\s*\([^)]+\)/, '').trim(), email: pEmail, role: 'viewer', status, isAdmin: false };
+        }
+        return { ...p, status };
+      }
+      return p;
+    });
+
+    if (status === 'rejected') {
+      participants = participants.filter(p => {
+        const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
+        return pEmail !== targetEmail;
+      });
+    }
+
+    const now = new Date().toISOString();
+    await db.prepare("UPDATE split_tickets SET participants = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(participants), now, ticketId);
+
+    const updated = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
+    updated.participants = JSON.parse(updated.participants || '[]');
+    updated.currencySymbol = updated.currency_symbol;
+    delete updated.currency_symbol;
+
+    return sendSuccess(res, updated, `Invitation ${status} successfully`);
+  } catch (error) {
+    console.error('Error responding to invite:', error);
+    return sendError(res, error.message, 500);
+  }
+};
+
+// ── PATCH /:id/member-role ───────────────────────────────────────────────────
+const updateMemberRole = async (req, res) => {
+  try {
+    const ticketId = req.params.id;
+    const { email, role } = req.body;
+    if (!email || !role) {
+      return sendError(res, 'Email and role are required', 400, 'BAD_REQUEST');
+    }
+    if (role !== 'viewer' && role !== 'editor') {
+      return sendError(res, "Role must be 'viewer' or 'editor'", 400, 'BAD_REQUEST');
+    }
+
+    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
+    if (!ticket) return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
+
+    if (ticket.user_id != req.user.id) {
+      return sendError(res, 'Only the split ticket admin can modify member permissions', 403, 'FORBIDDEN');
+    }
+
+    let participants = [];
+    try { participants = JSON.parse(ticket.participants || '[]'); } catch (e) {}
+
+    participants = participants.map(p => {
+      const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
+      if (pEmail === email.toLowerCase()) {
+        if (typeof p === 'string') {
+          return { name: p.replace(/\s*\([^)]+\)/, '').trim(), email: pEmail, role, status: 'accepted', isAdmin: false };
+        }
+        return { ...p, role };
+      }
+      return p;
+    });
+
+    const now = new Date().toISOString();
+    await db.prepare("UPDATE split_tickets SET participants = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(participants), now, ticketId);
+
+    const updated = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
+    updated.participants = JSON.parse(updated.participants || '[]');
+    updated.currencySymbol = updated.currency_symbol;
+    delete updated.currency_symbol;
+
+    return sendSuccess(res, updated, `Member role updated to ${role}`);
+  } catch (error) {
+    console.error('Error updating member role:', error);
+    return sendError(res, error.message, 500);
+  }
+};
+
+// ── POST /:id/invite ──────────────────────────────────────────────────────────
+const inviteMember = async (req, res) => {
+  try {
+    const ticketId = req.params.id;
+    const { name, email, role = 'viewer' } = req.body;
+    if (!email) return sendError(res, 'Email is required', 400, 'BAD_REQUEST');
+
+    if (!BNX_EMAIL_REGEX.test(email.trim())) {
+      return sendError(res, 'Only official @bnxmail.com domain emails are allowed', 400, 'INVALID_BNXMAIL');
+    }
+
+    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
+    if (!ticket) return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
+
+    if (ticket.user_id != req.user.id) {
+      return sendError(res, 'Only the split ticket admin can invite members', 403, 'FORBIDDEN');
+    }
+
+    let participants = [];
+    try { participants = JSON.parse(ticket.participants || '[]'); } catch (e) {}
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = (name && name.trim()) || cleanEmail.split('@')[0];
+
+    const exists = participants.some(p => {
+      const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
+      return pEmail === cleanEmail;
+    });
+
+    if (exists) {
+      return sendError(res, 'This member is already added to this split', 400, 'ALREADY_EXISTS');
+    }
+
+    const newMember = {
+      name: cleanName,
+      email: cleanEmail,
+      role: role === 'editor' ? 'editor' : 'viewer',
+      status: 'pending',
+      isAdmin: false,
+      invitedAt: new Date().toISOString()
+    };
+
+    participants.push(newMember);
+
+    const now = new Date().toISOString();
+    await db.prepare("UPDATE split_tickets SET participants = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(participants), now, ticketId);
+
+    const updated = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
+    updated.participants = JSON.parse(updated.participants || '[]');
+    updated.currencySymbol = updated.currency_symbol;
+    delete updated.currency_symbol;
+
+    return sendSuccess(res, updated, `Invitation sent to ${cleanEmail}`, 201);
+  } catch (error) {
+    console.error('Error inviting member:', error);
+    return sendError(res, error.message, 500);
+  }
+};
 
 // ── PATCH /:id ────────────────────────────────────────────────────────────────
 const updateSplitExpense = async (req, res) => {
@@ -233,6 +546,26 @@ const updateSplitExpense = async (req, res) => {
     
     if (!title) {
       return sendError(res, 'Title is required', 400, 'BAD_REQUEST');
+    }
+
+    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
+    if (!ticket) {
+      return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
+    }
+
+    if (ticket.user_id != req.user.id) {
+      return sendError(res, 'Only the split ticket admin can update this ticket', 403, 'FORBIDDEN');
+    }
+
+    if (participants && Array.isArray(participants)) {
+      for (const p of participants) {
+        const email = typeof p === 'string' 
+          ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) 
+          : (p.email || '');
+        if (email && !BNX_EMAIL_REGEX.test(email.trim())) {
+          return sendError(res, `Invalid email '${email}'. Only official @bnxmail.com domain emails are allowed.`, 400, 'INVALID_BNXMAIL');
+        }
+      }
     }
 
     const now = new Date().toISOString();
@@ -252,19 +585,12 @@ const updateSplitExpense = async (req, res) => {
       req.user.id
     );
 
-    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
-    if (!ticket) {
-      return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
-    }
-    
-    ticket.participants = JSON.parse(ticket.participants);
-    ticket.currencySymbol = ticket.currency_symbol;
-    delete ticket.currency_symbol;
-    
-    // We don't fetch expenses here as the frontend just needs the updated basic info, 
-    // or we can fetch them if needed. Usually frontend merges updated info with existing state.
+    const updatedTicket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
+    updatedTicket.participants = JSON.parse(updatedTicket.participants || '[]');
+    updatedTicket.currencySymbol = updatedTicket.currency_symbol;
+    delete updatedTicket.currency_symbol;
 
-    return sendSuccess(res, ticket, 'Split ticket updated successfully');
+    return sendSuccess(res, updatedTicket, 'Split ticket updated successfully');
   } catch (error) {
     console.error('Error updating split ticket:', error);
     return sendError(res, error.message, 500);
@@ -331,10 +657,43 @@ const uploadAttachment = async (req, res) => {
   }
 };
 
+// ── DUMMY FALLBACK EXPORTS FOR COMPATIBILITY ──────────────────────────────────
+const getSplitSummary = async (req, res) => sendSuccess(res, []);
+const settleFriend = async (req, res) => sendSuccess(res, {});
+const getSplitExpense = async (req, res) => sendSuccess(res, {});
 const getParticipants = async (req, res) => sendSuccess(res, []);
 const addParticipant = async (req, res) => sendSuccess(res, {}, 201);
 const settleParticipant = async (req, res) => sendSuccess(res, {});
-const deleteParticipant = async (req, res) => res.status(204).end();
+
+const deleteParticipant = async (req, res) => {
+  try {
+    const { id, participantId } = req.params;
+    const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(id);
+    if (!ticket) return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
+
+    if (ticket.user_id != req.user.id) {
+      return sendError(res, 'Only the split ticket admin can remove members', 403, 'FORBIDDEN');
+    }
+
+    let participants = [];
+    try { participants = JSON.parse(ticket.participants || '[]'); } catch (e) {}
+
+    const target = decodeURIComponent(participantId).toLowerCase();
+    participants = participants.filter(p => {
+      const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
+      const pName = (typeof p === 'string' ? p : (p.name || '')).toLowerCase();
+      return pEmail !== target && pName !== target;
+    });
+
+    const now = new Date().toISOString();
+    await db.prepare("UPDATE split_tickets SET participants = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(participants), now, id);
+
+    return res.status(204).end();
+  } catch (error) {
+    console.error('Error removing participant:', error);
+    return sendError(res, error.message, 500);
+  }
+};
 
 module.exports = {
   getSplitExpenses,
@@ -351,6 +710,8 @@ module.exports = {
   getParticipants,
   addParticipant,
   settleParticipant,
-  deleteParticipant
+  deleteParticipant,
+  respondInvite,
+  updateMemberRole,
+  inviteMember
 };
-
