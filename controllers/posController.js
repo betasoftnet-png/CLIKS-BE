@@ -831,7 +831,156 @@ const posController = {
             console.error('[POS Controller] Error fetching shop details:', error);
             return sendError(res, 'Failed to fetch shop details', 500);
         }
+    },
+
+    getPosSession: async (req, res) => {
+        try {
+            await ensurePosSessionTable();
+            const userId = String(req.user.id);
+            const row = await db.prepare('SELECT session_data FROM pos_sessions WHERE user_id = ?').get(userId);
+            if (!row || !row.session_data) {
+                return sendSuccess(res, null, 'No active POS session');
+            }
+            let data = null;
+            try {
+                data = JSON.parse(row.session_data);
+            } catch (e) {
+                data = null;
+            }
+            return sendSuccess(res, data, 'POS session retrieved');
+        } catch (error) {
+            console.error('[POS Controller] Error fetching POS session:', error);
+            return sendError(res, 'Failed to fetch POS session', 500);
+        }
+    },
+
+    savePosSession: async (req, res) => {
+        try {
+            await ensurePosSessionTable();
+            const userId = String(req.user.id);
+            const sessionData = req.body.session_data !== undefined ? req.body.session_data : req.body;
+            const now = new Date().toISOString();
+            const jsonStr = typeof sessionData === 'string' ? sessionData : JSON.stringify(sessionData);
+
+            const existing = await db.prepare('SELECT id FROM pos_sessions WHERE user_id = ?').get(userId);
+            if (existing) {
+                await db.prepare('UPDATE pos_sessions SET session_data = ?, updated_at = ? WHERE user_id = ?').run(jsonStr, now, userId);
+            } else {
+                await db.prepare('INSERT INTO pos_sessions (user_id, session_data, updated_at) VALUES (?, ?, ?)').run(userId, jsonStr, now);
+            }
+
+            return sendSuccess(res, { success: true }, 'POS session saved');
+        } catch (error) {
+            console.error('[POS Controller] Error saving POS session:', error);
+            return sendError(res, 'Failed to save POS session', 500);
+        }
+    },
+
+    clearPosSession: async (req, res) => {
+        try {
+            await ensurePosSessionTable();
+            const userId = String(req.user.id);
+            await db.prepare('DELETE FROM pos_sessions WHERE user_id = ?').run(userId);
+            return sendSuccess(res, { success: true }, 'POS session cleared');
+        } catch (error) {
+            console.error('[POS Controller] Error clearing POS session:', error);
+            return sendError(res, 'Failed to clear POS session', 500);
+        }
+    },
+
+    getHeldCarts: async (req, res) => {
+        try {
+            await ensurePosSessionTable();
+            const userId = String(req.user.id);
+            const row = await db.prepare('SELECT session_data FROM pos_sessions WHERE user_id = ?').get(userId);
+            if (!row || !row.session_data) {
+                return sendSuccess(res, [], 'Held carts retrieved');
+            }
+            try {
+                const parsed = JSON.parse(row.session_data);
+                const heldCarts = Array.isArray(parsed?.heldCarts) ? parsed.heldCarts : [];
+                return sendSuccess(res, heldCarts, 'Held carts retrieved');
+            } catch (e) {
+                return sendSuccess(res, [], 'Held carts retrieved');
+            }
+        } catch (error) {
+            console.error('[POS Controller] Error fetching held carts:', error);
+            return sendError(res, 'Failed to fetch held carts', 500);
+        }
+    },
+
+    saveHeldCarts: async (req, res) => {
+        try {
+            await ensurePosSessionTable();
+            const userId = String(req.user.id);
+            const heldCarts = req.body.held_carts || req.body.heldCarts || [];
+            const now = new Date().toISOString();
+
+            const existing = await db.prepare('SELECT session_data FROM pos_sessions WHERE user_id = ?').get(userId);
+            let sessionObj = {};
+            if (existing && existing.session_data) {
+                try { sessionObj = JSON.parse(existing.session_data); } catch (e) {}
+            }
+            sessionObj.heldCarts = heldCarts;
+            const jsonStr = JSON.stringify(sessionObj);
+
+            if (existing) {
+                await db.prepare('UPDATE pos_sessions SET session_data = ?, updated_at = ? WHERE user_id = ?').run(jsonStr, now, userId);
+            } else {
+                await db.prepare('INSERT INTO pos_sessions (user_id, session_data, updated_at) VALUES (?, ?, ?)').run(userId, jsonStr, now);
+            }
+            return sendSuccess(res, heldCarts, 'Held carts updated');
+        } catch (error) {
+            console.error('[POS Controller] Error saving held carts:', error);
+            return sendError(res, 'Failed to save held carts', 500);
+        }
+    },
+
+    deleteHeldCart: async (req, res) => {
+        try {
+            await ensurePosSessionTable();
+            const userId = String(req.user.id);
+            const holdId = req.params.id;
+            const now = new Date().toISOString();
+
+            const existing = await db.prepare('SELECT session_data FROM pos_sessions WHERE user_id = ?').get(userId);
+            if (existing && existing.session_data) {
+                try {
+                    const sessionObj = JSON.parse(existing.session_data);
+                    if (Array.isArray(sessionObj.heldCarts)) {
+                        sessionObj.heldCarts = sessionObj.heldCarts.filter(h => String(h.id) !== String(holdId));
+                        if (sessionObj.activeHeldCartInfo && String(sessionObj.activeHeldCartInfo.id) === String(holdId)) {
+                            sessionObj.activeHeldCartInfo = null;
+                        }
+                        const jsonStr = JSON.stringify(sessionObj);
+                        await db.prepare('UPDATE pos_sessions SET session_data = ?, updated_at = ? WHERE user_id = ?').run(jsonStr, now, userId);
+                    }
+                } catch (e) {}
+            }
+            return sendSuccess(res, { success: true }, 'Held cart deleted');
+        } catch (error) {
+            console.error('[POS Controller] Error deleting held cart:', error);
+            return sendError(res, 'Failed to delete held cart', 500);
+        }
     }
+};
+
+const ensurePosSessionTable = async () => {
+    try {
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS pos_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                session_data TEXT,
+                updated_at TEXT
+            )
+        `).run();
+    } catch (e) {
+        console.warn('[POS Controller] Error creating pos_sessions table:', e.message);
+    }
+    try {
+        await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_pos_sessions_user ON pos_sessions(user_id)').run();
+    } catch (e) {}
 };
 
 module.exports = posController;
