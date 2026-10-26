@@ -51,6 +51,43 @@ router.get('/incoming-requests', asyncHandler(getIncomingRequests));
 router.patch('/requests/:id/respond', asyncHandler(respondToRequest));
 router.post('/requests/:id/respond', asyncHandler(respondToRequest));
 
+// ── Financial Groups Workflow (must be declared before /:id) ─────────────────
+const {
+  getGroups,
+  createGroup,
+  getGroupDetails,
+  updateGroup,
+  deleteGroup,
+  inviteGroupMember,
+  removeGroupMember,
+  getGroupIncomingRequests,
+  respondToGroupRequest,
+  addGroupTransaction,
+  deleteGroupTransaction
+} = require('../controllers/peopleGroupsController');
+
+// Group invitations
+router.get('/groups/requests/incoming', asyncHandler(getGroupIncomingRequests));
+router.get('/groups/incoming-requests', asyncHandler(getGroupIncomingRequests));
+router.post('/groups/requests/:membershipId/respond', asyncHandler(respondToGroupRequest));
+router.patch('/groups/requests/:membershipId/respond', asyncHandler(respondToGroupRequest));
+
+// Group CRUD
+router.get('/groups', asyncHandler(getGroups));
+router.post('/groups', asyncHandler(createGroup));
+router.get('/groups/:id', asyncHandler(getGroupDetails));
+router.put('/groups/:id', asyncHandler(updateGroup));
+router.patch('/groups/:id', asyncHandler(updateGroup));
+router.delete('/groups/:id', asyncHandler(deleteGroup));
+
+// Group Members
+router.post('/groups/:id/members', asyncHandler(inviteGroupMember));
+router.delete('/groups/:id/members/:memberId', asyncHandler(removeGroupMember));
+
+// Group Transactions (Contributions, Outlays, Loans, Settlements)
+router.post('/groups/:id/transactions', asyncHandler(addGroupTransaction));
+router.delete('/groups/:id/transactions/:txId', asyncHandler(deleteGroupTransaction));
+
 // ── People CRUD ───────────────────────────────────────────────────────────────
 
 // GET    /people              — List all people (with aggregated lent/borrowed/net balance)
