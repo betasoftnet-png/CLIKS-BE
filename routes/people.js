@@ -11,7 +11,9 @@ const {
   createPerson,
   getPerson,
   updatePerson,
-  deletePerson
+  deletePerson,
+  getIncomingRequests,
+  respondToRequest
 } = require('../controllers/peopleController');
 const asyncHandler = require('../utils/asyncHandler');
 
@@ -39,6 +41,15 @@ router.patch('/repayment-alerts/:id', asyncHandler(updateRepaymentAlert));
 
 // GET /people/records       — List all people records across all contacts
 router.get('/records', asyncHandler(getAllRecords));
+
+// ── Connection Requests Workflow (must be declared before /:id) ───────────────
+// GET    /people/requests/incoming — List all incoming connection requests for authenticated user
+router.get('/requests/incoming', asyncHandler(getIncomingRequests));
+router.get('/incoming-requests', asyncHandler(getIncomingRequests));
+
+// PATCH/POST /people/requests/:id/respond — Accept or reject a connection request
+router.patch('/requests/:id/respond', asyncHandler(respondToRequest));
+router.post('/requests/:id/respond', asyncHandler(respondToRequest));
 
 // ── People CRUD ───────────────────────────────────────────────────────────────
 

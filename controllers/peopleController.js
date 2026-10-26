@@ -280,11 +280,22 @@ const getAllRecords = async (req, res) => {
   return sendSuccess(res, result.rows, 'All people records fetched', 200, { ...result.meta, stats });
 };
 
+let isPeopleStatusColumnEnsured = false;
+const ensurePeopleSchema = async () => {
+  if (isPeopleStatusColumnEnsured) return;
+  try {
+    await db.prepare("ALTER TABLE people ADD COLUMN status TEXT DEFAULT 'accepted'").run();
+  } catch (_) {}
+  isPeopleStatusColumnEnsured = true;
+};
+
 const getPeople = async (req, res) => {
+  await ensurePeopleSchema();
   const { page, limit, sort = 'updated_at', order = 'desc', search, role_type } = req.query;
   
   let query = `
     SELECT p.*,
+      COALESCE(p.status, 'accepted') as status,
       COALESCE(SUM(CASE WHEN pt.type = 'lent' THEN pt.amount ELSE 0 END), 0) as total_lent,
       COALESCE(SUM(CASE WHEN pt.type = 'borrowed' THEN pt.amount ELSE 0 END), 0) as total_borrowed,
       COALESCE(SUM(CASE WHEN pt.type = 'lent' THEN pt.amount WHEN pt.type = 'borrowed' THEN -pt.amount ELSE 0 END), 0) as net_balance
@@ -296,8 +307,8 @@ const getPeople = async (req, res) => {
 
   if (role_type) { query += ' AND p.role_type = ?'; params.push(role_type); }
   if (search) { 
-    query += ' AND (p.name LIKE ? OR p.company LIKE ? OR p.contact_info LIKE ?)'; 
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`); 
+    query += ' AND (p.name LIKE ? OR p.company LIKE ? OR p.contact_info LIKE ? OR p.email LIKE ?)'; 
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`); 
   }
 
   query += ' GROUP BY p.id';
@@ -329,15 +340,36 @@ const getPeople = async (req, res) => {
 };
 
 const createPerson = async (req, res) => {
+  await ensurePeopleSchema();
   const { name, role_type, relationship, phone, email, company, contact_info, notes } = req.body;
   if (!name || !role_type) return sendError(res, 'Name and role_type are required', 400, 'BAD_REQUEST');
 
-  // 1. BNXMAIL Domain Validation
-  if (email && email.trim()) {
-    const emailRegex = /^[a-zA-Z0-9._%+-]+@bnxmail\.com$/i;
-    if (!emailRegex.test(email.trim())) {
-      return sendError(res, 'Only official @bnxmail.com domain emails are permitted.', 400, 'BAD_REQUEST');
+  // 1. Strict BNXMAIL Validation & Requirement
+  const cleanEmail = email ? email.trim().toLowerCase() : '';
+  if (!cleanEmail) {
+    return sendError(res, 'Email address is required. Only @bnxmail.com domain addresses are accepted.', 400, 'BAD_REQUEST');
+  }
+
+  const bnxmailRegex = /^[a-zA-Z0-9._%+-]+@bnxmail\.com$/i;
+  if (!bnxmailRegex.test(cleanEmail)) {
+    return sendError(res, 'Only official @bnxmail.com domain emails are permitted.', 400, 'BAD_REQUEST');
+  }
+
+  // Prevent user from sending request to themselves
+  const currentUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE id = ?').get(req.user.id);
+  const senderEmail = (currentUser?.email || '').toLowerCase().trim();
+  const tokenEmail = (req.user?.email || '').toLowerCase().trim();
+  if ((senderEmail && cleanEmail === senderEmail) || (tokenEmail && cleanEmail === tokenEmail)) {
+    return sendError(res, 'You cannot send a connection request to your own @bnxmail.com address.', 400, 'BAD_REQUEST');
+  }
+
+  // Check if contact with this email already exists in user's directory
+  const existingEmail = await db.prepare('SELECT id, status FROM people WHERE user_id = ? AND LOWER(email) = LOWER(?)').get(req.user.id, cleanEmail);
+  if (existingEmail) {
+    if (existingEmail.status === 'pending') {
+      return sendError(res, 'A connection request to this @bnxmail.com address is already pending.', 409, 'CONFLICT');
     }
+    return sendError(res, 'A contact with this @bnxmail.com address already exists in your network.', 409, 'CONFLICT');
   }
 
   // 2. Unique Phone Number Check
@@ -349,23 +381,26 @@ const createPerson = async (req, res) => {
   }
 
   const now = new Date().toISOString();
+  const status = 'pending';
   const stmt = db.prepare(`
-    INSERT INTO people (user_id, name, role_type, relationship, phone, email, company, contact_info, notes, created_at, updated_at) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO people (user_id, name, role_type, relationship, phone, email, company, contact_info, notes, status, created_at, updated_at) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = await stmt.run(req.user.id, name, role_type, relationship || null, phone ? phone.trim() : null, email ? email.trim() : null, company || null, contact_info || null, notes || null, now, now);
+  const info = await stmt.run(req.user.id, name, role_type, relationship || null, phone ? phone.trim() : null, cleanEmail, company || null, contact_info || null, notes || null, status, now, now);
   
   const newItem = await db.prepare('SELECT * FROM people WHERE id = ?').get(info.lastInsertRowid);
-  return sendSuccess(res, newItem, 'Person created', 201);
+  return sendSuccess(res, newItem, 'Person created and invitation request sent', 201);
 };
 
 const getPerson = async (req, res) => {
+  await ensurePeopleSchema();
   const person = await db.prepare('SELECT * FROM people WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!person) return sendError(res, 'Person not found', 404, 'NOT_FOUND');
   return sendSuccess(res, person);
 };
 
 const updatePerson = async (req, res) => {
+  await ensurePeopleSchema();
   const person = await db.prepare('SELECT * FROM people WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!person) return sendError(res, 'Person not found', 404, 'NOT_FOUND');
 
@@ -373,9 +408,17 @@ const updatePerson = async (req, res) => {
 
   // 1. BNXMAIL Domain Validation if email is updated
   if (email !== undefined && email !== null && email.trim() !== '') {
+    const cleanEmail = email.trim().toLowerCase();
     const emailRegex = /^[a-zA-Z0-9._%+-]+@bnxmail\.com$/i;
-    if (!emailRegex.test(email.trim())) {
+    if (!emailRegex.test(cleanEmail)) {
       return sendError(res, 'Only official @bnxmail.com domain emails are permitted.', 400, 'BAD_REQUEST');
+    }
+
+    const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').get(req.user.id);
+    const senderEmail = (currentUser?.email || '').toLowerCase().trim();
+    const tokenEmail = (req.user?.email || '').toLowerCase().trim();
+    if ((senderEmail && cleanEmail === senderEmail) || (tokenEmail && cleanEmail === tokenEmail)) {
+      return sendError(res, 'You cannot set a contact to your own @bnxmail.com address.', 400, 'BAD_REQUEST');
     }
   }
 
@@ -389,7 +432,7 @@ const updatePerson = async (req, res) => {
 
   const updates = [];
   const params = [];
-  const allowedFields = ['name', 'role_type', 'relationship', 'phone', 'email', 'company', 'contact_info', 'notes'];
+  const allowedFields = ['name', 'role_type', 'relationship', 'phone', 'email', 'company', 'contact_info', 'notes', 'status'];
   
   for (const field of allowedFields) {
     if (req.body[field] !== undefined) {
@@ -426,6 +469,93 @@ const deletePerson = async (req, res) => {
   return res.status(204).end();
 };
 
+// ── Connection Requests Workflow ──────────────────────────────────────────────
+const getIncomingRequests = async (req, res) => {
+  await ensurePeopleSchema();
+  const currentUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE id = ?').get(req.user.id);
+  const userEmail = (currentUser?.email || req.user?.email || '').toLowerCase().trim();
+
+  if (!userEmail) {
+    return sendSuccess(res, [], 'No incoming requests');
+  }
+
+  const incoming = await db.prepare(`
+    SELECT 
+      p.id,
+      p.user_id as requester_id,
+      p.name as invited_as_name,
+      p.role_type,
+      p.relationship,
+      p.company,
+      p.created_at,
+      p.status,
+      u.username as requester_username,
+      u.email as requester_email,
+      u.business_name as requester_business_name
+    FROM people p
+    JOIN users u ON p.user_id = u.id
+    WHERE LOWER(p.email) = LOWER(?) AND (p.status = 'pending' OR p.status IS NULL)
+    ORDER BY p.created_at DESC
+  `).all(userEmail);
+
+  return sendSuccess(res, incoming || [], 'Incoming connection requests fetched');
+};
+
+const respondToRequest = async (req, res) => {
+  await ensurePeopleSchema();
+  const { action } = req.body;
+  if (!action || !['accept', 'reject', 'accepted', 'rejected'].includes(action)) {
+    return sendError(res, "Action must be 'accept' or 'reject'", 400, 'BAD_REQUEST');
+  }
+
+  const normalizedStatus = (action === 'accept' || action === 'accepted') ? 'accepted' : 'rejected';
+
+  const requestItem = await db.prepare(`
+    SELECT p.*, u.username as requester_username, u.email as requester_email, u.business_name as requester_business_name
+    FROM people p
+    JOIN users u ON p.user_id = u.id
+    WHERE p.id = ?
+  `).get(req.params.id);
+
+  if (!requestItem) {
+    return sendError(res, 'Connection request not found', 404, 'NOT_FOUND');
+  }
+
+  const currentUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE id = ?').get(req.user.id);
+  const userEmail = (currentUser?.email || req.user?.email || '').toLowerCase().trim();
+
+  if ((requestItem.email || '').toLowerCase().trim() !== userEmail) {
+    return sendError(res, 'You are not authorized to respond to this connection request', 403, 'FORBIDDEN');
+  }
+
+  const now = new Date().toISOString();
+  await db.prepare('UPDATE people SET status = ?, updated_at = ? WHERE id = ?').run(normalizedStatus, now, req.params.id);
+
+  if (normalizedStatus === 'accepted') {
+    // Automatically establish reciprocal contact for the recipient so both users are connected
+    try {
+      const recipientUser = await db.prepare('SELECT id FROM users WHERE id = ?').get(req.user.id);
+      if (recipientUser && requestItem.requester_email) {
+        const reciprocal = await db.prepare('SELECT id FROM people WHERE user_id = ? AND LOWER(email) = LOWER(?)').get(req.user.id, requestItem.requester_email);
+        if (!reciprocal) {
+          const contactName = requestItem.requester_business_name || requestItem.requester_username || 'Connected Contact';
+          await db.prepare(`
+            INSERT INTO people (user_id, name, role_type, relationship, email, status, created_at, updated_at)
+            VALUES (?, ?, 'business', 'Connected Network', ?, 'accepted', ?, ?)
+          `).run(req.user.id, contactName, requestItem.requester_email.toLowerCase().trim(), now, now);
+        } else {
+          await db.prepare('UPDATE people SET status = ?, updated_at = ? WHERE id = ?').run('accepted', now, reciprocal.id);
+        }
+      }
+    } catch (e) {
+      console.warn('Reciprocal contact creation warning:', e.message);
+    }
+  }
+
+  const updatedItem = await db.prepare('SELECT * FROM people WHERE id = ?').get(req.params.id);
+  return sendSuccess(res, updatedItem, `Connection request ${normalizedStatus}`);
+};
+
 module.exports = {
   getAllTransactions,
   getAllReminders,
@@ -437,5 +567,7 @@ module.exports = {
   createPerson,
   getPerson,
   updatePerson,
-  deletePerson
+  deletePerson,
+  getIncomingRequests,
+  respondToRequest
 };
