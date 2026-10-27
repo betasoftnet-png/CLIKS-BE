@@ -56,6 +56,17 @@ const ensurePeopleGroupsSchema = async () => {
           member_id INTEGER NOT NULL,
           owed_amount NUMERIC(15, 2) NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS people_group_private_notes (
+          id SERIAL PRIMARY KEY,
+          group_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          member_id INTEGER NOT NULL,
+          amount NUMERIC(15, 2) DEFAULT 0,
+          notes TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
       `);
     } else {
       if (db.raw && typeof db.raw.exec === 'function') {
@@ -106,6 +117,17 @@ const ensurePeopleGroupsSchema = async () => {
             transaction_id INTEGER NOT NULL,
             member_id INTEGER NOT NULL,
             owed_amount REAL NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS people_group_private_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            member_id INTEGER NOT NULL,
+            amount REAL DEFAULT 0,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
           );
         `);
       } else {
@@ -159,6 +181,18 @@ const ensurePeopleGroupsSchema = async () => {
             transaction_id INTEGER NOT NULL,
             member_id INTEGER NOT NULL,
             owed_amount REAL NOT NULL
+          )
+        `).run();
+        await db.prepare(`
+          CREATE TABLE IF NOT EXISTS people_group_private_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            member_id INTEGER NOT NULL,
+            amount REAL DEFAULT 0,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
           )
         `).run();
       }
@@ -389,6 +423,40 @@ const getGroupDetails = async (req, res) => {
     b.net_balance = (b.total_paid + b.total_contributed) - b.total_owed;
   });
 
+  // Fetch private notes written by this user for members in this group (strictly only for req.user.id)
+  let privateNotes = [];
+  try {
+    privateNotes = await db.prepare(`
+      SELECT pn.*, m.name as member_name, m.email as member_email
+      FROM people_group_private_notes pn
+      JOIN people_group_members m ON pn.member_id = m.id
+      WHERE pn.group_id = ? AND pn.user_id = ?
+    `).all(groupId, req.user.id);
+  } catch (err) {
+    privateNotes = [];
+  }
+
+  const privateNotesMap = {};
+  let totalPrivateCommitments = 0;
+  (privateNotes || []).forEach(pn => {
+    const amt = Number(pn.amount) || 0;
+    totalPrivateCommitments += amt;
+    privateNotesMap[pn.member_id] = {
+      id: pn.id,
+      amount: amt,
+      notes: pn.notes || '',
+      updated_at: pn.updated_at
+    };
+  });
+
+  members.forEach(m => {
+    m.private_note = privateNotesMap[m.id] || null;
+  });
+
+  Object.values(balanceMap).forEach(b => {
+    b.private_note = privateNotesMap[b.member_id] || null;
+  });
+
   const txSummary = await db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN type = 'contribution' THEN amount ELSE 0 END), 0) as total_contributed,
@@ -405,11 +473,13 @@ const getGroupDetails = async (req, res) => {
     transactions,
     splits,
     balances: Object.values(balanceMap),
+    my_private_notes: privateNotes || [],
     summary: {
       total_contributed: Number(txSummary?.total_contributed || 0),
       total_expenses: Number(txSummary?.total_expenses || 0),
       total_loans: Number(txSummary?.total_loans || 0),
-      target_amount: Number(group.target_amount || 0)
+      target_amount: Number(group.target_amount || 0),
+      total_private_commitments: totalPrivateCommitments
     }
   }, 'Group details fetched');
 };
@@ -735,6 +805,88 @@ const deleteGroupTransaction = async (req, res) => {
   return sendSuccess(res, { deleted: true }, 'Transaction removed');
 };
 
+// ── POST/PUT /api/people/groups/:id/members/:memberId/private-note ───────────
+// Set or update a private commitment / note to give money to a specific group member
+// Note: This is strictly private and ONLY returned to req.user.id
+const setMemberPrivateNote = async (req, res) => {
+  await ensurePeopleGroupsSchema();
+  const { id: groupId, memberId } = req.params;
+  const { amount, notes } = req.body;
+
+  const group = await db.prepare('SELECT id, created_by FROM people_groups WHERE id = ?').get(groupId);
+  if (!group) return sendError(res, 'Group not found', 404, 'NOT_FOUND');
+
+  const member = await db.prepare('SELECT id, name, email FROM people_group_members WHERE id = ? AND group_id = ?').get(memberId, groupId);
+  if (!member) return sendError(res, 'Member not found in this group', 404, 'NOT_FOUND');
+
+  // Verify access
+  const currentUser = await db.prepare('SELECT id, email FROM users WHERE id = ?').get(req.user.id);
+  const userEmail = (currentUser?.email || req.user?.email || '').toLowerCase().trim();
+
+  const myMembership = await db.prepare(`
+    SELECT id FROM people_group_members
+    WHERE group_id = ? AND (user_id = ? OR LOWER(email) = LOWER(?)) AND status = 'accepted'
+  `).get(groupId, req.user.id, userEmail);
+
+  if (group.created_by !== req.user.id && !myMembership) {
+    return sendError(res, 'Access denied', 403, 'FORBIDDEN');
+  }
+
+  const existing = await db.prepare(`
+    SELECT id FROM people_group_private_notes
+    WHERE group_id = ? AND user_id = ? AND member_id = ?
+  `).get(groupId, req.user.id, memberId);
+
+  const numAmount = Number(amount) || 0;
+  const noteText = notes ? notes.trim() : '';
+  const now = new Date().toISOString();
+
+  if (existing) {
+    await db.prepare(`
+      UPDATE people_group_private_notes
+      SET amount = ?, notes = ?, updated_at = ?
+      WHERE id = ?
+    `).run(numAmount, noteText, now, existing.id);
+
+    return sendSuccess(res, {
+      id: existing.id,
+      group_id: Number(groupId),
+      member_id: Number(memberId),
+      amount: numAmount,
+      notes: noteText,
+      updated_at: now
+    }, 'Private note saved (only visible to you)');
+  } else {
+    const result = await db.prepare(`
+      INSERT INTO people_group_private_notes (group_id, user_id, member_id, amount, notes, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(groupId, req.user.id, memberId, numAmount, noteText, now, now);
+
+    return sendSuccess(res, {
+      id: result?.lastInsertRowid || result?.insertId,
+      group_id: Number(groupId),
+      member_id: Number(memberId),
+      amount: numAmount,
+      notes: noteText,
+      created_at: now,
+      updated_at: now
+    }, 'Private note saved (only visible to you)', 201);
+  }
+};
+
+// ── DELETE /api/people/groups/:id/members/:memberId/private-note ───────────
+const deleteMemberPrivateNote = async (req, res) => {
+  await ensurePeopleGroupsSchema();
+  const { id: groupId, memberId } = req.params;
+
+  await db.prepare(`
+    DELETE FROM people_group_private_notes
+    WHERE group_id = ? AND user_id = ? AND member_id = ?
+  `).run(groupId, req.user.id, memberId);
+
+  return sendSuccess(res, { deleted: true }, 'Private note removed');
+};
+
 module.exports = {
   getGroups,
   createGroup,
@@ -746,5 +898,7 @@ module.exports = {
   getGroupIncomingRequests,
   respondToGroupRequest,
   addGroupTransaction,
-  deleteGroupTransaction
+  deleteGroupTransaction,
+  setMemberPrivateNote,
+  deleteMemberPrivateNote
 };

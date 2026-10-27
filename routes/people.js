@@ -63,7 +63,9 @@ const {
   getGroupIncomingRequests,
   respondToGroupRequest,
   addGroupTransaction,
-  deleteGroupTransaction
+  deleteGroupTransaction,
+  setMemberPrivateNote,
+  deleteMemberPrivateNote
 } = require('../controllers/peopleGroupsController');
 
 // Group invitations
@@ -83,6 +85,11 @@ router.delete('/groups/:id', asyncHandler(deleteGroup));
 // Group Members
 router.post('/groups/:id/members', asyncHandler(inviteGroupMember));
 router.delete('/groups/:id/members/:memberId', asyncHandler(removeGroupMember));
+
+// Group Member Private Notes (Visible strictly ONLY to the authenticated author)
+router.post('/groups/:id/members/:memberId/private-note', asyncHandler(setMemberPrivateNote));
+router.put('/groups/:id/members/:memberId/private-note', asyncHandler(setMemberPrivateNote));
+router.delete('/groups/:id/members/:memberId/private-note', asyncHandler(deleteMemberPrivateNote));
 
 // Group Transactions (Contributions, Outlays, Loans, Settlements)
 router.post('/groups/:id/transactions', asyncHandler(addGroupTransaction));
