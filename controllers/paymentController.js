@@ -306,7 +306,71 @@ const paymentController = {
     getReports: async (req, res) => {
         try {
             const ledger = await db.prepare('SELECT * FROM business_payments WHERE user_id = ? ORDER BY id DESC').all(req.user.id);
-            const accounts = await db.prepare('SELECT id as bank_account_id, name as bank_account_name, balance as current_balance, type FROM accounts WHERE user_id = ?').all(req.user.id);
+            
+            let accounts = [];
+            try {
+                const bankAccounts = await db.prepare(`
+                    SELECT 
+                        id as bank_account_id,
+                        id,
+                        bank_name,
+                        account_holder,
+                        COALESCE(
+                            NULLIF(bank_name, ''),
+                            NULLIF(account_holder, ''),
+                            'Bank Account'
+                        ) as bank_account_name,
+                        account_number,
+                        ifsc as ifsc_code,
+                        branch as branch_name,
+                        current_balance,
+                        status,
+                        'bank' as type
+                    FROM bank_accounts 
+                    WHERE user_id = ?
+                    ORDER BY id ASC
+                `).all(req.user.id);
+
+                // Calculate cash collected from invoices
+                let cashCollected = 0;
+                try {
+                    const cashRow = await db.prepare(`
+                        SELECT SUM(COALESCE(paid_amount, 0)) as total_cash
+                        FROM business_invoices
+                        WHERE user_id = ? AND LOWER(payment_mode) = 'cash'
+                    `).get(req.user.id);
+                    cashCollected = parseFloat(cashRow?.total_cash || 0);
+                } catch (e) {}
+
+                // Include Cash Register
+                accounts = [
+                    {
+                        id: 'cash-register',
+                        bank_account_id: 'cash-register',
+                        bank_account_name: 'Cash Register (Cash in Hand)',
+                        bank_name: 'Cash Register',
+                        account_number: 'Cash Counter',
+                        current_balance: cashCollected,
+                        type: 'cash',
+                        status: 'Active'
+                    },
+                    ...(bankAccounts || [])
+                ];
+            } catch (err) {
+                console.warn('[Payment Controller] Error querying bank_accounts:', err.message);
+                accounts = [
+                    {
+                        id: 'cash-register',
+                        bank_account_id: 'cash-register',
+                        bank_account_name: 'Cash Register (Cash in Hand)',
+                        bank_name: 'Cash Register',
+                        account_number: 'Cash Counter',
+                        current_balance: 0,
+                        type: 'cash',
+                        status: 'Active'
+                    }
+                ];
+            }
             
             let customerInvoices = [];
             try {
@@ -337,17 +401,23 @@ const paymentController = {
                         id, 
                         invoice_number, 
                         client_name, 
+                        client_email,
                         amount, 
                         total_amount,
                         paid_amount,
+                        due_amount,
+                        payment_mode,
                         status, 
                         due_date, 
                         created_at 
                     FROM business_invoices 
                     WHERE user_id = ? 
-                      AND (status IS NULL OR LOWER(status) NOT IN ('paid', 'completed', 'settled'))
-                      AND (total_amount > COALESCE(paid_amount, 0) OR due_amount > 0)
-                    ORDER BY COALESCE(due_date, created_at) ASC
+                      AND (
+                          due_amount > 0 
+                          OR (total_amount > COALESCE(paid_amount, 0) AND (status IS NULL OR LOWER(status) NOT IN ('paid', 'settled', 'completed')))
+                          OR LOWER(payment_mode) = 'credit'
+                      )
+                    ORDER BY COALESCE(due_date, created_at) DESC
                 `).all(req.user.id);
             } catch (err) {
                 console.warn('[Payment Controller] Error querying overdue business_invoices:', err.message);
