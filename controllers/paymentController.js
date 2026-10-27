@@ -331,6 +331,71 @@ const paymentController = {
                     ORDER BY id ASC
                 `).all(req.user.id);
 
+                // 2. Also check accounting table (entry_type = 'AccountConfig') from Books module
+                const accountingBanks = await db.prepare(`
+                    SELECT 
+                        id,
+                        id as bank_account_id,
+                        COALESCE(NULLIF(bank_name, ''), account_name, 'Bank') as bank_name,
+                        account_name as bank_account_name,
+                        account_number,
+                        ifsc_code,
+                        branch_name,
+                        CAST(COALESCE(balance, 0) as REAL) as current_balance,
+                        status,
+                        'bank' as type
+                    FROM accounting
+                    WHERE user_id = ? AND entry_type = 'AccountConfig' AND LOWER(account_name) NOT LIKE '%cash%'
+                    ORDER BY id ASC
+                `).all(req.user.id);
+
+                // Retrieve system-wide bank accounts and accounting accounts as well to ensure complete visibility
+                const sysBankAccounts = await db.prepare(`
+                    SELECT 
+                        id,
+                        id as bank_account_id,
+                        bank_name,
+                        COALESCE(NULLIF(bank_name, ''), NULLIF(account_holder, ''), 'Bank Account') as bank_account_name,
+                        account_number,
+                        ifsc as ifsc_code,
+                        branch as branch_name,
+                        current_balance,
+                        status,
+                        'bank' as type
+                    FROM bank_accounts
+                    ORDER BY id ASC
+                `).all();
+
+                const sysAccBanks = await db.prepare(`
+                    SELECT 
+                        id,
+                        id as bank_account_id,
+                        COALESCE(NULLIF(bank_name, ''), account_name, 'Bank') as bank_name,
+                        account_name as bank_account_name,
+                        account_number,
+                        ifsc_code,
+                        branch_name,
+                        CAST(COALESCE(balance, 0) as REAL) as current_balance,
+                        status,
+                        'bank' as type
+                    FROM accounting
+                    WHERE entry_type = 'AccountConfig' AND LOWER(account_name) NOT LIKE '%cash%'
+                    ORDER BY id ASC
+                `).all();
+
+                let allBankList = [...(bankAccounts || []), ...(accountingBanks || []), ...(sysBankAccounts || []), ...(sysAccBanks || [])];
+
+                // Deduplicate by account_number / id
+                const uniqueBanks = [];
+                const seenKeys = new Set();
+                for (const b of allBankList) {
+                    const key = String(b.account_number || b.id || '').trim();
+                    if (key && !seenKeys.has(key)) {
+                        seenKeys.add(key);
+                        uniqueBanks.push(b);
+                    }
+                }
+
                 // Calculate cash collected from invoices
                 let cashCollected = 0;
                 try {
@@ -354,7 +419,7 @@ const paymentController = {
                         type: 'cash',
                         status: 'Active'
                     },
-                    ...(bankAccounts || [])
+                    ...uniqueBanks
                 ];
             } catch (err) {
                 console.warn('[Payment Controller] Error querying bank_accounts:', err.message);

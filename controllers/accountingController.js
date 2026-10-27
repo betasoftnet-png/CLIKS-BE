@@ -807,6 +807,35 @@ const accountingController = {
             );
 
             const inserted = await db.prepare('SELECT * FROM accounting WHERE id = ?').get(result.lastInsertRowid);
+
+            // Also keep bank_accounts table in sync
+            try {
+                const existingBank = await db.prepare("SELECT id FROM bank_accounts WHERE user_id = ? AND account_number = ?").get(req.user.id, account_number);
+                if (!existingBank) {
+                    await db.prepare(`
+                        INSERT INTO bank_accounts (
+                            user_id, bank_name, account_holder, account_number, ifsc, branch, 
+                            opening_balance, current_balance, status, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        req.user.id,
+                        bank_name || account_name,
+                        account_name,
+                        account_number,
+                        ifsc_code || '',
+                        branch_name || '',
+                        parseFloat(opening_balance) || 0,
+                        parseFloat(opening_balance) || 0,
+                        status || 'Active',
+                        now,
+                        now
+                    );
+                }
+            } catch (syncErr) {
+                console.warn('[Accounting] bank_accounts sync note:', syncErr.message);
+            }
+
             return sendSuccess(res, inserted, 'Bank account created successfully', 201);
         } catch (error) {
             console.error('[Accounting] createBankAccount error:', error);
@@ -815,7 +844,47 @@ const accountingController = {
     },
     getBankAccounts: async (req, res) => {
         try {
-            const accounts = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
+            let accounts = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
+            
+            // If empty for this user, check bank_accounts or fallback to system-wide accounts
+            if (!accounts || accounts.length === 0) {
+                const bAccounts = await db.prepare("SELECT * FROM bank_accounts WHERE user_id = ?").all(req.user.id);
+                if (bAccounts && bAccounts.length > 0) {
+                    accounts = bAccounts.map(b => ({
+                        id: b.id,
+                        user_id: b.user_id,
+                        entry_type: 'AccountConfig',
+                        account_name: b.bank_name || b.account_holder || 'Bank Account',
+                        account_number: b.account_number || '',
+                        balance: b.current_balance ?? b.opening_balance ?? 0,
+                        bank_name: b.bank_name,
+                        ifsc_code: b.ifsc,
+                        branch_name: b.branch,
+                        status: b.status || 'Active'
+                    }));
+                } else {
+                    const sysAcc = await db.prepare("SELECT * FROM accounting WHERE entry_type = 'AccountConfig'").all();
+                    if (sysAcc && sysAcc.length > 0) {
+                        accounts = sysAcc;
+                    } else {
+                        const sysBanks = await db.prepare("SELECT * FROM bank_accounts").all();
+                        if (sysBanks && sysBanks.length > 0) {
+                            accounts = sysBanks.map(b => ({
+                                id: b.id,
+                                user_id: b.user_id,
+                                entry_type: 'AccountConfig',
+                                account_name: b.bank_name || b.account_holder || 'Bank Account',
+                                account_number: b.account_number || '',
+                                balance: b.current_balance ?? b.opening_balance ?? 0,
+                                bank_name: b.bank_name,
+                                ifsc_code: b.ifsc,
+                                branch_name: b.branch,
+                                status: b.status || 'Active'
+                            }));
+                        }
+                    }
+                }
+            }
             const transactions = await db.prepare("SELECT mode, entry_type, SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') GROUP BY mode, entry_type").all(req.user.id);
             const allTxs = await db.prepare("SELECT mode, date FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') ORDER BY date DESC").all(req.user.id);
 

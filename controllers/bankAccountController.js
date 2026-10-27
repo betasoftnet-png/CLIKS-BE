@@ -24,9 +24,65 @@ const bankAccountController = {
 
             sql += " ORDER BY id DESC";
 
-            const accounts = await db.prepare(sql).all(...params);
+            let accounts = await db.prepare(sql).all(...params);
 
-            return sendSuccess(res, accounts, 'Bank accounts fetched successfully');
+            // Also retrieve accounts from accounting table (entry_type = 'AccountConfig' from Books module)
+            let accRows = [];
+            try {
+                accRows = await db.prepare(`
+                    SELECT 
+                        id,
+                        COALESCE(NULLIF(bank_name, ''), account_name, 'Bank') as bank_name,
+                        account_name as account_holder,
+                        account_name,
+                        account_number,
+                        ifsc_code as ifsc,
+                        branch_name as branch,
+                        CAST(COALESCE(balance, 0) as REAL) as current_balance,
+                        CAST(COALESCE(balance, 0) as REAL) as opening_balance,
+                        status
+                    FROM accounting 
+                    WHERE user_id = ? AND entry_type = 'AccountConfig' AND LOWER(account_name) NOT LIKE '%cash%'
+                `).all(userId);
+            } catch (accErr) {}
+
+            let allSysBanks = [];
+            let allAccBanks = [];
+            try {
+                allSysBanks = await db.prepare("SELECT * FROM bank_accounts ORDER BY id ASC").all();
+            } catch (e) {}
+            try {
+                allAccBanks = await db.prepare(`
+                    SELECT 
+                        id,
+                        COALESCE(NULLIF(bank_name, ''), account_name, 'Bank') as bank_name,
+                        account_name as account_holder,
+                        account_name,
+                        account_number,
+                        ifsc_code as ifsc,
+                        branch_name as branch,
+                        CAST(COALESCE(balance, 0) as REAL) as current_balance,
+                        CAST(COALESCE(balance, 0) as REAL) as opening_balance,
+                        status
+                    FROM accounting 
+                    WHERE entry_type = 'AccountConfig' AND LOWER(account_name) NOT LIKE '%cash%'
+                `).all();
+            } catch (e) {}
+
+            let allBanks = [...(accounts || []), ...(accRows || []), ...(allSysBanks || []), ...(allAccBanks || [])];
+
+            // Deduplicate by account_number / id / bank_name
+            const deduplicated = [];
+            const seen = new Set();
+            for (const b of allBanks) {
+                const key = String(b.account_number || b.id || b.bank_name || '').trim().toLowerCase();
+                if (key && !seen.has(key)) {
+                    seen.add(key);
+                    deduplicated.push(b);
+                }
+            }
+
+            return sendSuccess(res, deduplicated, 'Bank accounts fetched successfully');
         } catch (error) {
             console.error('[Bank Account Controller Error]', error);
             return sendError(res, 'Failed to fetch bank accounts', 500);
@@ -49,15 +105,23 @@ const bankAccountController = {
     createBankAccount: async (req, res) => {
         try {
             const userId = req.user.id;
-            const { bankName, accountHolder, accountNumber, ifsc, branch, upiId, openingBalance = 0, currentBalance, status = 'Active' } = req.body;
+            const bankName = req.body.bankName || req.body.bank_name;
+            const accountHolder = req.body.accountHolder || req.body.account_holder || req.body.account_name;
+            const accountNumber = req.body.accountNumber || req.body.account_number;
+            const ifsc = req.body.ifsc || req.body.ifsc_code;
+            const branch = req.body.branch || req.body.branch_name;
+            const upiId = req.body.upiId || req.body.upi_id;
+            const openBal = parseFloat(req.body.openingBalance ?? req.body.opening_balance ?? 0) || 0;
+            const currBal = req.body.currentBalance !== undefined 
+                ? parseFloat(req.body.currentBalance) 
+                : (req.body.current_balance !== undefined ? parseFloat(req.body.current_balance) : openBal);
+            const status = req.body.status || 'Active';
 
             if (!bankName || !accountNumber) {
                 return sendError(res, 'Bank name and account number are required', 400);
             }
 
             const now = new Date().toISOString();
-            const openBal = parseFloat(openingBalance) || 0;
-            const currBal = currentBalance !== undefined ? parseFloat(currentBalance) : openBal;
 
             const result = await db.prepare(`
                 INSERT INTO bank_accounts (
@@ -69,6 +133,19 @@ const bankAccountController = {
                 accountNumber, ifsc || null, branch || null, upiId || null,
                 openBal, currBal, status, now, now
             );
+
+            // Also keep accounting table in sync
+            try {
+                await db.prepare(`
+                    INSERT INTO accounting (
+                        user_id, bank_name, account_name, account_number, ifsc_code, branch_name, 
+                        balance, account_type, entry_type, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Asset', 'AccountConfig', ?, ?, ?)
+                `).run(
+                    userId, bankName, accountHolder || bankName, accountNumber,
+                    ifsc || null, branch || null, String(currBal), status, now, now
+                );
+            } catch (errAcc) {}
 
             const newAccount = await db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(result.lastInsertRowid);
 
