@@ -962,6 +962,250 @@ const posController = {
             console.error('[POS Controller] Error deleting held cart:', error);
             return sendError(res, 'Failed to delete held cart', 500);
         }
+    },
+
+    getProductAnalytics: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const { product_id, sku, name, range = 'month', from_date, to_date } = req.query;
+
+            // 1. Fetch Product details from business_products / inventory / stock
+            let productRow = null;
+            if (product_id) {
+                try {
+                    productRow = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(product_id, userId);
+                } catch (e) {}
+                if (!productRow) {
+                    try {
+                        productRow = await db.prepare('SELECT * FROM inventory WHERE id = ? AND user_id = ?').get(product_id, userId);
+                    } catch (e) {}
+                }
+                if (!productRow) {
+                    try {
+                        productRow = await db.prepare('SELECT * FROM stock WHERE id = ? AND user_id = ?').get(product_id, userId);
+                    } catch (e) {}
+                }
+            }
+            if (!productRow && sku) {
+                try {
+                    productRow = await db.prepare('SELECT * FROM business_products WHERE sku = ? AND user_id = ?').get(sku, userId);
+                } catch (e) {}
+                if (!productRow) {
+                    try {
+                        productRow = await db.prepare('SELECT * FROM inventory WHERE sku = ? AND user_id = ?').get(sku, userId);
+                    } catch (e) {}
+                }
+            }
+
+            // Also check branch_stock for rack_location & branch quantity
+            let branchStockRow = null;
+            const branchId = req.user.branch_id || req.query.branch_id || null;
+            if (branchId && product_id) {
+                try {
+                    branchStockRow = await db.prepare('SELECT * FROM branch_stock WHERE branch_id = ? AND product_id = ? AND user_id = ?').get(branchId, product_id, userId);
+                } catch (e) {}
+            }
+
+            // Determine date bounds
+            const now = new Date();
+            let startDate = null;
+            let endDate = null;
+
+            if (range === 'today') {
+                const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+                const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+                startDate = start.toISOString();
+                endDate = end.toISOString();
+            } else if (range === 'week') {
+                const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                start.setHours(0, 0, 0, 0);
+                const end = new Date(now.getTime());
+                end.setHours(23, 59, 59, 999);
+                startDate = start.toISOString();
+                endDate = end.toISOString();
+            } else if (range === 'month') {
+                const start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                start.setHours(0, 0, 0, 0);
+                const end = new Date(now.getTime());
+                end.setHours(23, 59, 59, 999);
+                startDate = start.toISOString();
+                endDate = end.toISOString();
+            } else if (range === 'custom' || from_date) {
+                if (from_date) {
+                    const s = new Date(from_date);
+                    s.setHours(0, 0, 0, 0);
+                    startDate = s.toISOString();
+                }
+                if (to_date) {
+                    const e = new Date(to_date);
+                    e.setHours(23, 59, 59, 999);
+                    endDate = e.toISOString();
+                } else {
+                    const e = new Date(now.getTime());
+                    e.setHours(23, 59, 59, 999);
+                    endDate = e.toISOString();
+                }
+            }
+
+            // Fetch invoices for this user
+            let invoiceQuery = `SELECT id, invoice_number, client_name, customer_id, items, grand_total, total_amount, created_at, date FROM business_invoices WHERE user_id = ?`;
+            const queryParams = [userId];
+
+            if (startDate) {
+                invoiceQuery += ` AND COALESCE(created_at, date) >= ?`;
+                queryParams.push(startDate);
+            }
+            if (endDate) {
+                invoiceQuery += ` AND COALESCE(created_at, date) <= ?`;
+                queryParams.push(endDate);
+            }
+
+            invoiceQuery += ` ORDER BY COALESCE(created_at, date) DESC`;
+
+            const invoices = await db.prepare(invoiceQuery).all(queryParams);
+
+            const targetIdStr = product_id ? String(product_id).trim() : '';
+            const targetSku = sku ? String(sku).trim().toLowerCase() : (productRow?.sku ? String(productRow.sku).trim().toLowerCase() : '');
+            const targetName = name ? String(name).trim().toLowerCase() : (productRow?.name ? String(productRow.name).trim().toLowerCase() : '');
+
+            let totalSalesAmount = 0;
+            let totalQuantitySold = 0;
+            let totalOrders = 0;
+            const uniqueCustomersSet = new Set();
+            const customerPurchasesMap = {};
+            const transactions = [];
+
+            for (const inv of invoices) {
+                let itemsList = [];
+                try {
+                    itemsList = typeof inv.items === 'string' ? JSON.parse(inv.items) : (inv.items || []);
+                } catch (e) {
+                    itemsList = [];
+                }
+                if (!Array.isArray(itemsList)) continue;
+
+                let matchedInInvoice = false;
+                for (const item of itemsList) {
+                    const iIdStr = item.id ? String(item.id).trim() : '';
+                    const iSku = (item.sku || '').trim().toLowerCase();
+                    const iName = (item.name || item.description || '').trim().toLowerCase();
+
+                    const isMatch = (targetIdStr && iIdStr && targetIdStr === iIdStr) ||
+                                    (targetSku && iSku && targetSku === iSku) ||
+                                    (targetName && iName && (targetName === iName || iName.includes(targetName) || targetName.includes(iName)));
+
+                    if (isMatch) {
+                        matchedInInvoice = true;
+                        const qty = parseFloat(item.quantity) || 0;
+                        const itemPrice = parseFloat(item.price) || (qty > 0 ? (parseFloat(item.total) / qty) : 0);
+                        const itemTotal = parseFloat(item.total) || (qty * itemPrice) || 0;
+
+                        totalQuantitySold += qty;
+                        totalSalesAmount += itemTotal;
+
+                        const rawCust = inv.client_name || (inv.customer_id ? `Customer #${inv.customer_id}` : 'Walk-in Customer');
+                        const custKey = rawCust.trim();
+                        uniqueCustomersSet.add(custKey);
+
+                        if (!customerPurchasesMap[custKey]) {
+                            customerPurchasesMap[custKey] = { name: custKey, totalQty: 0, totalAmount: 0, orderCount: 0 };
+                        }
+                        customerPurchasesMap[custKey].totalQty += qty;
+                        customerPurchasesMap[custKey].totalAmount += itemTotal;
+                        customerPurchasesMap[custKey].orderCount += 1;
+
+                        transactions.push({
+                            invoice_id: inv.id,
+                            invoice_number: inv.invoice_number,
+                            date: inv.created_at || inv.date,
+                            customer_name: rawCust,
+                            quantity: qty,
+                            unit: item.unit || productRow?.unit || 'PCS',
+                            price: itemPrice,
+                            total: itemTotal
+                        });
+                    }
+                }
+                if (matchedInInvoice) {
+                    totalOrders += 1;
+                }
+            }
+
+            const rawStock = branchStockRow?.quantity !== undefined ? branchStockRow.quantity : (productRow?.quantity ?? 0);
+            const isUnlimited = Boolean(productRow?.isUnlimited || productRow?.is_unlimited || rawStock >= 999000);
+            const rackLoc = branchStockRow?.rack_location || productRow?.rack_number || productRow?.rack_location || productRow?.rack || null;
+
+            const expiryDate = productRow?.expiry_date || null;
+            let isExpired = false;
+            let daysToExpiry = null;
+            if (expiryDate) {
+                try {
+                    const expTime = new Date(expiryDate).getTime();
+                    const nowTime = new Date().getTime();
+                    daysToExpiry = Math.ceil((expTime - nowTime) / (1000 * 60 * 60 * 24));
+                    isExpired = daysToExpiry < 0;
+                } catch (e) {}
+            }
+
+            const hasWarranty = productRow?.has_warranty === 'Yes' || productRow?.has_warranty === true || Boolean(productRow?.warranty_period);
+            const warrantyPeriod = productRow?.warranty_period || (hasWarranty ? '1 Year Standard Warranty' : 'No Warranty');
+
+            return sendSuccess(res, {
+                product: {
+                    id: productRow?.id || product_id,
+                    name: productRow?.name || name,
+                    sku: productRow?.sku || sku,
+                    category: productRow?.category || 'General',
+                    unit: productRow?.unit || 'PCS',
+                    price: parseFloat(productRow?.selling_price || productRow?.price || 0)
+                },
+                stock: {
+                    quantity: isUnlimited ? '∞' : (parseFloat(rawStock) || 0),
+                    unit: productRow?.unit || 'PCS',
+                    is_unlimited: isUnlimited,
+                    low_stock_threshold: productRow?.low_stock_threshold || 5,
+                    warehouse: productRow?.warehouse_id || 'Main Warehouse',
+                    status: isUnlimited ? 'In Stock (Unlimited)' : ((parseFloat(rawStock) || 0) <= 0 ? 'Out of Stock' : (((parseFloat(rawStock) || 0) < (productRow?.low_stock_threshold || 5)) ? 'Low Stock' : 'In Stock'))
+                },
+                rack: {
+                    rack_location: rackLoc || 'Not Assigned',
+                    shelf_number: productRow?.shelf_number || null,
+                    bin_number: productRow?.bin_number || null,
+                    zone: productRow?.zone || null,
+                    formatted: rackLoc ? `${rackLoc}${productRow?.shelf_number ? ` (Shelf: ${productRow.shelf_number})` : ''}` : 'Not Assigned'
+                },
+                expiry: {
+                    expiry_date: expiryDate || 'N/A',
+                    is_perishable: Boolean(productRow?.is_perishable),
+                    batch_number: productRow?.batch_number || null,
+                    is_expired: isExpired,
+                    days_remaining: daysToExpiry,
+                    status: !expiryDate ? 'Non-Perishable / N/A' : (isExpired ? 'Expired' : (daysToExpiry <= 30 ? `Expiring Soon (${daysToExpiry}d)` : `Valid (${daysToExpiry}d left)`))
+                },
+                warranty: {
+                    has_warranty: hasWarranty,
+                    warranty_period: warrantyPeriod,
+                    status: hasWarranty ? `Active (${warrantyPeriod})` : 'No Warranty Available'
+                },
+                sales: {
+                    total_sales_amount: totalSalesAmount,
+                    total_quantity_sold: totalQuantitySold,
+                    total_orders: totalOrders,
+                    unique_customers_count: uniqueCustomersSet.size,
+                    unique_customers_list: Array.from(uniqueCustomersSet),
+                    customer_breakdown: Object.values(customerPurchasesMap).sort((a, b) => b.totalAmount - a.totalAmount),
+                    transactions: transactions.slice(0, 50),
+                    date_range: {
+                        range,
+                        start_date: startDate,
+                        end_date: endDate
+                    }
+                }
+            }, 'Product analytics retrieved successfully');
+        } catch (error) {
+            console.error('[POS Controller] Error fetching product analytics:', error);
+            return sendError(res, 'Failed to fetch product analytics', 500);
+        }
     }
 };
 
