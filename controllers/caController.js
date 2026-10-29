@@ -411,6 +411,42 @@ const initTableAndColumns = async () => {
         try { await db.prepare("ALTER TABLE ca_professional_invoices ADD COLUMN end_time TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_professional_invoices ADD COLUMN hourly_rate REAL DEFAULT 500").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE ca_professional_invoices ADD COLUMN duration_text TEXT").run(); } catch(e) {}
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS ca_verifications (
+                id ${idType},
+                user_id INTEGER NOT NULL,
+                full_name TEXT NOT NULL,
+                firm_name TEXT NOT NULL,
+                membership_no TEXT NOT NULL,
+                email TEXT NOT NULL,
+                cop_status TEXT DEFAULT 'Holding COP (Full-Time)',
+                associate_fellow TEXT DEFAULT 'Associate (ACA)',
+                region TEXT,
+                address TEXT,
+                status TEXT DEFAULT 'PENDING_REVIEW',
+                rejection_reason TEXT,
+                verified_by INTEGER,
+                verified_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS finpro_subscriptions (
+                id ${idType},
+                user_id INTEGER NOT NULL,
+                plan_name TEXT NOT NULL,
+                billing_cycle TEXT DEFAULT 'yearly',
+                amount REAL DEFAULT 999.00,
+                status TEXT DEFAULT 'ACTIVE',
+                start_date TEXT,
+                end_date TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        `).run();
     } catch (e) {
         console.error('[CA Dynamic Init Error]', e.message);
     }
@@ -3921,6 +3957,235 @@ const caController = {
         } catch (error) {
             console.error('[CA getUnreadChatCount Error]', error);
             return sendError(res, 'Failed to fetch unread message count', 500);
+        }
+    },
+
+    submitIcaiVerification: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const {
+                fullName,
+                firmName,
+                membershipNo,
+                email,
+                copStatus,
+                associateFellow,
+                region,
+                address
+            } = req.body;
+
+            if (!fullName || !membershipNo || !firmName) {
+                return sendError(res, 'Member Name, Membership Number, and Firm Name are required', 400);
+            }
+
+            const now = new Date().toISOString();
+            const existing = await db.prepare("SELECT * FROM ca_verifications WHERE user_id = ? ORDER BY id DESC LIMIT 1").get(userId);
+
+            if (existing) {
+                await db.prepare(`
+                    UPDATE ca_verifications
+                    SET full_name = ?, firm_name = ?, membership_no = ?, email = ?,
+                        cop_status = ?, associate_fellow = ?, region = ?, address = ?,
+                        status = 'PENDING_REVIEW', rejection_reason = NULL, updated_at = ?
+                    WHERE id = ?
+                `).run(
+                    fullName.trim(),
+                    firmName.trim(),
+                    membershipNo.trim(),
+                    email?.trim() || req.user.email || '',
+                    copStatus || 'Holding COP (Full-Time)',
+                    associateFellow || 'Associate (ACA)',
+                    region || 'Southern India Regional Council (SIRC)',
+                    address || '',
+                    now,
+                    existing.id
+                );
+                const updated = await db.prepare("SELECT * FROM ca_verifications WHERE id = ?").get(existing.id);
+                return sendSuccess(res, updated, 'ICAI credentials resubmitted for admin review successfully');
+            } else {
+                const result = await db.prepare(`
+                    INSERT INTO ca_verifications (
+                        user_id, full_name, firm_name, membership_no, email,
+                        cop_status, associate_fellow, region, address, status,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_REVIEW', ?, ?)
+                `).run(
+                    userId,
+                    fullName.trim(),
+                    firmName.trim(),
+                    membershipNo.trim(),
+                    email?.trim() || req.user.email || '',
+                    copStatus || 'Holding COP (Full-Time)',
+                    associateFellow || 'Associate (ACA)',
+                    region || 'Southern India Regional Council (SIRC)',
+                    address || '',
+                    now,
+                    now
+                );
+                const inserted = await db.prepare("SELECT * FROM ca_verifications WHERE id = ?").get(result.lastInsertRowid);
+                return sendSuccess(res, inserted, 'ICAI credentials submitted for admin review successfully');
+            }
+        } catch (error) {
+            console.error('[CA submitIcaiVerification Error]', error);
+            return sendError(res, error.message || 'Failed to submit ICAI credentials', 500);
+        }
+    },
+
+    getIcaiVerification: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const verification = await db.prepare("SELECT * FROM ca_verifications WHERE user_id = ? ORDER BY id DESC LIMIT 1").get(userId);
+            const subscription = await db.prepare("SELECT * FROM finpro_subscriptions WHERE user_id = ? AND status = 'ACTIVE' ORDER BY id DESC LIMIT 1").get(userId);
+
+            if (!verification) {
+                return sendSuccess(res, {
+                    status: 'UNVERIFIED',
+                    isVerified: false,
+                    isSubscribed: false,
+                    verification: null,
+                    subscription: null
+                }, 'No ICAI verification on file');
+            }
+
+            return sendSuccess(res, {
+                ...verification,
+                status: verification.status,
+                isVerified: verification.status === 'VERIFIED',
+                isSubscribed: !!subscription,
+                subscription: subscription || null
+            }, 'ICAI verification status retrieved');
+        } catch (error) {
+            console.error('[CA getIcaiVerification Error]', error);
+            return sendError(res, error.message || 'Failed to get verification status', 500);
+        }
+    },
+
+    activateFinproSubscription: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const { planName = 'Fin-Pro Solo' } = req.body;
+
+            // Security check: must have verified ICAI credentials in the database
+            const verification = await db.prepare("SELECT * FROM ca_verifications WHERE user_id = ? AND status = 'VERIFIED'").get(userId);
+            if (!verification) {
+                return sendError(res, 'Access Denied: Only verified Chartered Accountants with approved ICAI credentials can subscribe to FIN-PRO.', 403);
+            }
+
+            const amount = planName === 'Fin-Pro Firm' ? 1499.00 : 999.00;
+            const now = new Date();
+            const startDate = now.toISOString();
+            const nextYear = new Date(now);
+            nextYear.setFullYear(nextYear.getFullYear() + 1);
+            const endDate = nextYear.toISOString();
+
+            // Deactivate any existing subscriptions
+            await db.prepare("UPDATE finpro_subscriptions SET status = 'EXPIRED', updated_at = ? WHERE user_id = ? AND status = 'ACTIVE'").run(startDate, userId);
+
+            const result = await db.prepare(`
+                INSERT INTO finpro_subscriptions (user_id, plan_name, billing_cycle, amount, status, start_date, end_date, created_at, updated_at)
+                VALUES (?, ?, 'yearly', ?, 'ACTIVE', ?, ?, ?, ?)
+            `).run(userId, planName, amount, startDate, endDate, startDate, startDate);
+
+            const sub = await db.prepare("SELECT * FROM finpro_subscriptions WHERE id = ?").get(result.lastInsertRowid);
+            return sendSuccess(res, sub, `Successfully subscribed to ${planName}. FIN-PRO Dashboard unlocked.`);
+        } catch (error) {
+            console.error('[CA activateFinproSubscription Error]', error);
+            return sendError(res, error.message || 'Failed to activate FIN-PRO subscription', 500);
+        }
+    },
+
+    getFinproSubscription: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const subscription = await db.prepare("SELECT * FROM finpro_subscriptions WHERE user_id = ? AND status = 'ACTIVE' ORDER BY id DESC LIMIT 1").get(userId);
+            return sendSuccess(res, {
+                active: !!subscription,
+                subscription: subscription || null
+            }, 'Subscription status retrieved');
+        } catch (error) {
+            console.error('[CA getFinproSubscription Error]', error);
+            return sendError(res, error.message || 'Failed to fetch subscription', 500);
+        }
+    },
+
+    simulateAdminVerify: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const now = new Date().toISOString();
+            let verification = await db.prepare("SELECT * FROM ca_verifications WHERE user_id = ? ORDER BY id DESC LIMIT 1").get(userId);
+            if (verification) {
+                await db.prepare(`
+                    UPDATE ca_verifications
+                    SET status = 'VERIFIED', verified_by = 1, verified_at = ?, updated_at = ?
+                    WHERE id = ?
+                `).run(now, now, verification.id);
+            } else {
+                const user = await db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+                await db.prepare(`
+                    INSERT INTO ca_verifications (
+                        user_id, full_name, firm_name, membership_no, email,
+                        cop_status, associate_fellow, region, address, status,
+                        verified_by, verified_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'Holding COP (Full-Time)', 'Associate (ACA)', 'Southern India Regional Council (SIRC)', 'Registered Office', 'VERIFIED', 1, ?, ?, ?)
+                `).run(
+                    userId,
+                    user?.username || 'CA Practitioner',
+                    user?.business_name || 'Chartered Accountants LLP',
+                    '543210',
+                    user?.email || 'ca@cliksca.com',
+                    now,
+                    now,
+                    now
+                );
+            }
+            const updated = await db.prepare("SELECT * FROM ca_verifications WHERE user_id = ? ORDER BY id DESC LIMIT 1").get(userId);
+            return sendSuccess(res, updated, 'CA credentials verified successfully (admin simulated)');
+        } catch (error) {
+            console.error('[CA simulateAdminVerify Error]', error);
+            return sendError(res, error.message || 'Simulation failed', 500);
+        }
+    },
+
+    getAllCaVerifications: async (req, res) => {
+        try {
+            const list = await db.prepare(`
+                SELECT cv.*, u.username, u.email as user_email, u.business_name
+                FROM ca_verifications cv
+                LEFT JOIN users u ON cv.user_id = u.id
+                ORDER BY cv.id DESC
+            `).all();
+            return sendSuccess(res, list, 'All CA verifications retrieved');
+        } catch (error) {
+            console.error('[CA getAllCaVerifications Error]', error);
+            return sendError(res, error.message || 'Failed to fetch CA verifications', 500);
+        }
+    },
+
+    updateCaVerificationStatus: async (req, res) => {
+        try {
+            const { id } = req.params;
+            const { status, rejectionReason } = req.body;
+            if (!['VERIFIED', 'REJECTED', 'PENDING_REVIEW'].includes(status)) {
+                return sendError(res, 'Invalid verification status', 400);
+            }
+            const now = new Date().toISOString();
+            await db.prepare(`
+                UPDATE ca_verifications
+                SET status = ?, rejection_reason = ?, verified_by = ?, verified_at = ?, updated_at = ?
+                WHERE id = ?
+            `).run(
+                status,
+                rejectionReason || null,
+                req.user?.id || 1,
+                status === 'VERIFIED' ? now : null,
+                now,
+                id
+            );
+            const updated = await db.prepare("SELECT * FROM ca_verifications WHERE id = ?").get(id);
+            return sendSuccess(res, updated, `CA verification status updated to ${status}`);
+        } catch (error) {
+            console.error('[CA updateCaVerificationStatus Error]', error);
+            return sendError(res, error.message || 'Failed to update verification status', 500);
         }
     }
 };

@@ -102,6 +102,11 @@ router.patch('/support/agents/:id/toggle', toggleAdminSupportAgent);
 router.get('/support/tickets', getAdminEscalatedTickets);
 router.patch('/support/tickets/:id/resolve', resolveAdminEscalatedTicket);
 
+// CA Professional Verification Management
+const caController = require('../controllers/caController');
+router.get('/ca-verifications', caController.getAllCaVerifications);
+router.put('/ca-verifications/:id/status', caController.updateCaVerificationStatus);
+
 module.exports = router;
 
 

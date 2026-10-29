@@ -96,5 +96,16 @@ router.get('/earnings/dashboard', caController.getEarningsDashboard);
 router.post('/invoices/:id/pay', caController.payInvoice);
 router.get('/payment-history', caController.getPaymentHistory);
 
+// ICAI Verification & FIN-PRO Subscription Endpoints
+router.post('/icai-verification', caController.submitIcaiVerification);
+router.get('/icai-verification', caController.getIcaiVerification);
+router.post('/icai-verification/simulate-verify', caController.simulateAdminVerify);
+router.post('/finpro-subscription', caController.activateFinproSubscription);
+router.get('/finpro-subscription', caController.getFinproSubscription);
+
+// Admin-facing verification endpoints
+router.get('/verifications/all', caController.getAllCaVerifications);
+router.put('/verifications/:id/status', caController.updateCaVerificationStatus);
+
 module.exports = router;
 
