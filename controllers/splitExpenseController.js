@@ -15,17 +15,18 @@ const normalizeParticipant = (p, defaultRole = 'viewer', defaultStatus = 'pendin
     return {
       name: name || 'Participant',
       email: email || '',
-      role: isYou ? 'editor' : defaultRole,
+      role: (isYou || isAdmin) ? 'admin' : defaultRole,
       status: isYou ? 'accepted' : defaultStatus,
       isAdmin: isYou || isAdmin
     };
   }
+  const isAdm = !!p.isAdmin || p.role === 'admin' || isAdmin;
   return {
     name: p.name || (p.email ? p.email.split('@')[0] : 'Member'),
     email: p.email || '',
-    role: p.role === 'editor' ? 'editor' : 'viewer',
+    role: isAdm ? 'admin' : (p.role === 'editor' ? 'editor' : 'viewer'),
     status: p.status || defaultStatus,
-    isAdmin: !!p.isAdmin
+    isAdmin: isAdm
   };
 };
 
@@ -120,13 +121,13 @@ const createSplitExpense = async (req, res) => {
       const norm = normalizeParticipant(p, 'viewer', 'pending');
       if (norm.email && norm.email.toLowerCase() === creatorEmail) {
         norm.isAdmin = true;
-        norm.role = 'editor';
+        norm.role = 'admin';
         norm.status = 'accepted';
         hasAdmin = true;
       }
       if (norm.name.toLowerCase() === 'you') {
         norm.isAdmin = true;
-        norm.role = 'editor';
+        norm.role = 'admin';
         norm.status = 'accepted';
         norm.email = norm.email || creatorEmail;
         hasAdmin = true;
@@ -138,7 +139,7 @@ const createSplitExpense = async (req, res) => {
       cleanParticipants.unshift({
         name: creatorName,
         email: creatorEmail,
-        role: 'editor',
+        role: 'admin',
         status: 'accepted',
         isAdmin: true
       });
@@ -435,31 +436,54 @@ const respondInvite = async (req, res) => {
 const updateMemberRole = async (req, res) => {
   try {
     const ticketId = req.params.id;
-    const { email, role } = req.body;
-    if (!email || !role) {
-      return sendError(res, 'Email and role are required', 400, 'BAD_REQUEST');
+    const { email, role, isAdmin } = req.body;
+    if (!email) {
+      return sendError(res, 'Email is required', 400, 'BAD_REQUEST');
     }
-    if (role !== 'viewer' && role !== 'editor') {
-      return sendError(res, "Role must be 'viewer' or 'editor'", 400, 'BAD_REQUEST');
+    const requestedRole = role ? role.toLowerCase() : (isAdmin ? 'admin' : undefined);
+    if (requestedRole && !['viewer', 'editor', 'admin'].includes(requestedRole)) {
+      return sendError(res, "Role must be 'viewer', 'editor', or 'admin'", 400, 'BAD_REQUEST');
     }
 
     const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
     if (!ticket) return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
 
-    if (ticket.user_id != req.user.id) {
-      return sendError(res, 'Only the split ticket admin can modify member permissions', 403, 'FORBIDDEN');
-    }
-
     let participants = [];
     try { participants = JSON.parse(ticket.participants || '[]'); } catch (e) {}
+
+    // Requester must be the split creator OR an admin member
+    const isCreator = ticket.user_id == req.user.id;
+    const userEmail = (req.user?.email || '').toLowerCase();
+    const isParticipantAdmin = participants.some(p => {
+      const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
+      return pEmail && pEmail === userEmail && (p.isAdmin || p.role === 'admin');
+    });
+
+    if (!isCreator && !isParticipantAdmin) {
+      return sendError(res, 'Only the split ticket admin can modify member permissions', 403, 'FORBIDDEN');
+    }
 
     participants = participants.map(p => {
       const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
       if (pEmail === email.toLowerCase()) {
+        const makeAdmin = requestedRole === 'admin' || isAdmin === true;
+        const targetRole = requestedRole === 'admin' ? 'admin' : (requestedRole || (p.role || 'viewer'));
+        const targetIsAdmin = makeAdmin ? true : (isAdmin === false ? false : (requestedRole === 'admin' ? true : !!p.isAdmin));
+
         if (typeof p === 'string') {
-          return { name: p.replace(/\s*\([^)]+\)/, '').trim(), email: pEmail, role, status: 'accepted', isAdmin: false };
+          return {
+            name: p.replace(/\s*\([^)]+\)/, '').trim(),
+            email: pEmail,
+            role: targetRole,
+            status: 'accepted',
+            isAdmin: targetIsAdmin
+          };
         }
-        return { ...p, role };
+        return {
+          ...p,
+          role: targetRole,
+          isAdmin: targetIsAdmin
+        };
       }
       return p;
     });
@@ -472,7 +496,7 @@ const updateMemberRole = async (req, res) => {
     updated.currencySymbol = updated.currency_symbol;
     delete updated.currency_symbol;
 
-    return sendSuccess(res, updated, `Member role updated to ${role}`);
+    return sendSuccess(res, updated, `Member permissions updated successfully`);
   } catch (error) {
     console.error('Error updating member role:', error);
     return sendError(res, error.message, 500);
@@ -483,7 +507,7 @@ const updateMemberRole = async (req, res) => {
 const inviteMember = async (req, res) => {
   try {
     const ticketId = req.params.id;
-    const { name, email, role = 'viewer' } = req.body;
+    const { name, email, role = 'viewer', isAdmin = false } = req.body;
     if (!email) return sendError(res, 'Email is required', 400, 'BAD_REQUEST');
 
     if (!BNX_EMAIL_REGEX.test(email.trim())) {
@@ -493,12 +517,19 @@ const inviteMember = async (req, res) => {
     const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
     if (!ticket) return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
 
-    if (ticket.user_id != req.user.id) {
-      return sendError(res, 'Only the split ticket admin can invite members', 403, 'FORBIDDEN');
-    }
-
     let participants = [];
     try { participants = JSON.parse(ticket.participants || '[]'); } catch (e) {}
+
+    const isCreator = ticket.user_id == req.user.id;
+    const userEmail = (req.user?.email || '').toLowerCase();
+    const isParticipantAdmin = participants.some(p => {
+      const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
+      return pEmail && pEmail === userEmail && (p.isAdmin || p.role === 'admin');
+    });
+
+    if (!isCreator && !isParticipantAdmin) {
+      return sendError(res, 'Only the split ticket admin can invite members', 403, 'FORBIDDEN');
+    }
 
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = (name && name.trim()) || cleanEmail.split('@')[0];
@@ -512,12 +543,13 @@ const inviteMember = async (req, res) => {
       return sendError(res, 'This member is already added to this split', 400, 'ALREADY_EXISTS');
     }
 
+    const isMemberAdmin = role === 'admin' || isAdmin === true;
     const newMember = {
       name: cleanName,
       email: cleanEmail,
-      role: role === 'editor' ? 'editor' : 'viewer',
+      role: isMemberAdmin ? 'admin' : (role === 'editor' ? 'editor' : 'viewer'),
       status: 'pending',
-      isAdmin: false,
+      isAdmin: isMemberAdmin,
       invitedAt: new Date().toISOString()
     };
 
