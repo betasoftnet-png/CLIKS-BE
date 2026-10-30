@@ -636,10 +636,17 @@ const productController = {
 
     // 17. Categories
     createCategory: async (req, res) => {
-        const { category_name, parent_id, description } = req.body || {};
+        const { category_name, parent_id, description, image_url, icon } = req.body || {};
         if (!category_name || !String(category_name).trim()) return sendError(res, 'Category name is required', 400);
         
         try {
+            // Ensure columns exist in case migrations haven't run yet
+            try { await db.prepare("ALTER TABLE product_categories ADD COLUMN image_url TEXT DEFAULT NULL").run(); } catch (_) {}
+            try { await db.prepare("ALTER TABLE product_categories ADD COLUMN icon TEXT DEFAULT NULL").run(); } catch (_) {}
+            try { await db.prepare("ALTER TABLE product_categories ADD COLUMN parent_id INTEGER DEFAULT NULL").run(); } catch (_) {}
+            try { await db.prepare("ALTER TABLE product_categories ADD COLUMN is_active INTEGER DEFAULT 1").run(); } catch (_) {}
+            try { await db.prepare("ALTER TABLE product_categories ADD COLUMN description TEXT DEFAULT NULL").run(); } catch (_) {}
+
             // Prevent duplicate group/subgroup names within company scope
             const trimmedName = String(category_name).trim();
             const parentVal = parent_id ? Number(parent_id) : null;
@@ -655,13 +662,13 @@ const productController = {
             
             const existing = await db.prepare(dupQuery).get(...dupParams);
             if (existing) {
-                return sendError(res, parentVal ? 'A subgroup with this name already exists in this group' : 'A product group with this name already exists', 400);
+                return sendError(res, parentVal ? 'A subcategory with this name already exists in this category' : 'A category with this name already exists', 400);
             }
 
             const result = await db.prepare(`
-                INSERT INTO product_categories (user_id, category_name, parent_id, description, is_active, created_at)
-                VALUES (?, ?, ?, ?, 1, ?)
-            `).run(req.user.id, trimmedName, parentVal, description || null, new Date().toISOString());
+                INSERT INTO product_categories (user_id, category_name, parent_id, description, image_url, icon, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+            `).run(req.user.id, trimmedName, parentVal, description || null, image_url || null, icon || null, new Date().toISOString());
 
             const created = await db.prepare('SELECT * FROM product_categories WHERE id = ?').get(result.lastInsertRowid);
             return sendSuccess(res, created, 'Category created successfully', 201);
@@ -673,9 +680,23 @@ const productController = {
 
     getCategories: async (req, res) => {
         try {
-            // Fetch all structured categories with parent hierarchy
+            // Ensure columns exist
+            try { await db.prepare("ALTER TABLE product_categories ADD COLUMN image_url TEXT DEFAULT NULL").run(); } catch (_) {}
+            try { await db.prepare("ALTER TABLE product_categories ADD COLUMN icon TEXT DEFAULT NULL").run(); } catch (_) {}
+            try { await db.prepare("ALTER TABLE product_categories ADD COLUMN parent_id INTEGER DEFAULT NULL").run(); } catch (_) {}
+            try { await db.prepare("ALTER TABLE product_categories ADD COLUMN is_active INTEGER DEFAULT 1").run(); } catch (_) {}
+            try { await db.prepare("ALTER TABLE product_categories ADD COLUMN description TEXT DEFAULT NULL").run(); } catch (_) {}
+
+            // Fetch all structured categories with parent hierarchy & item counts
             const allCategories = await db.prepare(`
-                SELECT c.*, p.category_name as parent_name 
+                SELECT c.*, p.category_name as parent_name,
+                       (SELECT COUNT(*) FROM business_products bp 
+                        WHERE bp.user_id = c.user_id 
+                          AND (bp.subgroup_id = c.id OR bp.group_id = c.id OR bp.category = c.category_name)
+                       ) as product_count,
+                       (SELECT COUNT(*) FROM product_categories sc 
+                        WHERE sc.parent_id = c.id AND sc.user_id = c.user_id
+                       ) as subcategory_count
                 FROM product_categories c
                 LEFT JOIN product_categories p ON c.parent_id = p.id
                 WHERE c.user_id = ?
@@ -694,7 +715,12 @@ const productController = {
                         category_name: p.category_name,
                         parent_id: null,
                         parent_name: null,
-                        is_active: 1
+                        description: null,
+                        image_url: null,
+                        icon: null,
+                        is_active: 1,
+                        product_count: 0,
+                        subcategory_count: 0
                     });
                 }
             });
@@ -702,6 +728,18 @@ const productController = {
             // Separate into top-level groups and subgroups
             const groups = allCategories.filter(c => !c.parent_id);
             const subgroups = allCategories.filter(c => !!c.parent_id);
+
+            // Attach subcategories to their respective parent group
+            const groupMap = new Map();
+            groups.forEach(g => {
+                g.subcategories = [];
+                if (g.id) groupMap.set(g.id, g);
+            });
+            subgroups.forEach(sg => {
+                if (groupMap.has(sg.parent_id)) {
+                    groupMap.get(sg.parent_id).subcategories.push(sg);
+                }
+            });
 
             return sendSuccess(res, {
                 categories: allCategories,
@@ -716,15 +754,17 @@ const productController = {
 
     updateCategory: async (req, res) => {
         const { categoryId } = req.params;
-        const { category_name, parent_id, description, is_active } = req.body || {};
+        const { category_name, parent_id, description, image_url, icon, is_active } = req.body || {};
         try {
             const existing = await db.prepare('SELECT * FROM product_categories WHERE id = ? AND user_id = ?').get(categoryId, req.user.id);
             if (!existing) return sendError(res, 'Category not found', 404);
 
             const trimmedName = category_name ? String(category_name).trim() : existing.category_name;
             const parentVal = parent_id !== undefined ? (parent_id ? Number(parent_id) : null) : existing.parent_id;
-            const activeVal = is_active !== undefined ? (is_active ? 1 : 0) : existing.is_active;
+            const activeVal = is_active !== undefined ? (is_active ? 1 : 0) : (existing.is_active !== undefined ? existing.is_active : 1);
             const descVal = description !== undefined ? description : existing.description;
+            const imgVal = image_url !== undefined ? image_url : existing.image_url;
+            const iconVal = icon !== undefined ? icon : existing.icon;
 
             // Check duplicate if name changed
             if (trimmedName.toLowerCase() !== existing.category_name.toLowerCase()) {
@@ -734,13 +774,14 @@ const productController = {
 
             await db.prepare(`
                 UPDATE product_categories 
-                SET category_name = ?, parent_id = ?, description = ?, is_active = ?
+                SET category_name = ?, parent_id = ?, description = ?, image_url = ?, icon = ?, is_active = ?
                 WHERE id = ? AND user_id = ?
-            `).run(trimmedName, parentVal, descVal, activeVal, categoryId, req.user.id);
+            `).run(trimmedName, parentVal, descVal, imgVal, iconVal, activeVal, categoryId, req.user.id);
 
             const updated = await db.prepare('SELECT * FROM product_categories WHERE id = ?').get(categoryId);
             return sendSuccess(res, updated, 'Category updated successfully');
         } catch (error) {
+            console.error('[Product Controller] Update category error:', error);
             return sendError(res, 'Failed to update category', 500);
         }
     },
@@ -751,13 +792,14 @@ const productController = {
             // Check if any subcategories exist
             const children = await db.prepare('SELECT id FROM product_categories WHERE parent_id = ? AND user_id = ?').all(categoryId, req.user.id);
             if (children && children.length > 0) {
-                return sendError(res, 'Cannot delete category that contains subgroups. Deactivate it or delete subgroups first.', 400);
+                return sendError(res, 'Cannot delete a category that contains subcategories. Please remove or reassign the subcategories first.', 400);
             }
 
             const result = await db.prepare('DELETE FROM product_categories WHERE id = ? AND user_id = ?').run(categoryId, req.user.id);
             if (result.changes === 0) return sendError(res, 'Category not found', 404);
             return sendSuccess(res, null, 'Category removed successfully');
         } catch (error) {
+            console.error('[Product Controller] Delete category error:', error);
             return sendError(res, 'Failed to remove category', 500);
         }
     },

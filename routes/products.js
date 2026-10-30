@@ -12,6 +12,7 @@ router.get('/reports/top-products', productController.getTopProductsReport);
 
 // Categories & Units
 router.get('/categories',           productController.getCategories);
+router.post('/categories',          productController.createCategory);
 router.post('/:id/categories',      productController.createCategory);
 router.put('/categories/:categoryId', productController.updateCategory);
 router.delete('/categories/:categoryId', productController.deleteCategory);

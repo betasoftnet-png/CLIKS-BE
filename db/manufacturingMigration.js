@@ -18,7 +18,9 @@ async function runManufacturingMigrations() {
   const categoryAlters = [
     "ALTER TABLE product_categories ADD COLUMN parent_id INTEGER DEFAULT NULL",
     "ALTER TABLE product_categories ADD COLUMN is_active INTEGER DEFAULT 1",
-    "ALTER TABLE product_categories ADD COLUMN description TEXT DEFAULT NULL"
+    "ALTER TABLE product_categories ADD COLUMN description TEXT DEFAULT NULL",
+    "ALTER TABLE product_categories ADD COLUMN image_url TEXT DEFAULT NULL",
+    "ALTER TABLE product_categories ADD COLUMN icon TEXT DEFAULT NULL"
   ];
   for (const sql of categoryAlters) {
     try { await db.prepare(sql).run(); } catch (_) {}
