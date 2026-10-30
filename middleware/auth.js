@@ -82,7 +82,10 @@ function allowRoles(...roles) {
       return sendError(res, 'Unauthorized', 401, 'UNAUTHORIZED');
     }
 
-    if (!roles.includes(req.user.role)) {
+    const normalizedRoles = roles.map(r => String(r).toLowerCase());
+    const userRole = String(req.user.role || '').toLowerCase();
+
+    if (!normalizedRoles.includes(userRole)) {
       return sendError(res, 'Forbidden: You do not have permission', 403, 'FORBIDDEN');
     }
 
