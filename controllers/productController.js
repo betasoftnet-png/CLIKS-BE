@@ -687,6 +687,28 @@ const productController = {
             try { await db.prepare("ALTER TABLE product_categories ADD COLUMN is_active INTEGER DEFAULT 1").run(); } catch (_) {}
             try { await db.prepare("ALTER TABLE product_categories ADD COLUMN description TEXT DEFAULT NULL").run(); } catch (_) {}
 
+            // Auto-migrate any unmapped category strings from business_products into product_categories
+            const existingCatRows = await db.prepare('SELECT category_name FROM product_categories WHERE user_id = ?').all(req.user.id);
+            const existingNames = new Set(existingCatRows.map(c => c.category_name.trim().toLowerCase()));
+
+            const productCats = await db.prepare('SELECT DISTINCT category as category_name FROM business_products WHERE user_id = ? AND category IS NOT NULL AND TRIM(category) != \'\'').all(req.user.id);
+            
+            for (const p of productCats) {
+                const name = p.category_name ? p.category_name.trim() : '';
+                if (name && !existingNames.has(name.toLowerCase())) {
+                    try {
+                        const now = new Date().toISOString();
+                        await db.prepare(`
+                            INSERT INTO product_categories (user_id, category_name, is_active, created_at)
+                            VALUES (?, ?, 1, ?)
+                        `).run(req.user.id, name, now);
+                        existingNames.add(name.toLowerCase());
+                    } catch (e) {
+                        // ignore duplicate
+                    }
+                }
+            }
+
             // Fetch all structured categories with parent hierarchy & item counts
             const allCategories = await db.prepare(`
                 SELECT c.*, p.category_name as parent_name,
@@ -702,28 +724,6 @@ const productController = {
                 WHERE c.user_id = ?
                 ORDER BY c.parent_id ASC, c.category_name ASC
             `).all(req.user.id);
-
-            // Also keep distinct category names from business_products for backward compatibility
-            const productCats = await db.prepare('SELECT DISTINCT category as category_name FROM business_products WHERE user_id = ? AND category IS NOT NULL AND category != \'\'').all(req.user.id);
-            
-            const existingNames = new Set(allCategories.map(c => c.category_name.toLowerCase()));
-            productCats.forEach(p => {
-                if (!existingNames.has(p.category_name.toLowerCase())) {
-                    allCategories.push({
-                        id: null,
-                        user_id: req.user.id,
-                        category_name: p.category_name,
-                        parent_id: null,
-                        parent_name: null,
-                        description: null,
-                        image_url: null,
-                        icon: null,
-                        is_active: 1,
-                        product_count: 0,
-                        subcategory_count: 0
-                    });
-                }
-            });
 
             // Separate into top-level groups and subgroups
             const groups = allCategories.filter(c => !c.parent_id);
@@ -770,6 +770,13 @@ const productController = {
             if (trimmedName.toLowerCase() !== existing.category_name.toLowerCase()) {
                 const dup = await db.prepare('SELECT id FROM product_categories WHERE user_id = ? AND LOWER(TRIM(category_name)) = LOWER(?) AND id != ?').get(req.user.id, trimmedName, categoryId);
                 if (dup) return sendError(res, 'A category with this name already exists', 400);
+
+                // Cascade category rename to existing products
+                try {
+                    await db.prepare('UPDATE business_products SET category = ? WHERE user_id = ? AND category = ?').run(trimmedName, req.user.id, existing.category_name);
+                } catch (e) {
+                    console.error('[Product Controller] Error renaming category on products:', e);
+                }
             }
 
             await db.prepare(`
@@ -795,8 +802,18 @@ const productController = {
                 return sendError(res, 'Cannot delete a category that contains subcategories. Please remove or reassign the subcategories first.', 400);
             }
 
-            const result = await db.prepare('DELETE FROM product_categories WHERE id = ? AND user_id = ?').run(categoryId, req.user.id);
-            if (result.changes === 0) return sendError(res, 'Category not found', 404);
+            const cat = await db.prepare('SELECT * FROM product_categories WHERE id = ? AND user_id = ?').get(categoryId, req.user.id);
+            if (!cat) return sendError(res, 'Category not found', 404);
+
+            await db.prepare('DELETE FROM product_categories WHERE id = ? AND user_id = ?').run(categoryId, req.user.id);
+
+            // Unlink products associated with this category
+            try {
+                await db.prepare('UPDATE business_products SET category = NULL WHERE user_id = ? AND category = ?').run(req.user.id, cat.category_name);
+                await db.prepare('UPDATE business_products SET group_id = NULL WHERE user_id = ? AND group_id = ?').run(req.user.id, categoryId);
+                await db.prepare('UPDATE business_products SET subgroup_id = NULL WHERE user_id = ? AND subgroup_id = ?').run(req.user.id, categoryId);
+            } catch (_) {}
+
             return sendSuccess(res, null, 'Category removed successfully');
         } catch (error) {
             console.error('[Product Controller] Delete category error:', error);
