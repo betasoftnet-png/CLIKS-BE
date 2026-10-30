@@ -531,7 +531,15 @@ const getMe = async (req, res) => {
     } catch (e) {}
   }
 
+  let caVer = null;
+  if (req.user.id) {
+    try {
+      caVer = await db.prepare("SELECT status FROM ca_verifications WHERE user_id = ? ORDER BY id DESC LIMIT 1").get(req.user.id);
+    } catch (e) {}
+  }
+
   const username = user?.username || req.user.username || (req.user.email ? req.user.email.split('@')[0] : 'User');
+  const isFinProVerified = caVer?.status === 'VERIFIED';
   const safeData = {
     id: user?.id || req.user.id,
     username: username,
@@ -543,6 +551,9 @@ const getMe = async (req, res) => {
     accountType: req.user.accountType || 'BUSINESS',
     business: true,
     tier: user?.tier || 'Starter Plan',
+    is_finpro_verified: isFinProVerified,
+    ca_verification_status: caVer?.status || 'UNVERIFIED',
+    is_ca: isFinProVerified ? 1 : 0,
     created_at: user?.created_at
   };
 

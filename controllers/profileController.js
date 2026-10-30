@@ -106,6 +106,15 @@ const getProfile = async (req, res) => {
   }
   
   const finalUser = safeUser(user);
+  try {
+    const caVer = await db.prepare("SELECT status FROM ca_verifications WHERE user_id = ? ORDER BY id DESC LIMIT 1").get(user.id);
+    if (caVer) {
+      finalUser.ca_verification_status = caVer.status;
+      finalUser.is_finpro_verified = caVer.status === 'VERIFIED';
+      if (caVer.status === 'VERIFIED') finalUser.is_ca = 1;
+    }
+  } catch (e) {}
+
   if (req.user.is_sub_id) {
     finalUser.email = req.user.sub_email;
     finalUser.is_sub_id = true;

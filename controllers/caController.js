@@ -4182,6 +4182,14 @@ const caController = {
                 id
             );
             const updated = await db.prepare("SELECT * FROM ca_verifications WHERE id = ?").get(id);
+            if (status === 'VERIFIED' && updated?.user_id) {
+                try {
+                    await db.prepare("UPDATE users SET is_ca = 1 WHERE id = ?").run(updated.user_id);
+                } catch (e) {}
+                try {
+                    await ensureSeededPracticeData(updated.user_id);
+                } catch (e) {}
+            }
             return sendSuccess(res, updated, `CA verification status updated to ${status}`);
         } catch (error) {
             console.error('[CA updateCaVerificationStatus Error]', error);
