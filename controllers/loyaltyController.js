@@ -220,7 +220,12 @@ const updateProgramSettings = async (req, res) => {
     }
 
     const programName = body.customProgramName !== undefined ? String(body.customProgramName).trim() : (existing?.custom_program_name || 'Cliks VIP Rewards');
-    const rsPerPoint = body.loyaltyRsPer1Point !== undefined ? Number(body.loyaltyRsPer1Point) : (existing?.rs_per_point || 100);
+    const rsPerPoint = body.loyaltyRsPer1Point !== undefined 
+      ? Number(body.loyaltyRsPer1Point) 
+      : (body.rs_per_point !== undefined ? Number(body.rs_per_point) : (existing?.rs_per_point || 100));
+    const pointsPerRs = body.pointsPerRs !== undefined 
+      ? Number(body.pointsPerRs) 
+      : (body.points_per_rs !== undefined ? Number(body.points_per_rs) : rsPerPoint);
     const pointValue = body.pointValueCurrency !== undefined ? Number(body.pointValueCurrency) : (existing?.point_value_currency !== undefined ? existing.point_value_currency : 1.0);
     const minSpend = body.minOrderSpend !== undefined ? Number(body.minOrderSpend) : (existing?.min_order_spend || 0);
     const minRedeem = body.minPointsToRedeem !== undefined ? Number(body.minPointsToRedeem) : (existing?.min_points_to_redeem || 10);
@@ -247,14 +252,14 @@ const updateProgramSettings = async (req, res) => {
     if (existing) {
       await db.prepare(`
         UPDATE business_loyalty_settings SET
-          loyalty_enabled = ?, custom_program_name = ?, rs_per_point = ?, point_value_currency = ?,
+          loyalty_enabled = ?, custom_program_name = ?, rs_per_point = ?, points_per_rs = ?, point_value_currency = ?,
           min_order_spend = ?, min_points_to_redeem = ?, max_claim_percent = ?, max_points_per_order = ?,
           points_expiry_months = ?, welcome_bonus_points = ?, birthday_bonus_points = ?, enable_tiers = ?,
           tier_config = ?, exclude_tax_from_points = ?, round_down_points = ?, print_show_loyalty = ?,
           print_show_points_earned = ?, sms_notifications_enabled = ?, updated_at = ?
         WHERE user_id = ?
       `).run(
-        enabledVal, programName, rsPerPoint, pointValue,
+        enabledVal, programName, rsPerPoint, pointsPerRs, pointValue,
         minSpend, minRedeem, maxClaimPct, maxPtsPerOrder,
         expiryMonths, welcomeBonus, birthdayBonus, enableTiersVal,
         tierConfigJson, excludeTaxVal, roundDownVal, printLoyaltyVal,
@@ -263,14 +268,14 @@ const updateProgramSettings = async (req, res) => {
     } else {
       await db.prepare(`
         INSERT INTO business_loyalty_settings (
-          user_id, loyalty_enabled, custom_program_name, rs_per_point, point_value_currency,
+          user_id, loyalty_enabled, custom_program_name, rs_per_point, points_per_rs, point_value_currency,
           min_order_spend, min_points_to_redeem, max_claim_percent, max_points_per_order,
           points_expiry_months, welcome_bonus_points, birthday_bonus_points, enable_tiers,
           tier_config, exclude_tax_from_points, round_down_points, print_show_loyalty,
           print_show_points_earned, sms_notifications_enabled, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        userId, enabledVal, programName, rsPerPoint, pointValue,
+        userId, enabledVal, programName, rsPerPoint, pointsPerRs, pointValue,
         minSpend, minRedeem, maxClaimPct, maxPtsPerOrder,
         expiryMonths, welcomeBonus, birthdayBonus, enableTiersVal,
         tierConfigJson, excludeTaxVal, roundDownVal, printLoyaltyVal,

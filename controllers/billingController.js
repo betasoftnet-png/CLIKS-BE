@@ -313,7 +313,11 @@ const billingController = {
             // Real-time integration to CLIKS Customer Application (safely wrapped to avoid 500 errors)
             try {
                 await processCustomerInvoiceIntegration({
-                    createdInvoice,
+                    createdInvoice: {
+                        ...createdInvoice,
+                        earned_points: req.body.earned_points !== undefined ? req.body.earned_points : createdInvoice.earned_points,
+                        redeemed_points: req.body.redeemed_points !== undefined ? req.body.redeemed_points : createdInvoice.redeemed_points
+                    },
                     merchantUserId: req.user.id
                 });
             } catch (syncErr) {

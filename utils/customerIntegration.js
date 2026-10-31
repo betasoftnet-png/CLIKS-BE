@@ -209,9 +209,57 @@ async function processCustomerInvoiceIntegration({ createdInvoice, merchantUserI
             }
         }
 
-        // Calculate Loyalty Points
-        const earnedPoints = Math.max(0, Math.floor(numTotal / 100));
-        const redeemedPoints = Math.max(0, parseInt(createdInvoice.redeemed_points) || 0);
+        // Calculate Loyalty Points dynamically based on merchant's loyalty program settings
+        let loyaltySettings = null;
+        try {
+            loyaltySettings = await db.prepare('SELECT * FROM business_loyalty_settings WHERE user_id = ?').get(merchantUserId);
+        } catch (_) {}
+
+        const isLoyaltyEnabled = loyaltySettings ? Boolean(loyaltySettings.loyalty_enabled) : true;
+        let earnedPoints = 0;
+        let redeemedPoints = Math.max(0, parseInt(createdInvoice.redeemed_points || createdInvoice.loyalty_points_redeemed) || 0);
+
+        if (isLoyaltyEnabled) {
+            if (createdInvoice.earned_points !== undefined && createdInvoice.earned_points !== null) {
+                earnedPoints = Math.max(0, parseInt(createdInvoice.earned_points) || 0);
+            } else if (createdInvoice.loyalty_points_earned !== undefined && createdInvoice.loyalty_points_earned !== null) {
+                earnedPoints = Math.max(0, parseInt(createdInvoice.loyalty_points_earned) || 0);
+            } else {
+                const rsPerPoint = Number(loyaltySettings?.rs_per_point) || 100;
+                const minSpend = Number(loyaltySettings?.min_order_spend) || 0;
+                const roundDown = loyaltySettings?.round_down_points !== undefined ? Boolean(loyaltySettings.round_down_points) : true;
+                const maxPtsPerOrder = Number(loyaltySettings?.max_points_per_order) || 5000;
+
+                const baseAmount = numTotal;
+
+                if (baseAmount >= minSpend && rsPerPoint > 0) {
+                    let pts = baseAmount / rsPerPoint;
+
+                    // Apply tier multiplier if enabled
+                    if (loyaltySettings?.enable_tiers && loyaltySettings?.tier_config) {
+                        try {
+                            const tiers = typeof loyaltySettings.tier_config === 'string' ? JSON.parse(loyaltySettings.tier_config) : loyaltySettings.tier_config;
+                            if (Array.isArray(tiers) && tiers.length > 0) {
+                                const custSpent = parseFloat(customerUser?.total_spent || 0);
+                                const sortedTiers = [...tiers].sort((a, b) => (b.min_spend || 0) - (a.min_spend || 0));
+                                const matchingTier = sortedTiers.find(t => custSpent >= (t.min_spend || 0));
+                                if (matchingTier && matchingTier.multiplier > 1.0) {
+                                    pts = pts * Number(matchingTier.multiplier);
+                                }
+                            }
+                        } catch (_) {}
+                    }
+
+                    earnedPoints = roundDown ? Math.floor(pts) : Math.round(pts);
+                    if (maxPtsPerOrder > 0 && earnedPoints > maxPtsPerOrder) {
+                        earnedPoints = maxPtsPerOrder;
+                    }
+                }
+            }
+        } else {
+            redeemedPoints = 0;
+        }
+
         const netPointsChange = earnedPoints - redeemedPoints;
 
         // Formatted Purchased Products array
