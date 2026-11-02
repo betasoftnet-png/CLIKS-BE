@@ -272,9 +272,28 @@ const customerPurchaseController = {
                 ORDER BY created_at DESC, id DESC
             `).all(userId);
 
+            const txList = Array.isArray(transactions) ? transactions : [];
+
+            let calcEarned = 0;
+            let calcRedeemed = 0;
+            txList.forEach(t => {
+                calcEarned += (parseInt(t.points_earned) || 0);
+                calcRedeemed += (parseInt(t.points_redeemed) || 0);
+            });
+
+            if ((!wallet || !wallet.total_earned) && calcEarned > 0) {
+                wallet = {
+                    ...(wallet || {}),
+                    user_id: userId,
+                    total_earned: calcEarned,
+                    total_redeemed: calcRedeemed,
+                    points_balance: Math.max(0, calcEarned - calcRedeemed)
+                };
+            }
+
             return sendSuccess(res, {
                 wallet,
-                transactions: Array.isArray(transactions) ? transactions : []
+                transactions: txList
             }, 'Loyalty wallet fetched successfully');
         } catch (error) {
             console.error('[Customer Purchase Controller] getLoyaltyWallet error:', error);
@@ -293,6 +312,13 @@ const customerPurchaseController = {
             const userEmail = req.user.email ? String(req.user.email).trim().toLowerCase() : '';
             const receiveDataParam = req.query.receiveData;
             const isReceiveDataYes = !receiveDataParam || String(receiveDataParam).toUpperCase() === 'YES' || String(receiveDataParam) === 'true';
+
+            // Auto-sync connected merchant store invoices for this customer
+            try {
+                await syncConnectedCustomerPurchases(userId, userEmail);
+            } catch (syncErr) {
+                console.warn('[Customer Purchase Controller] Auto-sync warning:', syncErr.message);
+            }
 
             const purchases = await db.prepare(`
                 SELECT * FROM customer_purchase_history 
