@@ -640,6 +640,14 @@ if (dbType === 'postgres') {
   } catch (err) {
     console.error('[DB Initialization] Schema optimization warning:', err.message);
   }
+
+  // Auto-backfill barcodes for any existing legacy products
+  try {
+    const { backfillMissingBarcodes } = require('../utils/barcodeGenerator');
+    setTimeout(() => {
+      backfillMissingBarcodes(db).catch(err => console.warn('[Barcode Backfill] Startup backfill warning:', err.message));
+    }, 1000);
+  } catch (_) {}
 }
 
 module.exports = db;

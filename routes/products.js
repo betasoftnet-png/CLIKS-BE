@@ -25,6 +25,7 @@ router.get('/export',                productController.exportProducts);
 router.get('/dashboard-summary',     productController.getDashboardSummary);
 
 // Base CRUD
+router.post('/backfill-barcodes',     productController.backfillBarcodes);
 router.post('/',                     productController.createProduct);
 router.get('/',                      productController.getProducts);
 router.get('/:id',                   productController.getProductById);

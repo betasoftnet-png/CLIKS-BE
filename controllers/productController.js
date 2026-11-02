@@ -2,6 +2,7 @@ const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { STANDARD_UNITS } = require('../utils/unitConversion');
 const { getEffectiveBranchId } = require('../utils/branchHelper');
+const { generateEan13FromId, generateUniqueEan13Barcode, backfillMissingBarcodes } = require('../utils/barcodeGenerator');
 
 const productController = {
     // 1. Create Product
@@ -41,6 +42,7 @@ const productController = {
         const finalWarrantyPeriod = isWarrantyYes ? (warranty_period || warrantyPeriod || null) : null;
 
         const resolvedTax = (tax_percentage !== undefined && tax_percentage !== null && tax_percentage !== '' && !isNaN(Number(tax_percentage))) ? Number(tax_percentage) : 18;
+        const resolvedBarcode = (barcode && String(barcode).trim()) ? String(barcode).trim() : generateUniqueEan13Barcode('890');
 
         try {
             const now = new Date().toISOString();
@@ -55,7 +57,7 @@ const productController = {
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
-                    purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
+                    purchase_price || 0, selling_price || 0, resolvedBarcode, serial_number || null,
                     batch_number || null, expiry_date || null, resolvedTax, warehouse_id || null,
                     resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
                     req.body.item_role || 'standard', req.body.group_id || null, req.body.subgroup_id || null, is_group_product, raw_materials, now, now
@@ -79,7 +81,7 @@ const productController = {
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `).run(
                         req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
-                        purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
+                        purchase_price || 0, selling_price || 0, resolvedBarcode, serial_number || null,
                         batch_number || null, expiry_date || null, resolvedTax, warehouse_id || null,
                         resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
                         is_group_product, raw_materials, now, now
@@ -90,7 +92,10 @@ const productController = {
             }
 
             if (result && result.lastInsertRowid) {
-                try { await db.prepare('UPDATE business_products SET is_weighted = ? WHERE id = ?').run(is_weighted, result.lastInsertRowid); } catch (_) {}
+                const assignedBarcode = (barcode && String(barcode).trim()) ? String(barcode).trim() : generateEan13FromId(result.lastInsertRowid, req.user.id);
+                try { await db.prepare('UPDATE business_products SET barcode = ?, is_weighted = ? WHERE id = ?').run(assignedBarcode, is_weighted, result.lastInsertRowid); } catch (_) {}
+                try { await db.prepare('UPDATE inventory SET barcode = ? WHERE (barcode IS NULL OR barcode = "") AND (sku = ? OR LOWER(name) = LOWER(?))').run(assignedBarcode, sku || '', name || ''); } catch (_) {}
+                try { await db.prepare('UPDATE stock SET barcode = ? WHERE (barcode IS NULL OR barcode = "") AND (sku = ? OR LOWER(name) = LOWER(?))').run(assignedBarcode, sku || '', name || ''); } catch (_) {}
             }
 
             const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(result.lastInsertRowid);
@@ -108,10 +113,14 @@ const productController = {
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
-                    purchase_price || 0, selling_price || 0, barcode || null, serial_number || null,
+                    purchase_price || 0, selling_price || 0, resolvedBarcode, serial_number || null,
                     batch_number || null, expiry_date || null, resolvedTax, warehouse_id || null,
                     resolvedHsn, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null, now, now
                 );
+                if (fallbackResult && fallbackResult.lastInsertRowid) {
+                    const assignedBarcode = (barcode && String(barcode).trim()) ? String(barcode).trim() : generateEan13FromId(fallbackResult.lastInsertRowid, req.user.id);
+                    try { await db.prepare('UPDATE business_products SET barcode = ? WHERE id = ?').run(assignedBarcode, fallbackResult.lastInsertRowid); } catch (_) {}
+                }
                 const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(fallbackResult.lastInsertRowid);
                 return sendSuccess(res, created, 'Product created successfully', 201);
             } catch (fallbackErr) {
@@ -125,6 +134,11 @@ const productController = {
     getProducts: async (req, res) => {
         const { search, category, status, stock_status, warehouse_id, item_role, group_id, subgroup_id } = req.query;
         try {
+            // Auto-backfill missing barcodes for all existing products of this user
+            try {
+                await backfillMissingBarcodes(db, req.user.id);
+            } catch (_) {}
+
             const branchId = getEffectiveBranchId(req);
             let query = '';
             let params = [];
@@ -477,6 +491,16 @@ const productController = {
             return sendSuccess(res, bc, 'Barcode loaded successfully');
         } catch (error) {
             return sendError(res, 'Failed to load barcode', 500);
+        }
+    },
+
+    backfillBarcodes: async (req, res) => {
+        try {
+            const result = await backfillMissingBarcodes(db, req.user?.id);
+            return sendSuccess(res, result, `Generated barcodes for ${result.updatedCount || 0} existing products`);
+        } catch (err) {
+            console.error('[Product Controller] Backfill barcodes error:', err);
+            return sendError(res, 'Failed to backfill barcodes', 500);
         }
     },
 
