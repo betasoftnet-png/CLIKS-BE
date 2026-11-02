@@ -20,15 +20,19 @@ const productController = {
         const resolvedHsn = hsn_code || hsn_sac || hsn || null;
 
         const is_group_product = (req.body.is_group_product || req.body.isGroupProduct) ? 1 : 0;
+        const is_weighted = (req.body.is_weighted || req.body.sold_by_weight) ? 1 : 0;
         const raw_materials = req.body.raw_materials !== undefined
             ? (typeof req.body.raw_materials === 'string' ? req.body.raw_materials : JSON.stringify(req.body.raw_materials))
             : (req.body.rawMaterials !== undefined ? (typeof req.body.rawMaterials === 'string' ? req.body.rawMaterials : JSON.stringify(req.body.rawMaterials)) : null);
 
         try { await db.prepare("ALTER TABLE business_products ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
+        try { await db.prepare("ALTER TABLE business_products ADD COLUMN is_weighted INTEGER DEFAULT 0").run(); } catch (_) {}
         try { await db.prepare("ALTER TABLE business_products ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
         try { await db.prepare("ALTER TABLE inventory ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
+        try { await db.prepare("ALTER TABLE inventory ADD COLUMN is_weighted INTEGER DEFAULT 0").run(); } catch (_) {}
         try { await db.prepare("ALTER TABLE inventory ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
         try { await db.prepare("ALTER TABLE stock ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
+        try { await db.prepare("ALTER TABLE stock ADD COLUMN is_weighted INTEGER DEFAULT 0").run(); } catch (_) {}
         try { await db.prepare("ALTER TABLE stock ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
 
         const rawHasWarranty = has_warranty || warrantyDetails || 'No';
@@ -83,6 +87,10 @@ const productController = {
                 } else {
                     throw insertError;
                 }
+            }
+
+            if (result && result.lastInsertRowid) {
+                try { await db.prepare('UPDATE business_products SET is_weighted = ? WHERE id = ?').run(is_weighted, result.lastInsertRowid); } catch (_) {}
             }
 
             const created = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(result.lastInsertRowid);
@@ -300,6 +308,16 @@ const productController = {
                 try {
                     await db.prepare('UPDATE inventory SET hsn_code = ? WHERE user_id = ? AND (sku = ? OR LOWER(name) = LOWER(?))').run(resolvedHsn, req.user.id, sku || '', name || '');
                 } catch (e) {}
+            }
+
+            if (body.is_weighted !== undefined || body.sold_by_weight !== undefined) {
+                const is_weighted_val = (body.is_weighted || body.sold_by_weight) ? 1 : 0;
+                try {
+                    await db.prepare("ALTER TABLE business_products ADD COLUMN is_weighted INTEGER DEFAULT 0").run();
+                } catch (_) {}
+                try {
+                    await db.prepare('UPDATE business_products SET is_weighted = ? WHERE id = ?').run(is_weighted_val, targetId);
+                } catch (_) {}
             }
 
             const updated = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(targetId);
