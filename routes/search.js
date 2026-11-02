@@ -157,6 +157,78 @@ router.get('/global', async (req, res) => {
             console.error('[Search API] Warehouses search error:', e.message);
         }
 
+        // 7. Suppliers / Vendors
+        try {
+            const suppliers = await db.prepare(`
+                SELECT id, name, company, email, phone 
+                FROM business_suppliers 
+                WHERE user_id = ? AND (name LIKE ? OR company LIKE ? OR email LIKE ? OR phone LIKE ?)
+                LIMIT 5
+            `).all(userId, searchTerm, searchTerm, searchTerm, searchTerm);
+
+            for (const sup of suppliers) {
+                results.push({
+                    type: 'Supplier',
+                    name: sup.name,
+                    desc: sup.company ? `${sup.company} • ${sup.email || sup.phone || ''}` : (sup.email || sup.phone || 'Vendor Partner'),
+                    icon: 'UsersRound',
+                    path: `/purchases/suppliers`,
+                    rank: 4,
+                    state: { highlightSupplierId: sup.id, supplierName: sup.name }
+                });
+            }
+        } catch (e) {
+            // gracefully ignore if table absent
+        }
+
+        // 8. Staff / Employees
+        try {
+            const employees = await db.prepare(`
+                SELECT id, name, designation, department 
+                FROM business_employees 
+                WHERE user_id = ? AND (name LIKE ? OR designation LIKE ? OR department LIKE ?)
+                LIMIT 5
+            `).all(userId, searchTerm, searchTerm, searchTerm);
+
+            for (const emp of employees) {
+                results.push({
+                    type: 'Staff',
+                    name: emp.name,
+                    desc: `${emp.designation || 'Staff'} ${emp.department ? `(${emp.department})` : ''}`,
+                    icon: 'Users',
+                    path: `/hr/staff`,
+                    rank: 4,
+                    state: { highlightEmployeeId: emp.id, employeeName: emp.name }
+                });
+            }
+        } catch (e) {
+            // gracefully ignore if table absent
+        }
+
+        // 9. People / Escrow Contacts (Payments)
+        try {
+            const people = await db.prepare(`
+                SELECT id, name, contact_type, email, phone 
+                FROM people 
+                WHERE user_id = ? AND (name LIKE ? OR email LIKE ? OR phone LIKE ?)
+                LIMIT 5
+            `).all(userId, searchTerm, searchTerm, searchTerm);
+
+            for (const p of people) {
+                results.push({
+                    type: 'People',
+                    name: p.name,
+                    desc: `${p.contact_type || 'Contact'} • ${p.phone || p.email || 'P2P Network'}`,
+                    icon: 'Users',
+                    path: `/payments/people`,
+                    rank: 4,
+                    state: { highlightPersonId: p.id, personName: p.name }
+                });
+            }
+        } catch (e) {
+            // gracefully ignore if table absent
+        }
+
         return sendSuccess(res, results, 'Global search results retrieved');
     } catch (err) {
         console.error('[Search API Error]:', err.message);
