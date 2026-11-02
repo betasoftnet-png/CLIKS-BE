@@ -104,3 +104,4 @@ module.exports = {
     generateUniqueEan13Barcode,
     backfillMissingBarcodes
 };
+
