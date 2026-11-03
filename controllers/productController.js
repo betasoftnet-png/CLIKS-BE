@@ -975,7 +975,23 @@ const productController = {
 
     getTopProductsReport: async (req, res) => {
         try {
-            const invoices = await db.prepare("SELECT items FROM business_invoices WHERE user_id = ? AND status != 'Cancelled'").all(req.user.id);
+            const invoices = await db.prepare("SELECT items FROM business_invoices WHERE user_id = ? AND (status IS NULL OR LOWER(status) != 'cancelled')").all(req.user.id);
+            const dbProducts = await db.prepare("SELECT id, name, sku, category, quantity, selling_price, unit FROM business_products WHERE user_id = ?").all(req.user.id);
+            let dbStocks = [];
+            try {
+                dbStocks = await db.prepare("SELECT id, name, sku, category, quantity, unit_price, unit FROM stock WHERE user_id = ?").all(req.user.id);
+            } catch (sErr) {}
+
+            const prodMapByName = {};
+            for (const p of dbProducts) {
+                if (p.name) prodMapByName[p.name.toLowerCase().trim()] = p;
+            }
+            for (const s of dbStocks) {
+                if (s.name && !prodMapByName[s.name.toLowerCase().trim()]) {
+                    prodMapByName[s.name.toLowerCase().trim()] = s;
+                }
+            }
+
             const productMap = {};
             for (const inv of invoices) {
                 if (!inv.items) continue;
@@ -985,15 +1001,37 @@ const productController = {
                     for (const item of parsed) {
                         const name = item.product_name || item.description || item.name;
                         if (!name) continue;
+                        const cleanName = name.trim();
                         const qty = parseFloat(item.quantity) || 0;
                         const price = parseFloat(item.unit_price || item.price || item.rate) || 0;
-                        if (!productMap[name]) productMap[name] = { name, sold: 0, total_sales: 0 };
-                        productMap[name].sold += qty;
-                        productMap[name].total_sales += qty * price;
+                        if (!productMap[cleanName]) {
+                            const matched = prodMapByName[cleanName.toLowerCase()] || {};
+                            productMap[cleanName] = { 
+                                name: cleanName, 
+                                product_id: matched.id || item.product_id || item.id || null,
+                                sku: matched.sku || item.sku || 'N/A',
+                                category: matched.category || item.category || 'General Goods',
+                                stock_quantity: parseFloat(matched.quantity ?? 0),
+                                unit: matched.unit || item.unit || 'pcs',
+                                sold: 0, 
+                                total_sales: 0,
+                                invoice_count: 0
+                            };
+                        }
+                        productMap[cleanName].sold += qty;
+                        productMap[cleanName].total_sales += qty * price;
+                        productMap[cleanName].invoice_count += 1;
                     }
                 }
             }
-            const list = Object.values(productMap).sort((a, b) => b.total_sales - a.total_sales).slice(0, 5);
+            const list = Object.values(productMap)
+                .map(p => ({
+                    ...p,
+                    avg_price: p.sold > 0 ? (p.total_sales / p.sold) : 0
+                }))
+                .sort((a, b) => b.total_sales - a.total_sales)
+                .slice(0, 50);
+
             return sendSuccess(res, list, 'Top products fetched successfully');
         } catch (error) {
             console.error('Error in getTopProductsReport:', error);
