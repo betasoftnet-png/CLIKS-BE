@@ -16,55 +16,117 @@ const reportsController = {
             const { clause: purBranchClause, params: purBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
             const { clause: expBranchClause, params: expBranchParams } = getBranchSqlCondition(branchId, isMainBranch);
 
-            let sales = null;
-            let purchases = null;
-            let expenses = null;
+            // Fetch records
             let invoices = [];
+            let purchases = [];
+            let expenses = [];
 
             try {
-                let salesQuery = `SELECT SUM(total_amount) as total FROM business_invoices WHERE user_id = ?${invBranchClause}`;
-                sales = await db.prepare(salesQuery).get(req.user.id, ...invBranchParams);
-            } catch (sErr) {}
-
-            try {
-                let purchasesQuery = `SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?${purBranchClause}`;
-                purchases = await db.prepare(purchasesQuery).get(req.user.id, ...purBranchParams);
-            } catch (pErr) {
-                console.warn('[reportsController] purchasesQuery error:', pErr.message);
-                if (!branchId) {
-                    try {
-                        purchases = await db.prepare("SELECT SUM(grand_total) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
-                    } catch (e2) {}
-                }
-            }
-
-            try {
-                let expensesQuery = `SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')${expBranchClause}`;
-                expenses = await db.prepare(expensesQuery).get(req.user.id, ...expBranchParams);
-            } catch (eErr) {
-                console.warn('[reportsController] expensesQuery error:', eErr.message);
-                if (!branchId) {
-                    try {
-                        expenses = await db.prepare("SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')").get(req.user.id);
-                    } catch (e2) {}
-                }
-            }
-
-            const salesTotal = parseFloat(sales?.total) || 0;
-            const purchasesTotal = parseFloat(purchases?.total) || 0;
-            const expensesTotal = parseFloat(expenses?.total) || 0;
-
-            try {
-                let invoicesQuery = `SELECT created_at, total_amount FROM business_invoices WHERE user_id = ?${invBranchClause}`;
+                const invoicesQuery = `SELECT id, total_amount, created_at, status FROM business_invoices WHERE user_id = ?${invBranchClause}`;
                 invoices = await db.prepare(invoicesQuery).all(req.user.id, ...invBranchParams);
             } catch (invErr) {
                 invoices = [];
             }
-            const monthly_sales = [0,0,0,0,0,0,0,0,0,0,0,0];
-            const currentYear = new Date().getFullYear();
+
+            try {
+                const purchasesQuery = `SELECT id, grand_total, purchase_date, created_at, status FROM business_purchases WHERE user_id = ?${purBranchClause}`;
+                purchases = await db.prepare(purchasesQuery).all(req.user.id, ...purBranchParams);
+            } catch (purErr) {
+                purchases = [];
+            }
+
+            try {
+                const expensesQuery = `SELECT id, amount, date, created_at, is_claim, is_budget FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')${expBranchClause}`;
+                expenses = await db.prepare(expensesQuery).all(req.user.id, ...expBranchParams);
+            } catch (expErr) {
+                expenses = [];
+            }
+
+            // Compute standard time periods (Daily, Weekly, Monthly, Financial Year, All-Time)
+            const now = new Date();
+            const todayStr = now.toISOString().split('T')[0];
+            const dayOfWeek = now.getDay();
+            const diffToMon = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
+            const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diffToMon);
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
             
+            // Indian Financial Year: April 1 to March 31
+            const currentMonth = now.getMonth();
+            const fyStartYear = currentMonth >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+            const startOfFY = new Date(fyStartYear, 3, 1);
+            const endOfFY = new Date(fyStartYear + 1, 2, 31, 23, 59, 59);
+            const fyLabel = `FY ${fyStartYear}-${String(fyStartYear + 1).slice(-2)}`;
+
+            const computePeriodTotals = (items, getAmt, getDate) => {
+                let today = 0, this_week = 0, this_month = 0, financial_year = 0, all_time = 0;
+                for (const item of items) {
+                    if (item.status && ['cancelled', 'void'].includes(String(item.status).toLowerCase())) continue;
+                    if (item.is_claim === 'true' || item.is_budget === 'true') continue;
+                    const amt = parseFloat(getAmt(item)) || 0;
+                    all_time += amt;
+                    const rawDate = getDate(item);
+                    if (!rawDate) continue;
+                    const d = new Date(rawDate);
+                    if (isNaN(d.getTime())) continue;
+                    if (String(rawDate).startsWith(todayStr)) today += amt;
+                    if (d >= startOfWeek) this_week += amt;
+                    if (d >= startOfMonth) this_month += amt;
+                    if (d >= startOfFY && d <= endOfFY) financial_year += amt;
+                }
+                return { today, this_week, this_month, financial_year, all_time };
+            };
+
+            const s = computePeriodTotals(invoices, i => i.total_amount, i => i.created_at);
+            const p = computePeriodTotals(purchases, x => x.grand_total, x => x.purchase_date || x.created_at);
+            const e = computePeriodTotals(expenses, x => x.amount, x => x.date || x.created_at);
+
+            const breakdown = {
+                today: { 
+                    sales: s.today, 
+                    purchases: p.today, 
+                    expenses: e.today, 
+                    net_profit: s.today - e.today, 
+                    label: 'Today' 
+                },
+                this_week: { 
+                    sales: s.this_week, 
+                    purchases: p.this_week, 
+                    expenses: e.this_week, 
+                    net_profit: s.this_week - e.this_week, 
+                    label: 'This Week' 
+                },
+                this_month: { 
+                    sales: s.this_month, 
+                    purchases: p.this_month, 
+                    expenses: e.this_month, 
+                    net_profit: s.this_month - e.this_month, 
+                    label: 'This Month' 
+                },
+                financial_year: { 
+                    sales: s.financial_year, 
+                    purchases: p.financial_year, 
+                    expenses: e.financial_year, 
+                    net_profit: s.financial_year - e.financial_year, 
+                    label: fyLabel 
+                },
+                all_time: { 
+                    sales: s.all_time, 
+                    purchases: p.all_time, 
+                    expenses: e.all_time, 
+                    net_profit: s.all_time - e.all_time, 
+                    label: 'All-Time' 
+                }
+            };
+
+            const requestedPeriod = req.query.period || 'financial_year';
+            const activeData = breakdown[requestedPeriod] || breakdown.financial_year;
+
+            // Monthly sales trend for the chart
+            const monthly_sales = [0,0,0,0,0,0,0,0,0,0,0,0];
+            const currentYear = now.getFullYear();
             for (const inv of invoices) {
                 if (!inv.created_at) continue;
+                if (inv.status && ['cancelled', 'void'].includes(String(inv.status).toLowerCase())) continue;
                 const dateObj = new Date(inv.created_at);
                 if (dateObj.getFullYear() === currentYear) {
                     const monthIndex = dateObj.getMonth();
@@ -75,11 +137,16 @@ const reportsController = {
             }
 
             return sendSuccess(res, {
-                total_sales: salesTotal,
-                total_purchases: purchasesTotal,
-                total_expenses: expensesTotal,
-                operational_expenses: expensesTotal,
-                monthly_sales: monthly_sales,
+                total_sales: activeData.sales,
+                total_purchases: activeData.purchases,
+                total_expenses: activeData.expenses,
+                net_profit: activeData.net_profit,
+                operational_expenses: activeData.expenses,
+                active_period: requestedPeriod,
+                period_label: activeData.label,
+                fy_label: fyLabel,
+                breakdown,
+                monthly_sales,
                 status: 'healthy',
                 branch_id: branchId,
                 branch_name: branchInfo ? branchInfo.name : (branchId ? req.user.branch_name : 'All Showrooms'),
