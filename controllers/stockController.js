@@ -50,6 +50,12 @@ const ensureStockTable = async () => {
   try {
     await db.prepare("ALTER TABLE stock ADD COLUMN hsn_code TEXT").run();
   } catch (e) {}
+  try {
+    const txColumns = ['purchase_bill_ref TEXT', 'received_by TEXT', 'warehouse_id INTEGER', 'notes TEXT', 'supplier_name TEXT', 'unit_price REAL'];
+    for (const col of txColumns) {
+      try { await db.prepare(`ALTER TABLE stock_transactions ADD COLUMN ${col}`).run(); } catch (e) {}
+    }
+  } catch (e) {}
 };
 
 // ── GET /stats — Aggregate inventory statistics ────────────────────────────
@@ -225,22 +231,26 @@ const adjustQuantity = async (req, res) => {
 
   // Log transaction
   try {
-    const { purchase_bill_ref, received_by, staff_name, warehouse_id, destination_warehouse_id } = req.body;
+    const { purchase_bill_ref, received_by, staff_name, warehouse_id, destination_warehouse_id, notes, supplier_name, unit_price, date } = req.body;
     const finalWhId = warehouse_id || destination_warehouse_id || null;
     const finalStaff = received_by || staff_name || (req.user ? (req.user.name || req.user.username) : null) || 'Authorized Staff';
+    const txDate = date || now;
     await db.prepare(`
-      INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at, purchase_bill_ref, received_by, warehouse_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at, purchase_bill_ref, received_by, warehouse_id, notes, supplier_name, unit_price)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.params.id, 
       req.user.id, 
       delta > 0 ? 'in' : 'out', 
       Math.abs(delta), 
-      now, 
+      txDate, 
       now,
       purchase_bill_ref || null,
       finalStaff,
-      finalWhId
+      finalWhId,
+      notes || null,
+      supplier_name || null,
+      unit_price ? Number(unit_price) : null
     );
   } catch (e) {}
 
@@ -259,15 +269,17 @@ const deleteStock = async (req, res) => {
 // ── GET /:id/history ──────────────────────────────────────────────────────────
 const getStockHistory = async (req, res) => {
   try {
+    const rawId = req.params.id;
+    const cleanId = String(rawId).replace(/^STK-|^PROD-/i, '');
     const history = await db.prepare(`
       SELECT t.*, 
              COALESCE(w.name, 'Main Godown') as warehouse_name
       FROM stock_transactions t 
       LEFT JOIN warehouses w ON (t.warehouse_id = w.id OR CAST(t.warehouse_id AS TEXT) = CAST(w.id AS TEXT) OR LOWER(t.warehouse_id) = LOWER(w.name))
-      WHERE t.stock_id = ? AND t.user_id = ? 
+      WHERE (t.stock_id = ? OR t.stock_id = ? OR CAST(t.stock_id AS TEXT) = ?) AND t.user_id = ? 
       ORDER BY t.created_at DESC 
-      LIMIT 50
-    `).all(req.params.id, req.user.id);
+      LIMIT 100
+    `).all(rawId, cleanId, cleanId, req.user.id);
     
     return sendSuccess(res, history, 'Stock history fetched');
   } catch (err) {
