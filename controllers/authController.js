@@ -163,6 +163,9 @@ const ssoLogin = async (req, res) => {
   const safeUser = {
     id: user.id,
     username: user.username,
+    displayName: bnxProfile?.displayName || user.displayName || user.display_name || undefined,
+    fullName: bnxProfile?.fullName || user.fullName || user.full_name || undefined,
+    name: bnxProfile?.displayName || bnxProfile?.fullName || user.username,
     email: originalSubEmail ? originalSubEmail : user.email,
     parent_email: originalSubEmail ? user.email : undefined,
     is_sub_id: !!originalSubEmail,
@@ -543,8 +546,9 @@ const getMe = async (req, res) => {
   const safeData = {
     id: user?.id || req.user.id,
     username: username,
-    name: username,
-    fullName: user?.business_name || username,
+    displayName: req.user.displayName || req.user.display_name || undefined,
+    fullName: req.user.fullName || req.user.full_name || user?.business_name || username,
+    name: req.user.displayName || req.user.fullName || username,
     email: user?.email || req.user.email,
     role: user?.role || req.user.role || 'business',
     account_type: req.user.account_type || 'business',
