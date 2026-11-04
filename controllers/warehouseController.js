@@ -782,16 +782,17 @@ const warehouseController = {
         try {
             const transfers = await db.prepare(`
                 SELECT t.*, 
-                       COALESCE(s.name, bp.name, 'Unknown Item') as product_name,
-                       COALESCE(s.sku, bp.sku, 'N/A') as sku,
-                       COALESCE(w1.name, CAST(t.from_warehouse_id AS TEXT)) as from_warehouse_name,
-                       COALESCE(w2.name, CAST(t.to_warehouse_id AS TEXT)) as to_warehouse_name
+                       COALESCE(MAX(s.name), MAX(bp.name), 'Unknown Item') as product_name,
+                       COALESCE(MAX(s.sku), MAX(bp.sku), 'N/A') as sku,
+                       COALESCE(MAX(w1.name), CAST(t.from_warehouse_id AS TEXT)) as from_warehouse_name,
+                       COALESCE(MAX(w2.name), CAST(t.to_warehouse_id AS TEXT)) as to_warehouse_name
                 FROM warehouse_transfers t
-                LEFT JOIN stock s ON t.stock_id = s.id
-                LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT))
-                LEFT JOIN warehouses w1 ON (t.from_warehouse_id = w1.id OR CAST(t.from_warehouse_id AS TEXT) = CAST(w1.id AS TEXT))
-                LEFT JOIN warehouses w2 ON (t.to_warehouse_id = w2.id OR CAST(t.to_warehouse_id AS TEXT) = CAST(w2.id AS TEXT))
+                LEFT JOIN stock s ON t.stock_id = s.id AND s.user_id = t.user_id
+                LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT)) AND bp.user_id = t.user_id
+                LEFT JOIN warehouses w1 ON (t.from_warehouse_id = w1.id OR CAST(t.from_warehouse_id AS TEXT) = CAST(w1.id AS TEXT)) AND w1.user_id = t.user_id
+                LEFT JOIN warehouses w2 ON (t.to_warehouse_id = w2.id OR CAST(t.to_warehouse_id AS TEXT) = CAST(w2.id AS TEXT)) AND w2.user_id = t.user_id
                 WHERE t.user_id = ?
+                GROUP BY t.id
                 ORDER BY t.id DESC
             `).all(req.user.id);
             return sendSuccess(res, transfers, 'Warehouse transfers fetched');
@@ -1083,16 +1084,17 @@ const warehouseController = {
     getWarehouseReportMovement: async (req, res) => {
         const rows = await db.prepare(`
             SELECT t.*, 
-                   COALESCE(s.name, bp.name, 'Unknown Item') as product_name,
-                   COALESCE(s.sku, bp.sku, 'N/A') as sku,
-                   COALESCE(w1.name, CAST(t.from_warehouse_id AS TEXT)) as from_warehouse_name,
-                   COALESCE(w2.name, CAST(t.to_warehouse_id AS TEXT)) as to_warehouse_name
+                   COALESCE(MAX(s.name), MAX(bp.name), 'Unknown Item') as product_name,
+                   COALESCE(MAX(s.sku), MAX(bp.sku), 'N/A') as sku,
+                   COALESCE(MAX(w1.name), CAST(t.from_warehouse_id AS TEXT)) as from_warehouse_name,
+                   COALESCE(MAX(w2.name), CAST(t.to_warehouse_id AS TEXT)) as to_warehouse_name
             FROM warehouse_transfers t
-            LEFT JOIN stock s ON t.stock_id = s.id
-            LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT))
-            LEFT JOIN warehouses w1 ON (t.from_warehouse_id = w1.id OR CAST(t.from_warehouse_id AS TEXT) = CAST(w1.id AS TEXT))
-            LEFT JOIN warehouses w2 ON (t.to_warehouse_id = w2.id OR CAST(t.to_warehouse_id AS TEXT) = CAST(w2.id AS TEXT))
+            LEFT JOIN stock s ON t.stock_id = s.id AND s.user_id = t.user_id
+            LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT)) AND bp.user_id = t.user_id
+            LEFT JOIN warehouses w1 ON (t.from_warehouse_id = w1.id OR CAST(t.from_warehouse_id AS TEXT) = CAST(w1.id AS TEXT)) AND w1.user_id = t.user_id
+            LEFT JOIN warehouses w2 ON (t.to_warehouse_id = w2.id OR CAST(t.to_warehouse_id AS TEXT) = CAST(w2.id AS TEXT)) AND w2.user_id = t.user_id
             WHERE t.user_id = ? 
+            GROUP BY t.id
             ORDER BY t.id DESC 
             LIMIT 50
         `).all(req.user.id);
@@ -1148,16 +1150,17 @@ const warehouseController = {
             const warehouses = await db.prepare('SELECT * FROM warehouses WHERE user_id = ?').all(req.user.id);
             const transfers = await db.prepare(`
                 SELECT t.*, 
-                       COALESCE(s.name, bp.name, 'Unknown Item') as product_name,
-                       COALESCE(s.sku, bp.sku, 'N/A') as sku,
-                       COALESCE(w1.name, CAST(t.from_warehouse_id AS TEXT)) as from_warehouse_name,
-                       COALESCE(w2.name, CAST(t.to_warehouse_id AS TEXT)) as to_warehouse_name
+                       COALESCE(MAX(s.name), MAX(bp.name), 'Unknown Item') as product_name,
+                       COALESCE(MAX(s.sku), MAX(bp.sku), 'N/A') as sku,
+                       COALESCE(MAX(w1.name), CAST(t.from_warehouse_id AS TEXT)) as from_warehouse_name,
+                       COALESCE(MAX(w2.name), CAST(t.to_warehouse_id AS TEXT)) as to_warehouse_name
                 FROM warehouse_transfers t
-                LEFT JOIN stock s ON t.stock_id = s.id
-                LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT))
-                LEFT JOIN warehouses w1 ON (t.from_warehouse_id = w1.id OR CAST(t.from_warehouse_id AS TEXT) = CAST(w1.id AS TEXT))
-                LEFT JOIN warehouses w2 ON (t.to_warehouse_id = w2.id OR CAST(t.to_warehouse_id AS TEXT) = CAST(w2.id AS TEXT))
+                LEFT JOIN stock s ON t.stock_id = s.id AND s.user_id = t.user_id
+                LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT)) AND bp.user_id = t.user_id
+                LEFT JOIN warehouses w1 ON (t.from_warehouse_id = w1.id OR CAST(t.from_warehouse_id AS TEXT) = CAST(w1.id AS TEXT)) AND w1.user_id = t.user_id
+                LEFT JOIN warehouses w2 ON (t.to_warehouse_id = w2.id OR CAST(t.to_warehouse_id AS TEXT) = CAST(w2.id AS TEXT)) AND w2.user_id = t.user_id
                 WHERE t.user_id = ?
+                GROUP BY t.id
                 ORDER BY t.id DESC
             `).all(req.user.id);
             
@@ -1166,17 +1169,18 @@ const warehouseController = {
 
             const inwards = await db.prepare(`
                 SELECT t.*, 
-                       COALESCE(s.name, bp.name, 'Unknown Item') as product_name, 
-                       COALESCE(w.name, w2.name, w3.name, ?) as warehouse_name,
-                       COALESCE(t.received_by, u.username, 'Authorized Staff') as received_by
+                       COALESCE(MAX(s.name), MAX(bp.name), 'Unknown Item') as product_name, 
+                       COALESCE(MAX(w.name), MAX(w2.name), MAX(w3.name), ?) as warehouse_name,
+                       COALESCE(MAX(t.received_by), MAX(u.username), 'Authorized Staff') as received_by
                 FROM stock_transactions t 
-                LEFT JOIN stock s ON t.stock_id = s.id 
-                LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT))
-                LEFT JOIN warehouses w ON (t.warehouse_id = w.id OR CAST(t.warehouse_id AS TEXT) = CAST(w.id AS TEXT) OR LOWER(CAST(t.warehouse_id AS TEXT)) = LOWER(w.name) OR LOWER(CAST(t.warehouse_id AS TEXT)) = LOWER(w.code))
-                LEFT JOIN warehouses w2 ON (LOWER(s.location) = LOWER(w2.name) OR LOWER(s.location) = LOWER(w2.code))
-                LEFT JOIN warehouses w3 ON (LOWER(bp.warehouse_id) = LOWER(w3.name) OR CAST(bp.warehouse_id AS TEXT) = CAST(w3.id AS TEXT) OR LOWER(bp.warehouse_id) = LOWER(w3.code))
+                LEFT JOIN stock s ON t.stock_id = s.id AND s.user_id = t.user_id
+                LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT)) AND bp.user_id = t.user_id
+                LEFT JOIN warehouses w ON (t.warehouse_id = w.id OR CAST(t.warehouse_id AS TEXT) = CAST(w.id AS TEXT) OR LOWER(CAST(t.warehouse_id AS TEXT)) = LOWER(w.name) OR LOWER(CAST(t.warehouse_id AS TEXT)) = LOWER(w.code)) AND w.user_id = t.user_id
+                LEFT JOIN warehouses w2 ON (LOWER(s.location) = LOWER(w2.name) OR LOWER(s.location) = LOWER(w2.code)) AND w2.user_id = t.user_id
+                LEFT JOIN warehouses w3 ON (LOWER(bp.warehouse_id) = LOWER(w3.name) OR CAST(bp.warehouse_id AS TEXT) = CAST(w3.id AS TEXT) OR LOWER(bp.warehouse_id) = LOWER(w3.code)) AND w3.user_id = t.user_id
                 LEFT JOIN users u ON t.user_id = u.id
                 WHERE t.user_id = ? AND t.type = 'in'
+                GROUP BY t.id
                 ORDER BY t.id DESC
             `).all(defaultWhName, req.user.id);
 
