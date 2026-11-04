@@ -12,7 +12,12 @@ const initColumns = async () => {
     'subscription_days_remaining INTEGER DEFAULT 0',
     'active_subscriptions TEXT',
     'favorite_products TEXT',
-    'receive_purchase_data INTEGER DEFAULT 1'
+    'receive_purchase_data INTEGER DEFAULT 1',
+    'business_name TEXT',
+    'gstin TEXT',
+    'state_registered TEXT',
+    'address TEXT',
+    'pincode TEXT'
   ];
   for (const col of columns) {
     try {
@@ -68,6 +73,23 @@ const safeUser = (user) => {
     investor: { active: false, plan: null },
     poster: { active: false, plan: null }
   };
+
+  safe.business_name = user.business_name || null;
+  safe.gstin = user.gstin || null;
+  safe.state_registered = user.state_registered || null;
+  safe.address = user.address || null;
+  safe.pincode = user.pincode || null;
+
+  if (user.settings) {
+    try {
+      const s = typeof user.settings === 'string' ? JSON.parse(user.settings) : user.settings;
+      if (!safe.gstin) safe.gstin = s.gstinRef || s.gstin || null;
+      if (!safe.business_name) safe.business_name = s.companyName || s.business_name || s.company_name || null;
+      if (!safe.state_registered) safe.state_registered = s.stateRegistered || s.state_registered || null;
+      if (!safe.address) safe.address = s.registeredAddress || s.address || null;
+      if (!safe.pincode) safe.pincode = s.pincode || null;
+    } catch (e) {}
+  }
 
   return safe;
 };
@@ -130,10 +152,10 @@ const getProfile = async (req, res) => {
 // ── PATCH / — Update username, email, or avatar ───────────────────────────────
 const updateProfile = async (req, res) => {
   const bodyData = { ...req.query, ...req.body };
-  const { username, email, name, avatar_data, avatar_name, tier, subscription_days_remaining, active_subscriptions, favorite_products } = bodyData;
+  const { username, email, name, avatar_data, avatar_name, tier, subscription_days_remaining, active_subscriptions, favorite_products, business_name, gstin, state_registered, address, pincode } = bodyData;
   const targetUsername = username || name;
 
-  if (!targetUsername && !email && !avatar_data && tier === undefined && subscription_days_remaining === undefined && active_subscriptions === undefined && favorite_products === undefined) {
+  if (!targetUsername && !email && !avatar_data && tier === undefined && subscription_days_remaining === undefined && active_subscriptions === undefined && favorite_products === undefined && business_name === undefined && gstin === undefined && state_registered === undefined && address === undefined && pincode === undefined) {
     return sendError(res, 'Provide at least one field to update', 400, 'BAD_REQUEST');
   }
 
@@ -190,6 +212,11 @@ const updateProfile = async (req, res) => {
       params.push(activeSubsStr);
     }
     if (favorite_products !== undefined) { updates.push('favorite_products = ?'); params.push(favorite_products); }
+    if (business_name !== undefined) { updates.push('business_name = ?'); params.push(business_name); }
+    if (gstin !== undefined) { updates.push('gstin = ?'); params.push(gstin); }
+    if (state_registered !== undefined) { updates.push('state_registered = ?'); params.push(state_registered); }
+    if (address !== undefined) { updates.push('address = ?'); params.push(address); }
+    if (pincode !== undefined) { updates.push('pincode = ?'); params.push(pincode); }
     updates.push('updated_at = ?');
     params.push(new Date().toISOString());
   }

@@ -97,7 +97,7 @@ initGstTableAndColumns();
 const gstController = {
     getSettings: async (req, res) => {
         try {
-            const user = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+            const user = await db.prepare('SELECT username, business_name, settings FROM users WHERE id = ?').get(req.user.id);
             let settings = {};
             if (user && user.settings) {
                 try {
@@ -106,12 +106,17 @@ const gstController = {
                     settings = {};
                 }
             }
+            const gstin = settings.gstinRef || settings.gstin || '';
+            const legal_name = settings.companyName || settings.business_name || settings.company_name || settings.legal_name || user?.business_name || user?.username || '';
+            const place_of_business = settings.stateRegistered || settings.state_registered || settings.city || settings.place_of_business || '';
+            const state_code = (gstin && gstin.length >= 2) ? gstin.slice(0, 2) : (settings.state_code || '');
+
             return sendSuccess(res, {
-                gstin: settings.gstin || '',
-                legal_name: settings.company_name || settings.legal_name || '',
-                business_type: settings.business_type || '',
-                place_of_business: settings.city || settings.place_of_business || '',
-                state_code: settings.state_code || ''
+                gstin,
+                legal_name,
+                business_type: settings.verticalType || settings.business_type || 'Private Limited',
+                place_of_business,
+                state_code
             }, 'GST settings fetched');
         } catch (e) {
             console.error('[GST Controller] getSettings error:', e);
