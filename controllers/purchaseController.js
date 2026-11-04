@@ -4,6 +4,7 @@ const { recordAudit } = require('../utils/auditLogger');
 const { getEffectiveBranchId, getBranchSqlCondition } = require('../utils/branchHelper');
 const gstHelper = require('../utils/gstHelper');
 const { getNextSequence } = require('../utils/sequenceGenerator');
+const { syncPurchaseBillToExpense, deletePurchaseExpense } = require('../utils/purchaseExpenseSync');
 
 const logBusinessAudit = async (userId, actionType, message, severity = 'INFO') => {
     try {
@@ -349,6 +350,15 @@ const purchaseController = {
                 await logBusinessAudit(req.user.id, 'PURCHASE_CREATE', `Created purchase document ${purchaseNum} (${doc_type}) for supplier ${supplierName} (amount: ₹${grand_total})`, 'SUCCESS');
             } catch (e) { }
 
+            // --- Sync Purchase Bill to Expenses Registry ---
+            if (String(doc_type).toUpperCase() === 'BILL') {
+                try {
+                    await syncPurchaseBillToExpense(created);
+                } catch (expSyncErr) {
+                    console.warn('[Purchase Controller] Expense sync warning:', expSyncErr.message);
+                }
+            }
+
             return sendSuccess(res, created, 'Purchase document created successfully', 201);
         } catch (error) {
             console.error('[Purchase Controller] Error creating purchase:', error);
@@ -480,6 +490,16 @@ const purchaseController = {
 
             await gstHelper.syncPurchaseToGstr2b(id, req.user.id);
             await logBusinessAudit(req.user.id, 'PURCHASE_UPDATE', `Updated purchase record ID ${id} (${doc_type}) for supplier ${supplier_name} (amount: ₹${grand_total})`, 'INFO');
+
+            // --- Sync Purchase Bill to Expenses Registry ---
+            if (updated && (String(updated.doc_type).toUpperCase() === 'BILL' || String(doc_type).toUpperCase() === 'BILL')) {
+                try {
+                    await syncPurchaseBillToExpense(updated);
+                } catch (expSyncErr) {
+                    console.warn('[Purchase Controller] Expense sync warning on update:', expSyncErr.message);
+                }
+            }
+
             return sendSuccess(res, updated, 'Purchase record updated successfully');
         } catch (error) {
             console.error('[Purchase Controller] Error updating purchase:', error);
@@ -494,6 +514,9 @@ const purchaseController = {
             const pur = await db.prepare('SELECT purchase_number FROM business_purchases WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (pur) {
                 await db.prepare("DELETE FROM accounting WHERE user_id = ? AND notes = ?").run(req.user.id, `Purchase #${pur.purchase_number}`);
+                try {
+                    await deletePurchaseExpense(pur.purchase_number, req.user.id);
+                } catch (e) { }
             }
 
             await db.prepare('DELETE FROM business_purchases WHERE id = ?').run(id);
@@ -1031,6 +1054,13 @@ const purchaseController = {
             try {
                 await logBusinessAudit(userId, 'GOODS_RECEIVED', `Goods received for Bill ${bill.purchase_number} (Supplier: ${bill.supplier_name}, Amount: ₹${bill.grand_total || 0})`, 'SUCCESS');
             } catch (auditErr) { }
+
+            // Sync to Expenses
+            if (String(bill.doc_type).toUpperCase() === 'BILL') {
+                try {
+                    await syncPurchaseBillToExpense({ ...bill, status: 'Completed' });
+                } catch (e) { }
+            }
 
             return sendSuccess(res, { id: bill.id, purchase_number: bill.purchase_number, status: 'Completed' }, 'Goods received successfully. Inventory, Vendor Ledger, Accounts Payable, Accounting, and GSTR-2B have all been updated.');
         } catch (error) {

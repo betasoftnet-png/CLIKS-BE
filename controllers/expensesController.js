@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { sendSuccess, sendError } = require('../utils/response');
 const { getEffectiveBranchId, getBranchSqlCondition } = require('../utils/branchHelper');
+const { autoSyncAllUserPurchaseBills } = require('../utils/purchaseExpenseSync');
 const fs = require('fs');
 const path = require('path');
 
@@ -219,6 +220,11 @@ const expensesController = {
         const { category, status, payment_mode, date, q } = req.query;
         try {
             await autoPostDueRecurringExpenses(req.user.id);
+            try {
+                await autoSyncAllUserPurchaseBills(req.user.id);
+            } catch (syncErr) {
+                console.warn('[Expense GET] Purchase bills auto-sync non-fatal warning:', syncErr.message);
+            }
 
             const branchId = getEffectiveBranchId(req);
             let branchInfo = null;
