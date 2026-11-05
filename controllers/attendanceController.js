@@ -59,15 +59,40 @@ const parseEmployeeId = (empId) => {
 const attendanceController = {
     // 1. POST /attendance
     createAttendance: async (req, res) => {
-        const { employee_id, date, status, check_in_time, check_out_time, employee_name, late_by_minutes, location_address } = req.body;
+        const { employee_id, date, status, check_in_time, check_out_time, employee_name, late_by_minutes, location_address, overwrite } = req.body;
         try {
+            const parsedEmpId = parseEmployeeId(employee_id || 'EMP-001');
+            const targetDate = date || new Date().toISOString().split('T')[0];
+
+            // Prevent duplicate attendance for the same employee on the same date
+            const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND employee_id = ? AND date = ?').get(req.user.id, parsedEmpId, targetDate);
+            if (existing) {
+                if (overwrite) {
+                    await db.prepare(`
+                        UPDATE attendance SET status = ?, check_in_time = ?, check_out_time = ?, employee_name = ?, location_address = ?, updated_at = ?
+                        WHERE id = ?
+                    `).run(
+                        status || 'present',
+                        check_in_time || '09:00 AM',
+                        check_out_time || '06:00 PM',
+                        employee_name || 'Staff',
+                        location_address || 'Main Office Complex, Mumbai',
+                        new Date().toISOString(),
+                        existing.id
+                    );
+                    const updated = await db.prepare('SELECT * FROM attendance WHERE id = ?').get(existing.id);
+                    return sendSuccess(res, updated, 'Attendance updated successfully');
+                }
+                return sendError(res, `Attendance for this employee has already been marked for ${targetDate}. It can only be marked once per day.`, 400);
+            }
+
             const result = await db.prepare(`
                 INSERT INTO attendance (user_id, employee_id, date, status, check_in_time, check_out_time, employee_name, late_by_minutes, location_address, first_punch, last_punch, total_work_hours, break_hours, productive_hours, device_id, geo_fence_status)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 9.0, 1.0, 8.0, 'MOBILE-GPS-APP', 'Inside')
             `).run(
                 req.user.id,
-                parseEmployeeId(employee_id || 'EMP-001'),
-                date || new Date().toISOString().split('T')[0],
+                parsedEmpId,
+                targetDate,
                 status || 'present',
                 check_in_time || '09:00 AM',
                 check_out_time || '06:00 PM',
