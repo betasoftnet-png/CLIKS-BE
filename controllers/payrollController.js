@@ -48,31 +48,59 @@ const parseEmployeeId = (empId) => {
 const payrollController = {
     // 1. POST /payroll
     createPayroll: async (req, res) => {
-        const { employee_id, amount, month, status, employee_name, basic_salary, hra_amount, special_allowance, bonus_amount, pf_deduction, esi_deduction, tds_deduction, bank_name, account_number, pan_number } = req.body;
+        const { 
+            employee_id, amount, month, status, employee_name, basic_salary, 
+            hra_amount, special_allowance, bonus_amount, overtime_pay, 
+            pf_deduction, esi_deduction, tds_deduction, professional_tax, loan_deduction, 
+            payable_days, bank_name, account_number, pan_number 
+        } = req.body;
         try {
             const now = new Date().toISOString();
             const payslip_number = `PSN-2026-${Date.now().toString().slice(-3)}`;
+            
+            const currentMonthName = new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
+            const selectedMonth = month || currentMonthName;
+
+            const baseVal = (basic_salary !== undefined && basic_salary !== null && basic_salary !== '') ? parseFloat(basic_salary) : (amount ? parseFloat(amount) : 30000);
+            const hraVal = (hra_amount !== undefined && hra_amount !== null && hra_amount !== '') ? parseFloat(hra_amount) : 0;
+            const specVal = (special_allowance !== undefined && special_allowance !== null && special_allowance !== '') ? parseFloat(special_allowance) : 0;
+            const bonusVal = (bonus_amount !== undefined && bonus_amount !== null && bonus_amount !== '') ? parseFloat(bonus_amount) : 0;
+            const overtimeVal = (overtime_pay !== undefined && overtime_pay !== null && overtime_pay !== '') ? parseFloat(overtime_pay) : 0;
+            const pfVal = (pf_deduction !== undefined && pf_deduction !== null && pf_deduction !== '') ? parseFloat(pf_deduction) : 0;
+            const esiVal = (esi_deduction !== undefined && esi_deduction !== null && esi_deduction !== '') ? parseFloat(esi_deduction) : 0;
+            const tdsVal = (tds_deduction !== undefined && tds_deduction !== null && tds_deduction !== '') ? parseFloat(tds_deduction) : 0;
+            const profTaxVal = (professional_tax !== undefined && professional_tax !== null && professional_tax !== '') ? parseFloat(professional_tax) : 200;
+            const loanVal = (loan_deduction !== undefined && loan_deduction !== null && loan_deduction !== '') ? parseFloat(loan_deduction) : 0;
+
+            const gross = baseVal + hraVal + specVal + bonusVal + overtimeVal;
+            const deductions = pfVal + esiVal + tdsVal + profTaxVal + loanVal;
+            const netAmount = (amount !== undefined && amount !== null && amount !== '') ? parseFloat(amount) : (gross - deductions);
+
             const result = await db.prepare(`
                 INSERT INTO payroll (
                     user_id, employee_id, amount, month, status, employee_name, salary_type, basic_salary, 
                     hra_amount, special_allowance, bonus_amount, overtime_pay, pf_deduction, esi_deduction, 
                     tds_deduction, professional_tax, loan_deduction, payable_days, bank_name, account_number, 
                     payslip_number, pan_number, uan_number, esi_number, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'Monthly', ?, ?, ?, ?, 0, ?, ?, ?, 200, 0, 30, ?, ?, ?, ?, '100223344999', '3122334455009', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, 'Monthly', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '100223344999', '3122334455009', ?, ?)
             `).run(
                 req.user.id,
                 parseEmployeeId(employee_id || 'EMP-001'),
-                amount ?? 35000,
-                month || 'May 2026',
+                netAmount,
+                selectedMonth,
                 status || 'processed',
                 employee_name || 'Arun Kumar (Sales)',
-                basic_salary ?? amount ?? 30000,
-                hra_amount ?? 5000,
-                special_allowance ?? 2000,
-                bonus_amount ?? 0,
-                (pf_deduction !== undefined && pf_deduction !== null && pf_deduction !== '') ? parseFloat(pf_deduction) : 0,
-                (esi_deduction !== undefined && esi_deduction !== null && esi_deduction !== '') ? parseFloat(esi_deduction) : 0,
-                (tds_deduction !== undefined && tds_deduction !== null && tds_deduction !== '') ? parseFloat(tds_deduction) : 0,
+                baseVal,
+                hraVal,
+                specVal,
+                bonusVal,
+                overtimeVal,
+                pfVal,
+                esiVal,
+                tdsVal,
+                profTaxVal,
+                loanVal,
+                payable_days || 30,
                 bank_name || 'HDFC Bank',
                 account_number || '50100223344551',
                 payslip_number,
@@ -134,23 +162,73 @@ const payrollController = {
         const { id } = req.params;
         const fields = req.body;
         try {
+            // Map frontend aliases to DB column names
+            const mappedFields = { ...fields };
+            if (mappedFields.payroll_month !== undefined) {
+                mappedFields.month = mappedFields.payroll_month;
+                delete mappedFields.payroll_month;
+            }
+            if (mappedFields.payroll_status !== undefined) {
+                mappedFields.status = mappedFields.payroll_status;
+                delete mappedFields.payroll_status;
+            }
+            if (mappedFields.payroll_id !== undefined) {
+                delete mappedFields.payroll_id;
+            }
+
+            const allowedColumns = [
+                'employee_id', 'amount', 'month', 'status', 'employee_name', 'salary_type',
+                'basic_salary', 'hra_amount', 'special_allowance', 'bonus_amount', 'overtime_pay',
+                'pf_deduction', 'esi_deduction', 'tds_deduction', 'professional_tax', 'loan_deduction',
+                'payable_days', 'bank_name', 'account_number', 'payslip_number', 'pan_number',
+                'uan_number', 'esi_number', 'loans_data', 'earnings_data', 'deductions_data', 'notes'
+            ];
+
             const updates = [];
             const params = [];
-            for (const [key, value] of Object.entries(fields)) {
-                if (key !== 'id' && key !== 'user_id') {
+            for (const [key, value] of Object.entries(mappedFields)) {
+                if (allowedColumns.includes(key)) {
                     updates.push(`${key} = ?`);
-                    params.push(typeof value === 'object' ? JSON.stringify(value) : value);
+                    params.push(typeof value === 'object' && value !== null ? JSON.stringify(value) : value);
                 }
             }
+
+            // Recalculate amount (net take home) if earnings or deductions were updated and amount not explicitly passed
+            if (mappedFields.amount === undefined && (
+                mappedFields.basic_salary !== undefined || mappedFields.hra_amount !== undefined || 
+                mappedFields.special_allowance !== undefined || mappedFields.bonus_amount !== undefined || 
+                mappedFields.overtime_pay !== undefined || mappedFields.pf_deduction !== undefined || 
+                mappedFields.esi_deduction !== undefined || mappedFields.tds_deduction !== undefined || 
+                mappedFields.professional_tax !== undefined || mappedFields.loan_deduction !== undefined
+            )) {
+                const current = await db.prepare('SELECT * FROM payroll WHERE id = ? AND user_id = ?').get(id, req.user.id);
+                if (current) {
+                    const b = mappedFields.basic_salary !== undefined ? parseFloat(mappedFields.basic_salary) : parseFloat(current.basic_salary || 0);
+                    const h = mappedFields.hra_amount !== undefined ? parseFloat(mappedFields.hra_amount) : parseFloat(current.hra_amount || 0);
+                    const s = mappedFields.special_allowance !== undefined ? parseFloat(mappedFields.special_allowance) : parseFloat(current.special_allowance || 0);
+                    const bo = mappedFields.bonus_amount !== undefined ? parseFloat(mappedFields.bonus_amount) : parseFloat(current.bonus_amount || 0);
+                    const ov = mappedFields.overtime_pay !== undefined ? parseFloat(mappedFields.overtime_pay) : parseFloat(current.overtime_pay || 0);
+                    const pf = mappedFields.pf_deduction !== undefined ? parseFloat(mappedFields.pf_deduction) : parseFloat(current.pf_deduction || 0);
+                    const esi = mappedFields.esi_deduction !== undefined ? parseFloat(mappedFields.esi_deduction) : parseFloat(current.esi_deduction || 0);
+                    const tds = mappedFields.tds_deduction !== undefined ? parseFloat(mappedFields.tds_deduction) : parseFloat(current.tds_deduction || 0);
+                    const pt = mappedFields.professional_tax !== undefined ? parseFloat(mappedFields.professional_tax) : parseFloat(current.professional_tax || 0);
+                    const l = mappedFields.loan_deduction !== undefined ? parseFloat(mappedFields.loan_deduction) : parseFloat(current.loan_deduction || 0);
+                    const calcAmount = (b + h + s + bo + ov) - (pf + esi + tds + pt + l);
+                    updates.push('amount = ?');
+                    params.push(calcAmount);
+                }
+            }
+
             if (updates.length > 0) {
                 updates.push('updated_at = ?');
                 params.push(new Date().toISOString());
                 params.push(id, req.user.id);
                 await db.prepare(`UPDATE payroll SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`).run(...params);
             }
-            const record = await db.prepare('SELECT * FROM payroll WHERE id = ?').get(id);
+            const record = await db.prepare('SELECT * FROM payroll WHERE id = ? AND user_id = ?').get(id, req.user.id);
             return sendSuccess(res, record, 'Payroll updated successfully');
         } catch (error) {
+            console.error('[Payroll Controller] updatePayroll error:', error);
             return sendError(res, 'Failed to update payroll', 500);
         }
     },
