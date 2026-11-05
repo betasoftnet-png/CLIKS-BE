@@ -20,7 +20,10 @@ const initColumns = async () => {
         'performance_rating',
         'target_score',
         'leave_balance',
-        'deduct_tds'
+        'deduct_tds',
+        'monthly_leave_quota',
+        'annual_bonus',
+        'weekly_off'
     ];
     for (const col of columns) {
         try {
@@ -35,14 +38,14 @@ initColumns();
 const staffController = {
     // 1. POST /staff
     createStaff: async (req, res) => {
-        const { name, role, email, phone, salary, status, hire_date, department, designation, address, emergency_contact, bank_details, shift } = req.body;
+        const { name, role, email, phone, salary, status, hire_date, department, designation, address, emergency_contact, bank_details, shift, deduct_tds, monthly_leave_quota, annual_bonus, weekly_off } = req.body;
         if (!name) return sendError(res, 'Name is required', 400);
 
         try {
             const now = new Date().toISOString();
             const result = await db.prepare(`
-                INSERT INTO employees (user_id, name, role, email, phone, salary, status, hire_date, department, designation, address, emergency_contact, bank_details, shift, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO employees (user_id, name, role, email, phone, salary, status, hire_date, department, designation, address, emergency_contact, bank_details, shift, deduct_tds, monthly_leave_quota, annual_bonus, weekly_off, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id,
                 name,
@@ -58,6 +61,10 @@ const staffController = {
                 emergency_contact ? (typeof emergency_contact === 'object' ? JSON.stringify(emergency_contact) : emergency_contact) : null,
                 bank_details ? (typeof bank_details === 'object' ? JSON.stringify(bank_details) : bank_details) : null,
                 shift ? (typeof shift === 'object' ? JSON.stringify(shift) : shift) : null,
+                deduct_tds !== undefined ? (deduct_tds ? 1 : 0) : 0,
+                monthly_leave_quota !== undefined ? monthly_leave_quota : 1.5,
+                annual_bonus !== undefined ? annual_bonus : null,
+                weekly_off || 'Sunday Off',
                 now,
                 now
             );
