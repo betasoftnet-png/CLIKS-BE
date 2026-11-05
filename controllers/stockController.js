@@ -197,10 +197,11 @@ const adjustQuantity = async (req, res) => {
 
   const now = new Date().toISOString();
   let updatedRow = null;
+  let bpItem = null;
 
   // 1. Update business_products (catalog products created via Inventory -> Products)
   try {
-    const bpItem = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    bpItem = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (bpItem) {
       let newQty = Number(bpItem.quantity || 0) + Number(delta);
       if (newQty < 0) newQty = 0;
@@ -208,6 +209,31 @@ const adjustQuantity = async (req, res) => {
       await db.prepare('UPDATE business_products SET quantity = ?, stock_status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
         .run(newQty, stockStatus, now, req.params.id, req.user.id);
       updatedRow = await db.prepare('SELECT * FROM business_products WHERE id = ?').get(req.params.id);
+
+      // Also sync corresponding stock records with matching SKU or Name
+      try {
+        const targetSku = bpItem.sku && String(bpItem.sku).trim() && String(bpItem.sku).trim().toUpperCase() !== 'N/A' ? String(bpItem.sku).trim() : null;
+        const targetName = bpItem.name ? String(bpItem.name).trim() : null;
+        let conds = ['id = ?'];
+        let prms = [req.params.id];
+        if (targetSku) {
+          conds.push('sku = ?');
+          prms.push(targetSku);
+        }
+        if (targetName) {
+          conds.push('LOWER(name) = LOWER(?)');
+          prms.push(targetName);
+        }
+        prms.push(req.user.id);
+
+        const matchedStocks = await db.prepare(`SELECT * FROM stock WHERE (${conds.join(' OR ')}) AND user_id = ?`).all(...prms);
+        for (const stk of matchedStocks) {
+          let newStkQty = Number(stk.quantity || 0) + Number(delta);
+          if (newStkQty < 0) newStkQty = 0;
+          await db.prepare('UPDATE stock SET quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+            .run(newStkQty, now, stk.id, req.user.id);
+        }
+      } catch (_) {}
     }
   } catch (e) {}
 
@@ -219,6 +245,35 @@ const adjustQuantity = async (req, res) => {
       if (newQty < 0) newQty = 0;
       await db.prepare('UPDATE stock SET quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?')
         .run(newQty, now, req.params.id, req.user.id);
+
+      // If business_products was not updated in step 1, sync matching business_products
+      if (!bpItem) {
+        try {
+          const targetSku = stockItem.sku && String(stockItem.sku).trim() && String(stockItem.sku).trim().toUpperCase() !== 'N/A' ? String(stockItem.sku).trim() : null;
+          const targetName = stockItem.name ? String(stockItem.name).trim() : null;
+          let bpConds = ['id = ?'];
+          let bpPrms = [req.params.id];
+          if (targetSku) {
+            bpConds.push('sku = ?');
+            bpPrms.push(targetSku);
+          }
+          if (targetName) {
+            bpConds.push('LOWER(name) = LOWER(?)');
+            bpPrms.push(targetName);
+          }
+          bpPrms.push(req.user.id);
+
+          const matchedBps = await db.prepare(`SELECT * FROM business_products WHERE (${bpConds.join(' OR ')}) AND user_id = ?`).all(...bpPrms);
+          for (const bp of matchedBps) {
+            let newBpQty = Number(bp.quantity || 0) + Number(delta);
+            if (newBpQty < 0) newBpQty = 0;
+            const stockStatus = newBpQty === 0 ? 'Out of Stock' : (newBpQty <= (bp.low_stock_threshold || 5) ? 'Low Stock' : 'In Stock');
+            await db.prepare('UPDATE business_products SET quantity = ?, stock_status = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+              .run(newBpQty, stockStatus, now, bp.id, req.user.id);
+          }
+        } catch (_) {}
+      }
+
       if (!updatedRow) {
         updatedRow = enrichRow(await db.prepare('SELECT * FROM stock WHERE id = ?').get(req.params.id));
       }
