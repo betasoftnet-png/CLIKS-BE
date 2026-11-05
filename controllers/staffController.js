@@ -19,7 +19,8 @@ const initColumns = async () => {
         'salary_type',
         'performance_rating',
         'target_score',
-        'leave_balance'
+        'leave_balance',
+        'deduct_tds'
     ];
     for (const col of columns) {
         try {
