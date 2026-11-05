@@ -26,7 +26,8 @@ const initColumns = async () => {
         'break_start',
         'break_end',
         'notes',
-        'shift_id'
+        'shift_id',
+        'updated_at'
     ];
     for (const col of columns) {
         try {
@@ -59,24 +60,51 @@ const parseEmployeeId = (empId) => {
 const attendanceController = {
     // 1. POST /attendance
     createAttendance: async (req, res) => {
-        const { employee_id, date, status, check_in_time, check_out_time, employee_name, late_by_minutes, location_address, overwrite } = req.body;
+        const { 
+            employee_id, 
+            date, 
+            status, 
+            check_in_time, 
+            check_out_time, 
+            employee_name, 
+            late_by_minutes, 
+            location_address, 
+            overwrite,
+            note,
+            notes 
+        } = req.body;
         try {
-            const parsedEmpId = parseEmployeeId(employee_id || 'EMP-001');
+            const rawEmpId = employee_id !== undefined && employee_id !== null ? employee_id : 1;
+            const strEmpId = String(rawEmpId);
+            const parsedEmpId = parseEmployeeId(rawEmpId);
             const targetDate = date || new Date().toISOString().split('T')[0];
+            const targetStatus = status || 'Present';
+            const attendanceNote = note || notes || '';
 
             // Prevent duplicate attendance for the same employee on the same date
-            const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND employee_id = ? AND date = ?').get(req.user.id, parsedEmpId, targetDate);
+            const existing = await db.prepare(
+                'SELECT * FROM attendance WHERE user_id = ? AND (employee_id = ? OR employee_id = ? OR CAST(employee_id AS TEXT) = ?) AND date = ?'
+            ).get(req.user.id, rawEmpId, parsedEmpId, strEmpId, targetDate);
+
             if (existing) {
                 if (overwrite) {
                     await db.prepare(`
-                        UPDATE attendance SET status = ?, check_in_time = ?, check_out_time = ?, employee_name = ?, location_address = ?, updated_at = ?
+                        UPDATE attendance SET 
+                            status = ?, 
+                            check_in_time = ?, 
+                            check_out_time = ?, 
+                            employee_name = ?, 
+                            location_address = ?, 
+                            notes = ?,
+                            updated_at = ?
                         WHERE id = ?
                     `).run(
-                        status || 'present',
+                        targetStatus,
                         check_in_time || '09:00 AM',
                         check_out_time || '06:00 PM',
                         employee_name || 'Staff',
                         location_address || 'Main Office Complex, Mumbai',
+                        attendanceNote,
                         new Date().toISOString(),
                         existing.id
                     );
@@ -87,20 +115,27 @@ const attendanceController = {
             }
 
             const result = await db.prepare(`
-                INSERT INTO attendance (user_id, employee_id, date, status, check_in_time, check_out_time, employee_name, late_by_minutes, location_address, first_punch, last_punch, total_work_hours, break_hours, productive_hours, device_id, geo_fence_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 9.0, 1.0, 8.0, 'MOBILE-GPS-APP', 'Inside')
+                INSERT INTO attendance (
+                    user_id, employee_id, date, status, check_in_time, check_out_time, 
+                    employee_name, late_by_minutes, location_address, first_punch, last_punch, 
+                    total_work_hours, break_hours, productive_hours, device_id, geo_fence_status, notes, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 9.0, 1.0, 8.0, 'MOBILE-GPS-APP', 'Inside', ?, ?, ?)
             `).run(
                 req.user.id,
-                parsedEmpId,
+                rawEmpId,
                 targetDate,
-                status || 'present',
+                targetStatus,
                 check_in_time || '09:00 AM',
                 check_out_time || '06:00 PM',
-                employee_name || 'Arun Kumar (Sales)',
+                employee_name || 'Staff',
                 late_by_minutes || 0,
                 location_address || 'Main Office Complex, Mumbai',
                 check_in_time || '09:00 AM',
-                check_out_time || '06:00 PM'
+                check_out_time || '06:00 PM',
+                attendanceNote,
+                new Date().toISOString(),
+                new Date().toISOString()
             );
 
             const inserted = await db.prepare('SELECT * FROM attendance WHERE id = ?').get(result.lastInsertRowid);
@@ -119,8 +154,8 @@ const attendanceController = {
             const params = [req.user.id];
 
             if (employee_id) {
-                query += ' AND (employee_id = ? OR id = ?)';
-                params.push(employee_id);
+                query += ' AND (employee_id = ? OR CAST(employee_id AS TEXT) = ?)';
+                params.push(employee_id, String(employee_id));
             }
             if (date) {
                 query += ' AND date = ?';
