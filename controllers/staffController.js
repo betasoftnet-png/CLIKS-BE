@@ -25,7 +25,10 @@ const initColumns = async () => {
         'annual_bonus',
         'weekly_off',
         'esi_number',
-        'employee_code'
+        'employee_code',
+        'city',
+        'state',
+        'pincode'
     ];
     for (const col of columns) {
         try {
@@ -152,10 +155,11 @@ const staffController = {
             const existing = await db.prepare('SELECT * FROM employees WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (!existing) return sendError(res, 'Staff member not found', 404);
 
+            const tableCols = (await db.prepare('PRAGMA table_info(employees)').all()).map(c => c.name);
             const updates = [];
             const params = [];
             for (const [key, value] of Object.entries(fields)) {
-                if (key !== 'id' && key !== 'user_id') {
+                if (key !== 'id' && key !== 'user_id' && tableCols.includes(key)) {
                     updates.push(`${key} = ?`);
                     params.push(typeof value === 'object' ? JSON.stringify(value) : value);
                 }
