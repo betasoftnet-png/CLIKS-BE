@@ -110,6 +110,25 @@ const initTableAndColumns = async () => {
             // Column already exists
         }
     }
+
+    // Auto-fix historical Rent records where ITC was erroneously auto-marked as 'Eligible (ITC Claimed)'
+    try {
+        await db.prepare(`
+            UPDATE expenses 
+            SET input_tax_credit = 'Ineligible (Blocked Sec 17(5))' 
+            WHERE LOWER(TRIM(category_name)) = 'rent' 
+            AND (input_tax_credit LIKE '%Eligible%' OR input_tax_credit IS NULL)
+        `).run();
+    } catch (e) {}
+
+    // Sanitize any corrupted astronomical numbers
+    try {
+        await db.prepare(`
+            UPDATE expenses 
+            SET expense_amount = '0.0', amount = 0, subtotal = '0.0', tax_amount = '0.0' 
+            WHERE CAST(expense_amount AS REAL) > 100000000000 OR amount > 100000000000
+        `).run();
+    } catch (e) {}
 };
 initTableAndColumns();
 
@@ -268,7 +287,10 @@ const expensesController = {
     },
 
     createExpense: async (req, res) => {
-        const { category_name, subcategory, payee_name, expense_amount, gst_percentage, payment_mode, transaction_reference, expense_date } = req.body;
+        const { 
+            category_name, subcategory, payee_name, expense_amount, gst_percentage, 
+            payment_mode, transaction_reference, expense_date, amount_type, itc_eligibility 
+        } = req.body;
         try {
             const branchId = req.body.branch_id ? parseInt(req.body.branch_id) : getEffectiveBranchId(req);
             let branchName = req.body.branch_name || '';
@@ -281,10 +303,56 @@ const expensesController = {
 
             const now = new Date().toISOString();
             const expNum = `EXP-2026-${Date.now().toString().slice(-3)}`;
-            const amt = parseFloat(expense_amount) || 0;
+            const rawAmt = parseFloat(expense_amount) || 0;
             const gst = parseFloat(gst_percentage) || 0;
-            const sub = Math.round(amt / (1 + gst / 100));
-            const tax = amt - sub;
+
+            let sub = req.body.subtotal !== undefined ? parseFloat(req.body.subtotal) : null;
+            let tax = req.body.tax_amount !== undefined ? parseFloat(req.body.tax_amount) : null;
+            let amt = rawAmt;
+
+            if (sub === null || tax === null) {
+                if (gst > 0) {
+                    if (amount_type === 'inclusive') {
+                        amt = rawAmt;
+                        sub = Math.round((rawAmt / (1 + gst / 100)) * 100) / 100;
+                        tax = Math.round((amt - sub) * 100) / 100;
+                    } else {
+                        // Exclusive (Base + GST added)
+                        sub = rawAmt;
+                        tax = Math.round((rawAmt * (gst / 100)) * 100) / 100;
+                        amt = Math.round((sub + tax) * 100) / 100;
+                    }
+                } else {
+                    sub = rawAmt;
+                    tax = 0;
+                    amt = rawAmt;
+                }
+            } else {
+                amt = Math.round((sub + tax) * 100) / 100;
+            }
+
+            // Determine ITC eligibility
+            let itc = req.body.input_tax_credit;
+            if (!itc) {
+                if (gst > 0) {
+                    const catLower = (category_name || '').trim().toLowerCase();
+                    const isExplicitIneligible = itc_eligibility === 'ineligible' || 
+                        catLower === 'rent' || 
+                        catLower.includes('food') || 
+                        catLower.includes('catering') || 
+                        catLower.includes('welfare') || 
+                        catLower.includes('personal');
+
+                    if (isExplicitIneligible) {
+                        itc = 'Ineligible (Blocked Sec 17(5))';
+                    } else {
+                        itc = 'Eligible (ITC Claimed)';
+                    }
+                } else {
+                    itc = 'Not Applicable';
+                }
+            }
+
             const finalDate = expense_date || now.split('T')[0];
 
             const result = await db.prepare(`
@@ -297,7 +365,7 @@ const expensesController = {
             `).run(
                 req.user.id, amt, expNum, finalDate, category_name || 'General', subcategory || '',
                 payee_name || '', '', '', amt, gst, sub, tax, payment_mode || 'UPI', transaction_reference || `TXN-${Date.now().toString().slice(-6)}`,
-                gst > 0 ? 'Eligible (ITC Claimed)' : 'Not Applicable', now, now, subcategory || '',
+                itc, now, now, subcategory || '',
                 branchId || null, branchName || ''
             );
 
