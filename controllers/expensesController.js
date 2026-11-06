@@ -101,7 +101,9 @@ const initTableAndColumns = async () => {
         'time',
         'team_members',
         'branch_id',
-        'branch_name'
+        'branch_name',
+        'budget_month',
+        'carry_forward'
     ];
     for (const col of columns) {
         try {
@@ -739,7 +741,7 @@ const expensesController = {
 
     // 9. Budgets
     createBudget: async (req, res) => {
-        const { category_name, budget_limit, team_members } = req.body;
+        const { category_name, budget_limit, budget_month, carry_forward, team_members } = req.body;
         try {
             if (!category_name || !category_name.trim()) {
                 return sendError(res, 'Department name is required.', 400);
@@ -749,10 +751,14 @@ const expensesController = {
                 return sendError(res, 'Budget limit cannot be negative.', 400);
             }
 
-            // Check duplicate department name
-            const existing = await db.prepare("SELECT id FROM expenses WHERE user_id = ? AND is_budget = 'true' AND LOWER(category_name) = ?").get(req.user.id, category_name.trim().toLowerCase());
+            const currentMonthStr = new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
+            const bMonth = budget_month || currentMonthStr;
+            const cForward = carry_forward !== undefined ? (carry_forward ? 'true' : 'false') : 'true';
+
+            // Check duplicate department name for the specific month
+            const existing = await db.prepare("SELECT id FROM expenses WHERE user_id = ? AND is_budget = 'true' AND LOWER(category_name) = ? AND (budget_month = ? OR budget_month IS NULL)").get(req.user.id, category_name.trim().toLowerCase(), bMonth);
             if (existing) {
-                return sendError(res, 'A department budget with this name already exists.', 400);
+                return sendError(res, `A department budget for "${category_name}" already exists for ${bMonth}.`, 400);
             }
 
             // Parse and validate team members
@@ -783,9 +789,9 @@ const expensesController = {
             // 1. Insert budget into expenses table
             const result = await db.prepare(`
                 INSERT INTO expenses (
-                    user_id, amount, category_name, budget_limit, spent_amount, alert_status, is_budget, team_members, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 0, 'Optimal', 'true', ?, ?, ?)
-            `).run(req.user.id, limit, category_name.trim(), limit, membersJson, now, now);
+                    user_id, amount, category_name, budget_limit, spent_amount, alert_status, is_budget, budget_month, carry_forward, team_members, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 0, 'Optimal', 'true', ?, ?, ?, ?, ?)
+            `).run(req.user.id, limit, category_name.trim(), limit, bMonth, cForward, membersJson, now, now);
 
             const department_id = result.lastInsertRowid;
             const memberCount = members.length;
@@ -832,7 +838,7 @@ const expensesController = {
     },
     updateBudget: async (req, res) => {
         const { id } = req.params;
-        const { category_name, budget_limit, team_members } = req.body;
+        const { category_name, budget_limit, budget_month, carry_forward, team_members } = req.body;
         try {
             if (!category_name || !category_name.trim()) {
                 return sendError(res, 'Department name is required.', 400);
@@ -842,10 +848,14 @@ const expensesController = {
                 return sendError(res, 'Budget limit cannot be negative.', 400);
             }
 
-            // Check duplicate department name
-            const existing = await db.prepare("SELECT id FROM expenses WHERE user_id = ? AND is_budget = 'true' AND LOWER(category_name) = ? AND id != ?").get(req.user.id, category_name.trim().toLowerCase(), id);
+            const currentMonthStr = new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
+            const bMonth = budget_month || currentMonthStr;
+            const cForward = carry_forward !== undefined ? (carry_forward ? 'true' : 'false') : 'true';
+
+            // Check duplicate department name for this month excluding self
+            const existing = await db.prepare("SELECT id FROM expenses WHERE user_id = ? AND is_budget = 'true' AND LOWER(category_name) = ? AND (budget_month = ? OR budget_month IS NULL) AND id != ?").get(req.user.id, category_name.trim().toLowerCase(), bMonth, id);
             if (existing) {
-                return sendError(res, 'A department budget with this name already exists.', 400);
+                return sendError(res, `A department budget for "${category_name}" already exists for ${bMonth}.`, 400);
             }
 
             // Parse and validate team members
@@ -875,9 +885,9 @@ const expensesController = {
 
             // 1. Update expenses record
             await db.prepare(`
-                UPDATE expenses SET category_name = ?, amount = ?, budget_limit = ?, team_members = ?, updated_at = ?
+                UPDATE expenses SET category_name = ?, amount = ?, budget_limit = ?, budget_month = ?, carry_forward = ?, team_members = ?, updated_at = ?
                 WHERE id = ? AND user_id = ? AND is_budget = 'true'
-            `).run(category_name.trim(), limit, limit, membersJson, now, id, req.user.id);
+            `).run(category_name.trim(), limit, limit, bMonth, cForward, membersJson, now, id, req.user.id);
 
             const memberCount = members.length;
             const allocatedBudget = memberCount > 0 ? limit / memberCount : 0;
