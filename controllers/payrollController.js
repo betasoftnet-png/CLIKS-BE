@@ -24,6 +24,7 @@ const initColumns = async () => {
         'uan_number',
         'esi_number',
         'loans_data',
+        'advances_data',
         'earnings_data',
         'deductions_data',
         'notes'
@@ -181,7 +182,7 @@ const payrollController = {
                 'basic_salary', 'hra_amount', 'special_allowance', 'bonus_amount', 'overtime_pay',
                 'pf_deduction', 'esi_deduction', 'tds_deduction', 'professional_tax', 'loan_deduction',
                 'payable_days', 'bank_name', 'account_number', 'payslip_number', 'pan_number',
-                'uan_number', 'esi_number', 'loans_data', 'earnings_data', 'deductions_data', 'notes'
+                'uan_number', 'esi_number', 'loans_data', 'advances_data', 'earnings_data', 'deductions_data', 'notes'
             ];
 
             const updates = [];
@@ -355,10 +356,28 @@ const payrollController = {
     },
     postLoan: async (req, res) => {
         const { id } = req.params;
+        const empName = req.body.employee_name;
+        const empId = req.body.employee_id;
         try {
-            await db.prepare('UPDATE payroll SET loans_data = ? WHERE id = ? AND user_id = ?').run(JSON.stringify(req.body), id, req.user.id);
+            let targetId = id;
+            if (empName) {
+                const existing = await db.prepare('SELECT id FROM payroll WHERE user_id = ? AND employee_name = ? ORDER BY id DESC LIMIT 1').get(req.user.id, empName);
+                if (existing) {
+                    targetId = existing.id;
+                } else {
+                    const now = new Date().toISOString();
+                    const month = req.body.month || new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
+                    const resIns = await db.prepare(`
+                        INSERT INTO payroll (user_id, employee_id, employee_name, month, amount, basic_salary, status, loans_data, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+                    `).run(req.user.id, empId || 1, empName, month, 0, 0, JSON.stringify(req.body), now, now);
+                    targetId = resIns.lastInsertRowid;
+                }
+            }
+            await db.prepare('UPDATE payroll SET loans_data = ? WHERE id = ? AND user_id = ?').run(JSON.stringify(req.body), targetId, req.user.id);
             return sendSuccess(res, req.body, 'Loan registered successfully');
         } catch (error) {
+            console.error('[Payroll Controller] postLoan error:', error);
             return sendError(res, 'Loan register failed', 500);
         }
     },
@@ -372,10 +391,40 @@ const payrollController = {
         }
     },
     postAdvanceSalary: async (req, res) => {
-        return sendSuccess(res, req.body, 'Salary advance registered');
+        const { id } = req.params;
+        const empName = req.body.employee_name;
+        const empId = req.body.employee_id;
+        try {
+            let targetId = id;
+            if (empName) {
+                const existing = await db.prepare('SELECT id FROM payroll WHERE user_id = ? AND employee_name = ? ORDER BY id DESC LIMIT 1').get(req.user.id, empName);
+                if (existing) {
+                    targetId = existing.id;
+                } else {
+                    const now = new Date().toISOString();
+                    const month = req.body.recovery_month || req.body.month || new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
+                    const resIns = await db.prepare(`
+                        INSERT INTO payroll (user_id, employee_id, employee_name, month, amount, basic_salary, status, advances_data, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+                    `).run(req.user.id, empId || 1, empName, month, 0, 0, JSON.stringify(req.body), now, now);
+                    targetId = resIns.lastInsertRowid;
+                }
+            }
+            await db.prepare('UPDATE payroll SET advances_data = ? WHERE id = ? AND user_id = ?').run(JSON.stringify(req.body), targetId, req.user.id);
+            return sendSuccess(res, req.body, 'Salary advance registered successfully');
+        } catch (error) {
+            console.error('[Payroll Controller] postAdvanceSalary error:', error);
+            return sendError(res, 'Salary advance registration failed', 500);
+        }
     },
     getAdvanceSalary: async (req, res) => {
-        return sendSuccess(res, { amount: 5000 }, 'Salary advance retrieved');
+        const { id } = req.params;
+        try {
+            const rec = await db.prepare('SELECT advances_data FROM payroll WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            return sendSuccess(res, JSON.parse(rec?.advances_data || '{}'), 'Salary advance retrieved');
+        } catch (error) {
+            return sendError(res, 'Salary advance retrieve failed', 500);
+        }
     },
 
     // Statutory PF / ESI / TDS
