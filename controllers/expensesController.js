@@ -103,7 +103,11 @@ const initTableAndColumns = async () => {
         'branch_id',
         'branch_name',
         'budget_month',
-        'carry_forward'
+        'carry_forward',
+        'proof_file_path',
+        'proof_file_name',
+        'proof_file_type',
+        'proof_timestamp'
     ];
     for (const col of columns) {
         try {
@@ -357,18 +361,46 @@ const expensesController = {
 
             const finalDate = expense_date || now.split('T')[0];
 
+            let proofPath = req.body.proof_file_path || null;
+            let proofName = req.body.proof_file_name || null;
+            let proofType = req.body.proof_file_type || null;
+            let proofTimestamp = now;
+
+            if (req.body.file_data && req.body.file_name) {
+                try {
+                    const base64Data = req.body.file_data.replace(/^data:.*?;base64,/, '');
+                    const ext = path.extname(req.body.file_name) || '.bin';
+                    const safeFilename = `${Date.now()}_${path.basename(req.body.file_name).replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+                    const uploadDir = path.join(__dirname, '../uploads');
+                    if (!fs.existsSync(uploadDir)) {
+                        fs.mkdirSync(uploadDir, { recursive: true });
+                    }
+                    const filePath = path.join(uploadDir, safeFilename);
+                    fs.writeFileSync(filePath, base64Data, 'base64');
+                    
+                    proofPath = `/uploads/${safeFilename}`;
+                    proofName = req.body.file_name;
+                    proofType = ext.replace('.', '').toUpperCase();
+                } catch (err) {
+                    console.error('[Expense Bill Upload] File upload error:', err);
+                }
+            }
+
+            const receiptVal = req.body.receipt || proofName || null;
+
             const result = await db.prepare(`
                 INSERT INTO expenses (
                     user_id, amount, expense_number, expense_date, expense_status, category_name, subcategory,
                     payee_name, payee_phone, payee_gstin, expense_amount, gst_percentage, subtotal, tax_amount,
                     payment_mode, transaction_reference, input_tax_credit, created_at, updated_at, description,
-                    branch_id, branch_name
-                ) VALUES (?, ?, ?, ?, 'paid', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    branch_id, branch_name, proof_file_path, proof_file_name, proof_file_type, proof_timestamp, receipt
+                ) VALUES (?, ?, ?, ?, 'paid', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, amt, expNum, finalDate, category_name || 'General', subcategory || '',
                 payee_name || '', '', '', amt, gst, sub, tax, payment_mode || 'UPI', transaction_reference || `TXN-${Date.now().toString().slice(-6)}`,
                 itc, now, now, subcategory || '',
-                branchId || null, branchName || ''
+                branchId || null, branchName || '',
+                proofPath, proofName, proofType, proofTimestamp, receiptVal
             );
 
             const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
