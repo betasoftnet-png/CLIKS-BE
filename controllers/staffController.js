@@ -47,6 +47,17 @@ const staffController = {
         if (!name) return sendError(res, 'Name is required', 400);
 
         try {
+            if (esi_number && String(esi_number).trim()) {
+                const cleanEsi = String(esi_number).trim();
+                const existingWithEsi = await db.prepare(`
+                    SELECT id, name FROM employees 
+                    WHERE user_id = ? AND (LOWER(esi_number) = LOWER(?) OR LOWER(address) LIKE ?)
+                `).get(req.user.id, cleanEsi, `%"esi_number":"${cleanEsi.toLowerCase()}"%`);
+                if (existingWithEsi) {
+                    return sendError(res, `ESI Number "${cleanEsi}" is already assigned to ${existingWithEsi.name}. ESI Number must be unique.`, 400);
+                }
+            }
+
             const now = new Date().toISOString();
             const result = await db.prepare(`
                 INSERT INTO employees (user_id, name, role, email, phone, salary, status, hire_date, department, designation, address, emergency_contact, bank_details, shift, deduct_tds, monthly_leave_quota, annual_bonus, weekly_off, esi_number, employee_code, created_at, updated_at)
@@ -154,6 +165,17 @@ const staffController = {
         try {
             const existing = await db.prepare('SELECT * FROM employees WHERE id = ? AND user_id = ?').get(id, req.user.id);
             if (!existing) return sendError(res, 'Staff member not found', 404);
+
+            if (fields.esi_number && String(fields.esi_number).trim()) {
+                const cleanEsi = String(fields.esi_number).trim();
+                const existingWithEsi = await db.prepare(`
+                    SELECT id, name FROM employees 
+                    WHERE user_id = ? AND id != ? AND (LOWER(esi_number) = LOWER(?) OR LOWER(address) LIKE ?)
+                `).get(req.user.id, id, cleanEsi, `%"esi_number":"${cleanEsi.toLowerCase()}"%`);
+                if (existingWithEsi) {
+                    return sendError(res, `ESI Number "${cleanEsi}" is already assigned to ${existingWithEsi.name}. ESI Number must be unique.`, 400);
+                }
+            }
 
             const tableCols = (await db.prepare('PRAGMA table_info(employees)').all()).map(c => c.name);
             const updates = [];
