@@ -35,7 +35,7 @@ const productController = {
 
         const rawTax = tax_percentage !== undefined ? tax_percentage : gst_percentage;
         const resolvedTax = (rawTax !== undefined && rawTax !== null && rawTax !== '' && !isNaN(Number(rawTax))) ? Number(rawTax) : 18;
-        const resolvedBarcode = (barcode && String(barcode).trim()) ? String(barcode).trim() : generateUniqueEan13Barcode('890');
+        const resolvedBarcode = (barcode && String(barcode).trim()) ? String(barcode).trim() : null;
 
         const resolvedWarehouseId = warehouse_id || warehouse || 'Main Godown';
         const resolvedWarehouse = warehouse || warehouse_id || 'Main Godown';
@@ -148,11 +148,6 @@ const productController = {
     getProducts: async (req, res) => {
         const { search, category, status, stock_status, warehouse_id, item_role, group_id, subgroup_id } = req.query;
         try {
-            // Auto-backfill missing barcodes for all existing products of this user
-            try {
-                await backfillMissingBarcodes(db, req.user.id);
-            } catch (_) {}
-
             const branchId = getEffectiveBranchId(req);
             let query = '';
             let params = [];
