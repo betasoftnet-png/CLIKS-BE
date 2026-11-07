@@ -77,6 +77,23 @@ const supplierConnectionService = {
         try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN upi_id TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN documents TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN reminder_schedule TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN contact_person TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN supplier_type TEXT DEFAULT 'local'").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN alternate_phone TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN website TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN pan_number TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN tax_type TEXT DEFAULT 'registered'").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN place_of_supply TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN state TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN address TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN billing_address TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN shipping_address TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN pincode TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN country TEXT DEFAULT 'India'").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN credit_limit REAL DEFAULT 200000").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN payment_terms TEXT DEFAULT 'Net 30'").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN opening_balance REAL DEFAULT 0").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_suppliers ADD COLUMN supplier_code TEXT").run(); } catch(e) {}
 
         // 4. Ensure business_purchases has supplier confirmation fields
         try { await db.prepare("ALTER TABLE business_purchases ADD COLUMN supplier_confirmation_status TEXT DEFAULT 'PENDING'").run(); } catch(e) {}
