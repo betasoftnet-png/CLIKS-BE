@@ -209,6 +209,19 @@ if (dbType === 'postgres') {
       "ALTER TABLE business_suppliers ADD COLUMN payment_terms VARCHAR(100) DEFAULT 'Net 30'",
       "ALTER TABLE business_suppliers ADD COLUMN opening_balance NUMERIC DEFAULT 0",
       "ALTER TABLE business_suppliers ADD COLUMN supplier_code VARCHAR(100)",
+      "ALTER TABLE business_products ADD COLUMN display_name VARCHAR(255)",
+      "ALTER TABLE business_products ADD COLUMN short_name VARCHAR(255)",
+      "ALTER TABLE business_products ADD COLUMN wholesale_price NUMERIC DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN dealer_price NUMERIC DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN mrp NUMERIC DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN discount_percentage NUMERIC DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN discount NUMERIC DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN tax_type VARCHAR(50) DEFAULT 'inclusive'",
+      "ALTER TABLE business_products ADD COLUMN primary_unit VARCHAR(50) DEFAULT 'pcs'",
+      "ALTER TABLE business_products ADD COLUMN secondary_unit VARCHAR(50) DEFAULT 'box'",
+      "ALTER TABLE business_products ADD COLUMN conversion_rate NUMERIC DEFAULT 1",
+      "ALTER TABLE business_products ADD COLUMN rack_location VARCHAR(100)",
+      "ALTER TABLE business_products ADD COLUMN gst_percentage NUMERIC DEFAULT 18",
       "CREATE UNIQUE INDEX idx_invoices_inv_num ON invoices(invoice_number)",
       "CREATE UNIQUE INDEX idx_gst_invoices_inv_num ON gst_invoices(invoice_number)"
     ];
@@ -666,7 +679,20 @@ if (dbType === 'postgres') {
       "ALTER TABLE business_suppliers ADD COLUMN credit_limit REAL DEFAULT 200000",
       "ALTER TABLE business_suppliers ADD COLUMN payment_terms TEXT DEFAULT 'Net 30'",
       "ALTER TABLE business_suppliers ADD COLUMN opening_balance REAL DEFAULT 0",
-      "ALTER TABLE business_suppliers ADD COLUMN supplier_code TEXT"
+      "ALTER TABLE business_suppliers ADD COLUMN supplier_code TEXT",
+      "ALTER TABLE business_products ADD COLUMN display_name TEXT",
+      "ALTER TABLE business_products ADD COLUMN short_name TEXT",
+      "ALTER TABLE business_products ADD COLUMN wholesale_price REAL DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN dealer_price REAL DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN mrp REAL DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN discount_percentage REAL DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN discount REAL DEFAULT 0",
+      "ALTER TABLE business_products ADD COLUMN tax_type TEXT DEFAULT 'inclusive'",
+      "ALTER TABLE business_products ADD COLUMN primary_unit TEXT DEFAULT 'pcs'",
+      "ALTER TABLE business_products ADD COLUMN secondary_unit TEXT DEFAULT 'box'",
+      "ALTER TABLE business_products ADD COLUMN conversion_rate REAL DEFAULT 1",
+      "ALTER TABLE business_products ADD COLUMN rack_location TEXT",
+      "ALTER TABLE business_products ADD COLUMN gst_percentage REAL DEFAULT 18"
     ];
     for (const sql of alterCols) {
       try { rawDb.exec(sql); } catch (e) { }

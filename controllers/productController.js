@@ -9,13 +9,15 @@ const productController = {
     createProduct: async (req, res) => {
         const { 
             name, sku, category, unit, quantity, low_stock_threshold, purchase_price, selling_price, brand, product_type, 
-            barcode, serial_number, batch_number, expiry_date, tax_percentage, warehouse_id, 
+            barcode, serial_number, batch_number, expiry_date, tax_percentage, gst_percentage, warehouse_id, warehouse,
             hsn_code, hsn_sac, hsn, has_warranty, warrantyDetails, warranty_period, warrantyPeriod,
-            min_stock, reorder_level, damaged_stock, expired_stock, is_perishable
+            min_stock, reorder_level, damaged_stock, expired_stock, is_perishable,
+            display_name, short_name, wholesale_price, dealer_price, mrp, discount_percentage, discount,
+            tax_type, primary_unit, secondary_unit, conversion_rate, rack_location, rack_number, shelf_number, bin_number, zone
         } = req.body || {};
         
         if (!name) return sendError(res, 'Product name is required', 400);
-        if (req.body?.product_type !== 'service' && (!warehouse_id || !String(warehouse_id).trim())) {
+        if (req.body?.product_type !== 'service' && (!warehouse_id && !warehouse)) {
             return sendError(res, 'Create warehouse first', 400);
         }
         const resolvedHsn = hsn_code || hsn_sac || hsn || null;
@@ -26,23 +28,32 @@ const productController = {
             ? (typeof req.body.raw_materials === 'string' ? req.body.raw_materials : JSON.stringify(req.body.raw_materials))
             : (req.body.rawMaterials !== undefined ? (typeof req.body.rawMaterials === 'string' ? req.body.rawMaterials : JSON.stringify(req.body.rawMaterials)) : null);
 
-        try { await db.prepare("ALTER TABLE business_products ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
-        try { await db.prepare("ALTER TABLE business_products ADD COLUMN is_weighted INTEGER DEFAULT 0").run(); } catch (_) {}
-        try { await db.prepare("ALTER TABLE business_products ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
-        try { await db.prepare("ALTER TABLE inventory ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
-        try { await db.prepare("ALTER TABLE inventory ADD COLUMN is_weighted INTEGER DEFAULT 0").run(); } catch (_) {}
-        try { await db.prepare("ALTER TABLE inventory ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
-        try { await db.prepare("ALTER TABLE stock ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
-        try { await db.prepare("ALTER TABLE stock ADD COLUMN is_weighted INTEGER DEFAULT 0").run(); } catch (_) {}
-        try { await db.prepare("ALTER TABLE stock ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
-
         const rawHasWarranty = has_warranty || warrantyDetails || 'No';
         const isWarrantyYes = rawHasWarranty === 'Yes' || rawHasWarranty === true || String(rawHasWarranty).toLowerCase() === 'yes';
         const finalHasWarranty = isWarrantyYes ? 'Yes' : 'No';
         const finalWarrantyPeriod = isWarrantyYes ? (warranty_period || warrantyPeriod || null) : null;
 
-        const resolvedTax = (tax_percentage !== undefined && tax_percentage !== null && tax_percentage !== '' && !isNaN(Number(tax_percentage))) ? Number(tax_percentage) : 18;
+        const rawTax = tax_percentage !== undefined ? tax_percentage : gst_percentage;
+        const resolvedTax = (rawTax !== undefined && rawTax !== null && rawTax !== '' && !isNaN(Number(rawTax))) ? Number(rawTax) : 18;
         const resolvedBarcode = (barcode && String(barcode).trim()) ? String(barcode).trim() : generateUniqueEan13Barcode('890');
+
+        const resolvedWarehouseId = warehouse_id || warehouse || 'Main Godown';
+        const resolvedWarehouse = warehouse || warehouse_id || 'Main Godown';
+        const resolvedBrand = brand || req.body?.brand || null;
+        const resolvedProductType = product_type || req.body?.product_type || 'product';
+        const resolvedDisplayName = display_name || short_name || null;
+        const resolvedShortName = short_name || display_name || null;
+        const resolvedWholesalePrice = parseFloat(wholesale_price) || 0;
+        const resolvedDealerPrice = parseFloat(dealer_price) || 0;
+        const resolvedMrp = parseFloat(mrp) || 0;
+        const resolvedDiscount = parseFloat(discount_percentage !== undefined ? discount_percentage : discount) || 0;
+        const resolvedTaxType = tax_type || 'inclusive';
+        const resolvedUnit = primary_unit || unit || 'PCS';
+        const resolvedPrimaryUnit = primary_unit || unit || 'pcs';
+        const resolvedSecondaryUnit = secondary_unit || 'box';
+        const resolvedConversionRate = parseFloat(conversion_rate) || 1;
+        const resolvedRackNumber = rack_number || rack_location || null;
+        const resolvedRackLocation = rack_location || rack_number || null;
 
         try {
             const now = new Date().toISOString();
@@ -50,45 +61,48 @@ const productController = {
             try {
                 result = await db.prepare(`
                     INSERT INTO business_products (
-                        user_id, name, sku, category, brand, product_type, unit, status, stock_status, quantity, low_stock_threshold,
-                        purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                        tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, shelf_number, bin_number, zone,
-                        item_role, group_id, subgroup_id, is_group_product, raw_materials, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        user_id, name, display_name, short_name, sku, category, brand, product_type, unit, primary_unit, secondary_unit, conversion_rate, status, stock_status, quantity, low_stock_threshold,
+                        purchase_price, selling_price, wholesale_price, dealer_price, mrp, discount_percentage, discount, barcode, serial_number, batch_number, expiry_date,
+                        tax_percentage, gst_percentage, tax_type, warehouse_id, warehouse, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, rack_location, shelf_number, bin_number, zone,
+                        item_role, group_id, subgroup_id, is_group_product, is_weighted, raw_materials, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
-                    req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
-                    purchase_price || 0, selling_price || 0, resolvedBarcode, serial_number || null,
-                    batch_number || null, expiry_date || null, resolvedTax, warehouse_id || null,
-                    resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
-                    req.body.item_role || 'standard', req.body.group_id || null, req.body.subgroup_id || null, is_group_product, raw_materials, now, now
+                    req.user.id, name, resolvedDisplayName, resolvedShortName, sku || null, category || null, resolvedBrand, resolvedProductType, resolvedUnit, resolvedPrimaryUnit, resolvedSecondaryUnit, resolvedConversionRate, quantity || 0, low_stock_threshold || 5,
+                    purchase_price || 0, selling_price || 0, resolvedWholesalePrice, resolvedDealerPrice, resolvedMrp, resolvedDiscount, resolvedDiscount, resolvedBarcode, serial_number || null,
+                    batch_number || null, expiry_date || null, resolvedTax, resolvedTax, resolvedTaxType, resolvedWarehouseId, resolvedWarehouse,
+                    resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, resolvedRackNumber, resolvedRackLocation, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
+                    req.body.item_role || 'standard', req.body.group_id || null, req.body.subgroup_id || null, is_group_product, is_weighted, raw_materials, now, now
                 );
             } catch (insertError) {
-                // If column is missing in legacy SQLite schema, auto-migrate and retry
-                if (insertError && insertError.message && (insertError.message.includes('has_warranty') || insertError.message.includes('no such column'))) {
-                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN has_warranty TEXT DEFAULT 'No'").run(); } catch (_) {}
-                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN warranty_period TEXT").run(); } catch (_) {}
-                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN bin_number TEXT").run(); } catch (_) {}
-                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN zone TEXT").run(); } catch (_) {}
-                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN is_group_product INTEGER DEFAULT 0").run(); } catch (_) {}
-                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN raw_materials TEXT").run(); } catch (_) {}
-                    
-                    result = await db.prepare(`
-                        INSERT INTO business_products (
-                            user_id, name, sku, category, brand, product_type, unit, status, stock_status, quantity, low_stock_threshold,
-                            purchase_price, selling_price, barcode, serial_number, batch_number, expiry_date,
-                            tax_percentage, warehouse_id, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, shelf_number, bin_number, zone,
-                            is_group_product, raw_materials, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    `).run(
-                        req.user.id, name, sku || null, category || null, req.body.brand || null, req.body.product_type || 'product', unit || 'PCS', quantity || 0, low_stock_threshold || 5,
-                        purchase_price || 0, selling_price || 0, resolvedBarcode, serial_number || null,
-                        batch_number || null, expiry_date || null, resolvedTax, warehouse_id || null,
-                        resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, req.body.rack_number || null, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
-                        is_group_product, raw_materials, now, now
-                    );
-                } else {
-                    throw insertError;
-                }
+                // If column is missing in legacy schema, auto-migrate and retry
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN display_name TEXT").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN short_name TEXT").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN wholesale_price REAL DEFAULT 0").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN dealer_price REAL DEFAULT 0").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN mrp REAL DEFAULT 0").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN discount_percentage REAL DEFAULT 0").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN discount REAL DEFAULT 0").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN tax_type TEXT DEFAULT 'inclusive'").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN primary_unit TEXT DEFAULT 'pcs'").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN secondary_unit TEXT DEFAULT 'box'").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN conversion_rate REAL DEFAULT 1").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN rack_location TEXT").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN gst_percentage REAL DEFAULT 18").run(); } catch (_) {}
+
+                result = await db.prepare(`
+                    INSERT INTO business_products (
+                        user_id, name, display_name, short_name, sku, category, brand, product_type, unit, primary_unit, secondary_unit, conversion_rate, status, stock_status, quantity, low_stock_threshold,
+                        purchase_price, selling_price, wholesale_price, dealer_price, mrp, discount_percentage, discount, barcode, serial_number, batch_number, expiry_date,
+                        tax_percentage, gst_percentage, tax_type, warehouse_id, warehouse, hsn_code, has_warranty, warranty_period, min_stock, reorder_level, damaged_stock, expired_stock, is_perishable, rack_number, rack_location, shelf_number, bin_number, zone,
+                        is_group_product, raw_materials, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'In Stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    req.user.id, name, resolvedDisplayName, resolvedShortName, sku || null, category || null, resolvedBrand, resolvedProductType, resolvedUnit, resolvedPrimaryUnit, resolvedSecondaryUnit, resolvedConversionRate, quantity || 0, low_stock_threshold || 5,
+                    purchase_price || 0, selling_price || 0, resolvedWholesalePrice, resolvedDealerPrice, resolvedMrp, resolvedDiscount, resolvedDiscount, resolvedBarcode, serial_number || null,
+                    batch_number || null, expiry_date || null, resolvedTax, resolvedTax, resolvedTaxType, resolvedWarehouseId, resolvedWarehouse,
+                    resolvedHsn, finalHasWarranty, finalWarrantyPeriod, min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, is_perishable ? 1 : 0, resolvedRackNumber, resolvedRackLocation, req.body.shelf_number || null, req.body.bin_number || null, req.body.zone || null,
+                    is_group_product, raw_materials, now, now
+                );
             }
 
             if (result && result.lastInsertRowid) {
@@ -241,22 +255,35 @@ const productController = {
             const newStockStatus = body.stock_status || (newQuantity <= 0 ? 'Out of Stock' : 'In Stock');
 
             const name = body.name !== undefined && body.name !== null ? body.name : product.name;
+            const display_name = body.display_name !== undefined ? body.display_name : (body.short_name !== undefined ? body.short_name : product.display_name);
+            const short_name = body.short_name !== undefined ? body.short_name : (body.display_name !== undefined ? body.display_name : product.short_name);
             const sku = body.sku !== undefined ? body.sku : product.sku;
             const category = body.category !== undefined ? body.category : product.category;
             const brand = body.brand !== undefined ? body.brand : product.brand;
             const product_type = body.product_type !== undefined ? body.product_type : (product.product_type || 'product');
-            const unit = body.unit !== undefined ? body.unit : (product.unit || 'PCS');
+            const unit = body.unit !== undefined ? body.unit : (body.primary_unit !== undefined ? body.primary_unit : (product.unit || 'PCS'));
+            const primary_unit = body.primary_unit !== undefined ? body.primary_unit : (body.unit !== undefined ? body.unit : (product.primary_unit || 'pcs'));
+            const secondary_unit = body.secondary_unit !== undefined ? body.secondary_unit : (product.secondary_unit || 'box');
+            const conversion_rate = body.conversion_rate !== undefined ? parseFloat(body.conversion_rate) : (product.conversion_rate || 1);
             const status = body.status !== undefined ? body.status : product.status;
             const low_stock_threshold = body.low_stock_threshold !== undefined ? body.low_stock_threshold : product.low_stock_threshold;
-            const purchase_price = body.purchase_price !== undefined ? body.purchase_price : product.purchase_price;
-            const selling_price = body.selling_price !== undefined ? body.selling_price : (body.price !== undefined ? body.price : product.selling_price);
+            const purchase_price = body.purchase_price !== undefined ? parseFloat(body.purchase_price) : product.purchase_price;
+            const selling_price = body.selling_price !== undefined ? parseFloat(body.selling_price) : (body.price !== undefined ? parseFloat(body.price) : product.selling_price);
+            const wholesale_price = body.wholesale_price !== undefined ? parseFloat(body.wholesale_price) : (product.wholesale_price || 0);
+            const dealer_price = body.dealer_price !== undefined ? parseFloat(body.dealer_price) : (product.dealer_price || 0);
+            const mrp = body.mrp !== undefined ? parseFloat(body.mrp) : (product.mrp || 0);
+            const discount_percentage = body.discount_percentage !== undefined ? parseFloat(body.discount_percentage) : (body.discount !== undefined ? parseFloat(body.discount) : (product.discount_percentage || 0));
+            const discount = discount_percentage;
             const barcode = body.barcode !== undefined ? body.barcode : product.barcode;
             const serial_number = body.serial_number !== undefined ? body.serial_number : product.serial_number;
             const batch_number = body.batch_number !== undefined ? body.batch_number : product.batch_number;
             const expiry_date = body.expiry_date !== undefined ? body.expiry_date : product.expiry_date;
-            const rawTax = body.tax_percentage !== undefined ? body.tax_percentage : (body.taxRate !== undefined ? body.taxRate : product.tax_percentage);
+            const rawTax = body.tax_percentage !== undefined ? body.tax_percentage : (body.gst_percentage !== undefined ? body.gst_percentage : (body.taxRate !== undefined ? body.taxRate : product.tax_percentage));
             const resolvedTax = (rawTax !== undefined && rawTax !== null && rawTax !== '' && !isNaN(Number(rawTax))) ? Number(rawTax) : 18;
-            const warehouse_id = body.warehouse_id !== undefined ? body.warehouse_id : product.warehouse_id;
+            const gst_percentage = resolvedTax;
+            const tax_type = body.tax_type !== undefined ? body.tax_type : (product.tax_type || 'inclusive');
+            const warehouse_id = body.warehouse_id !== undefined ? body.warehouse_id : (body.warehouse !== undefined ? body.warehouse : product.warehouse_id);
+            const warehouse = body.warehouse !== undefined ? body.warehouse : (body.warehouse_id !== undefined ? body.warehouse_id : product.warehouse);
             const resolvedHsn = body.hsn_code || body.hsn_sac || body.hsn || product.hsn_code || null;
             const has_warranty = body.has_warranty !== undefined ? body.has_warranty : (product.has_warranty || 'No');
             const warranty_period = body.warranty_period !== undefined ? body.warranty_period : product.warranty_period;
@@ -266,7 +293,8 @@ const productController = {
             
             const damaged_stock = body.damaged_stock !== undefined ? parseFloat(body.damaged_stock) : (product.damaged_stock || 0);
             const expired_stock = body.expired_stock !== undefined ? parseFloat(body.expired_stock) : (product.expired_stock || 0);
-            const rack_number = body.rack_number !== undefined ? body.rack_number : product.rack_number;
+            const rack_number = body.rack_number !== undefined ? body.rack_number : (body.rack_location !== undefined ? body.rack_location : product.rack_number);
+            const rack_location = body.rack_location !== undefined ? body.rack_location : (body.rack_number !== undefined ? body.rack_number : product.rack_location);
             const shelf_number = body.shelf_number !== undefined ? body.shelf_number : product.shelf_number;
             const bin_number = body.bin_number !== undefined ? body.bin_number : product.bin_number;
             const zone = body.zone !== undefined ? body.zone : product.zone;
@@ -287,19 +315,19 @@ const productController = {
             try {
                 await db.prepare(`
                     UPDATE business_products SET
-                        name = ?, sku = ?, category = ?, brand = ?, product_type = ?, unit = ?, status = ?, stock_status = ?, quantity = ?,
-                        low_stock_threshold = ?, purchase_price = ?, selling_price = ?, barcode = ?,
-                        serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?,
-                        warehouse_id = ?, hsn_code = ?, has_warranty = ?, warranty_period = ?,
-                        min_stock = ?, reorder_level = ?, damaged_stock = ?, expired_stock = ?, rack_number = ?, shelf_number = ?, bin_number = ?, zone = ?,
+                        name = ?, display_name = ?, short_name = ?, sku = ?, category = ?, brand = ?, product_type = ?, unit = ?, primary_unit = ?, secondary_unit = ?, conversion_rate = ?, status = ?, stock_status = ?, quantity = ?,
+                        low_stock_threshold = ?, purchase_price = ?, selling_price = ?, wholesale_price = ?, dealer_price = ?, mrp = ?, discount_percentage = ?, discount = ?, barcode = ?,
+                        serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?, gst_percentage = ?, tax_type = ?,
+                        warehouse_id = ?, warehouse = ?, hsn_code = ?, has_warranty = ?, warranty_period = ?,
+                        min_stock = ?, reorder_level = ?, damaged_stock = ?, expired_stock = ?, rack_number = ?, rack_location = ?, shelf_number = ?, bin_number = ?, zone = ?,
                         item_role = ?, group_id = ?, subgroup_id = ?, is_group_product = ?, raw_materials = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
-                    name, sku || null, category || null, brand || null, product_type || 'product', unit, status || 'active', newStockStatus,
-                    newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0,
+                    name, display_name || null, short_name || null, sku || null, category || null, brand || null, product_type || 'product', unit, primary_unit || 'pcs', secondary_unit || 'box', conversion_rate || 1, status || 'active', newStockStatus,
+                    newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0, wholesale_price || 0, dealer_price || 0, mrp || 0, discount_percentage || 0, discount || 0,
                     barcode || null, serial_number || null, batch_number || null, expiry_date || null,
-                    resolvedTax, warehouse_id || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null,
-                    min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, rack_number || null, shelf_number || null, bin_number || null, zone || null,
+                    resolvedTax, gst_percentage || 18, tax_type || 'inclusive', warehouse_id || 'Main Godown', warehouse || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null,
+                    min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, rack_number || null, rack_location || null, shelf_number || null, bin_number || null, zone || null,
                     item_role, group_id, subgroup_id, is_group_product, raw_materials, new Date().toISOString(), targetId, req.user.id
                 );
             } catch (sqlErr) {
