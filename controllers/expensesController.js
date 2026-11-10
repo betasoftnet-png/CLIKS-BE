@@ -915,11 +915,13 @@ const expensesController = {
             const now = new Date().toISOString();
             const membersJson = JSON.stringify(members);
 
+            const spentAmtVal = req.body.spent_amount !== undefined ? (parseFloat(req.body.spent_amount) || 0) : null;
+
             // 1. Update expenses record
             await db.prepare(`
-                UPDATE expenses SET category_name = ?, amount = ?, budget_limit = ?, budget_month = ?, carry_forward = ?, team_members = ?, updated_at = ?
+                UPDATE expenses SET category_name = ?, amount = ?, budget_limit = ?, budget_month = ?, carry_forward = ?, team_members = ?, spent_amount = COALESCE(?, spent_amount), updated_at = ?
                 WHERE id = ? AND user_id = ? AND is_budget = 'true'
-            `).run(category_name.trim(), limit, limit, bMonth, cForward, membersJson, now, id, req.user.id);
+            `).run(category_name.trim(), limit, limit, bMonth, cForward, membersJson, spentAmtVal, now, id, req.user.id);
 
             const memberCount = members.length;
             const allocatedBudget = memberCount > 0 ? limit / memberCount : 0;
