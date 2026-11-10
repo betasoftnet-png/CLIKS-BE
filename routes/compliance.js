@@ -139,7 +139,7 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
     const docNo = req.body.document_number || `CLK-INV-${Math.floor(1000 + Math.random() * 9000)}`;
     const docDate = req.body.document_date ? formatDateDDMMYYYY(req.body.document_date) : "16/09/2026";
     const buyerGstin = req.body.buyer_details?.gstin || req.body.customer_gstin || "09AAAPG7885R002";
-    const clientName = req.body.buyer_details?.legal_name || req.body.customer_name || req.body.client_name || "Sthuthya Consignee";
+    const clientName = req.body.buyer_details?.legal_name || req.body.customer_name || req.body.client_name || "Customer";
     const prodName = req.body.product_name || req.body.sender_product_name || req.body.receiver_product_name || "Wheat";
     
     // Masters India requires at least 6 digits for HSN
@@ -585,7 +585,7 @@ router.post('/generate-ewaybill', async (req, res) => {
       state_of_consignor: (req.body.consignor_state || "UTTARAKHAND").toUpperCase(),
       actual_from_state_name: (req.body.consignor_state || "UTTARAKHAND").toUpperCase(),
       gstin_of_consignee: "05AAABC0181E1ZE",
-      legal_name_of_consignee: "Sthuthya Consignee",
+      legal_name_of_consignee: req.body.consignee_name || req.body.customer_name || req.body.client_name || "Consignee",
       address1_of_consignee: req.body.delivery_destination || req.body.delivery_location || shippingAddress || "Rajpur Road",
       place_of_consignee: "Dehradun",
       pincode_of_consignee: 248001,
@@ -868,13 +868,16 @@ router.get(['/ewaybills', '/ewaybill'], requireBusinessAccount, async (req, res)
 // ────────────────────────────────────────────────────────────────────────────
 router.get(['/invoices', '/einvoices', '/einvoice'], async (req, res) => {
   try {
-    const userId = req.user?.id || req.user?.userId || 1;
+    const userId = req.user?.id || req.user?.userId;
+    if (!userId) {
+      return res.status(200).json({ success: true, data: [], results: { message: [], invoices: [] } });
+    }
 
     let invRows = [];
     try {
       invRows = await db.prepare(`
         SELECT * FROM business_invoices 
-        WHERE user_id = ? OR user_id = 1
+        WHERE user_id = ? AND (Irn IS NOT NULL AND Irn != '' AND Irn NOT LIKE 'IRN-TEST%')
         ORDER BY id DESC
       `).all(userId);
     } catch (e) {
@@ -885,7 +888,11 @@ router.get(['/invoices', '/einvoices', '/einvoice'], async (req, res) => {
     try {
       gstRows = await db.prepare(`
         SELECT * FROM gst_invoices 
-        WHERE user_id = ? OR user_id = 1
+        WHERE user_id = ? 
+          AND (is_eway_bill IS NULL OR is_eway_bill NOT IN ('true', '1', 1))
+          AND (is_reconciliation IS NULL OR is_reconciliation NOT IN ('true', '1', 1))
+          AND (irn_number IS NOT NULL AND irn_number != '' AND irn_number NOT LIKE 'IRN-TEST%')
+          AND (client_name NOT LIKE '%Test Customer%' AND client_name NOT LIKE '%Sthuthya Consignee%')
         ORDER BY id DESC
       `).all(userId);
     } catch (e) {
