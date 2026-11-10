@@ -306,6 +306,10 @@ const productController = {
                 : (body.rawMaterials !== undefined ? (typeof body.rawMaterials === 'string' ? body.rawMaterials : JSON.stringify(body.rawMaterials)) : (product.raw_materials || null));
 
             const targetId = product.id;
+            const resolvedWarehouseId = product_type === 'service' ? null : (warehouse_id || 'Main Godown');
+            const resolvedWarehouse = product_type === 'service' ? null : (warehouse || 'Main Godown');
+            const resolvedRackNumber = product_type === 'service' ? null : (rack_number || null);
+            const resolvedRackLocation = product_type === 'service' ? null : (rack_location || null);
 
             try {
                 await db.prepare(`
@@ -321,20 +325,58 @@ const productController = {
                     name, display_name || null, short_name || null, sku || null, category || null, brand || null, product_type || 'product', unit, primary_unit || 'pcs', secondary_unit || 'box', conversion_rate || 1, status || 'active', newStockStatus,
                     newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0, wholesale_price || 0, dealer_price || 0, mrp || 0, discount_percentage || 0, discount || 0,
                     barcode || null, serial_number || null, batch_number || null, expiry_date || null,
-                    resolvedTax, gst_percentage || 18, tax_type || 'inclusive', warehouse_id || 'Main Godown', warehouse || 'Main Godown', resolvedHsn, has_warranty, warranty_period || null,
-                    min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, rack_number || null, rack_location || null, shelf_number || null, bin_number || null, zone || null,
+                    resolvedTax, gst_percentage || 18, tax_type || 'inclusive', resolvedWarehouseId, resolvedWarehouse, resolvedHsn, has_warranty, warranty_period || null,
+                    min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, resolvedRackNumber, resolvedRackLocation, shelf_number || null, bin_number || null, zone || null,
                     item_role, group_id, subgroup_id, is_group_product, raw_materials, new Date().toISOString(), targetId, req.user.id
                 );
             } catch (sqlErr) {
+                console.error('[Product Controller] Update product error, attempting migration and retry:', sqlErr);
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN display_name TEXT").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN short_name TEXT").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN wholesale_price REAL DEFAULT 0").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN dealer_price REAL DEFAULT 0").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN mrp REAL DEFAULT 0").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN discount_percentage REAL DEFAULT 0").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN discount REAL DEFAULT 0").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN tax_type TEXT DEFAULT 'inclusive'").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN primary_unit TEXT DEFAULT 'pcs'").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN secondary_unit TEXT DEFAULT 'box'").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN conversion_rate REAL DEFAULT 1").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN rack_location TEXT").run(); } catch (_) {}
+                try { await db.prepare("ALTER TABLE business_products ADD COLUMN gst_percentage REAL DEFAULT 18").run(); } catch (_) {}
+
                 await db.prepare(`
                     UPDATE business_products SET
-                        name = ?, sku = ?, category = ?, brand = ?, product_type = ?, status = ?, stock_status = ?, quantity = ?,
-                        selling_price = ?, hsn_code = ?, item_role = ?, is_group_product = ?, raw_materials = ?, updated_at = ?
+                        name = ?, display_name = ?, short_name = ?, sku = ?, category = ?, brand = ?, product_type = ?, unit = ?, primary_unit = ?, secondary_unit = ?, conversion_rate = ?, status = ?, stock_status = ?, quantity = ?,
+                        low_stock_threshold = ?, purchase_price = ?, selling_price = ?, wholesale_price = ?, dealer_price = ?, mrp = ?, discount_percentage = ?, discount = ?, barcode = ?,
+                        serial_number = ?, batch_number = ?, expiry_date = ?, tax_percentage = ?, gst_percentage = ?, tax_type = ?,
+                        warehouse_id = ?, warehouse = ?, hsn_code = ?, has_warranty = ?, warranty_period = ?,
+                        min_stock = ?, reorder_level = ?, damaged_stock = ?, expired_stock = ?, rack_number = ?, rack_location = ?, shelf_number = ?, bin_number = ?, zone = ?,
+                        item_role = ?, group_id = ?, subgroup_id = ?, is_group_product = ?, raw_materials = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                 `).run(
-                    name, sku || null, category || null, brand || null, product_type || 'product', status || 'active', newStockStatus,
-                    newQuantity, selling_price || 0, resolvedHsn, item_role, is_group_product, raw_materials, new Date().toISOString(), targetId, req.user.id
+                    name, display_name || null, short_name || null, sku || null, category || null, brand || null, product_type || 'product', unit, primary_unit || 'pcs', secondary_unit || 'box', conversion_rate || 1, status || 'active', newStockStatus,
+                    newQuantity, low_stock_threshold || 5, purchase_price || 0, selling_price || 0, wholesale_price || 0, dealer_price || 0, mrp || 0, discount_percentage || 0, discount || 0,
+                    barcode || null, serial_number || null, batch_number || null, expiry_date || null,
+                    resolvedTax, gst_percentage || 18, tax_type || 'inclusive', resolvedWarehouseId, resolvedWarehouse, resolvedHsn, has_warranty, warranty_period || null,
+                    min_stock || 0, reorder_level || 0, damaged_stock || 0, expired_stock || 0, resolvedRackNumber, resolvedRackLocation, shelf_number || null, bin_number || null, zone || null,
+                    item_role, group_id, subgroup_id, is_group_product, raw_materials, new Date().toISOString(), targetId, req.user.id
                 );
+            }
+
+            // Sync updated product info to stock and inventory tables if matching sku or name
+            if (product_type === 'product') {
+                try {
+                    await db.prepare(`
+                        UPDATE stock SET
+                            unit_price = ?, category = ?, warehouse = ?, location = ?, unit = ?, rack_number = ?, zone = ?, updated_at = ?
+                        WHERE user_id = ? AND (sku = ? OR LOWER(name) = LOWER(?))
+                    `).run(
+                        selling_price || 0, category || 'General', resolvedWarehouse || 'Main Godown', resolvedWarehouse || 'Main Godown',
+                        primary_unit || unit || 'pcs', resolvedRackNumber, zone || null, new Date().toISOString(),
+                        req.user.id, sku || '', name || ''
+                    );
+                } catch (e) {}
             }
 
             // Sync updated HSN code to stock and inventory tables if matching sku or name
