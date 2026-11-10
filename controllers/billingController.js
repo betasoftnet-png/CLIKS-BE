@@ -243,6 +243,17 @@ const billingController = {
                 });
             }
 
+            let finalStatus = status || 'Draft';
+            if (finalStatus !== 'Draft' && finalStatus !== 'Cancelled') {
+                if (numPaid <= 0) {
+                    finalStatus = 'Unpaid';
+                } else if (numPaid < numTotal) {
+                    finalStatus = 'Partially Paid';
+                } else {
+                    finalStatus = 'Paid';
+                }
+            }
+
             const result = await db.prepare(`
                 INSERT INTO business_invoices (
                     user_id, customer_id, invoice_number, client_name, client_email, client_gstin,
@@ -255,7 +266,7 @@ const billingController = {
                 req.user.id, resolvedCustomerId, invNum, client_name, client_email || null, client_gstin || null,
                 billing_address || null, shipping_address || null, numAmount, numTax, numTotal,
                 numPaid, numDue, bank_account_id || null, numDiscount, numRoundOff,
-                status || 'Draft', due_date, payment_mode || 'Cash', invoice_type || 'GST', tax_type || 'Exclusive', sendToCustVal, sendToCustVal,
+                finalStatus, due_date, payment_mode || 'Cash', invoice_type || 'GST', tax_type || 'Exclusive', sendToCustVal, sendToCustVal,
                 typeof items === 'string' ? items : JSON.stringify(items || []),
                 billedByName, resolvedBranchId, resolvedBranchName, now, now
             );
@@ -503,10 +514,21 @@ const billingController = {
         const numAmount = parseFloat(amount) || 0;
         const numTax = parseFloat(tax_amount) || 0;
         const numTotal = parseFloat(total_amount) || numAmount;
-        const numPaid = parseFloat(paid_amount) || numTotal;
-        const numDue = parseFloat(due_amount) || 0;
+        const numPaid = paid_amount !== undefined && paid_amount !== null && !isNaN(parseFloat(paid_amount)) ? parseFloat(paid_amount) : (status === 'Paid' ? numTotal : 0);
+        const numDue = due_amount !== undefined && due_amount !== null && !isNaN(parseFloat(due_amount)) ? parseFloat(due_amount) : Math.max(0, numTotal - numPaid);
         const numDiscount = parseFloat(discount_amount) || 0;
         const numRoundOff = parseFloat(round_off) || 0;
+
+        let finalStatus = status || 'Unpaid';
+        if (finalStatus !== 'Draft' && finalStatus !== 'Cancelled') {
+            if (numPaid <= 0) {
+                finalStatus = 'Unpaid';
+            } else if (numPaid < numTotal) {
+                finalStatus = 'Partially Paid';
+            } else {
+                finalStatus = 'Paid';
+            }
+        }
 
         let parsedItems = [];
         if (typeof items === 'string') {
@@ -542,7 +564,7 @@ const billingController = {
             `).run(
                 client_name, client_email, client_gstin || null, billing_address || null, shipping_address || null,
                 numAmount, numTax, numTotal, numPaid, numDue, bank_account_id || null,
-                numDiscount, numRoundOff, status || 'Unpaid', due_date, payment_mode || 'Cash', invoice_type || 'GST',
+                numDiscount, numRoundOff, finalStatus, due_date, payment_mode || 'Cash', invoice_type || 'GST',
                 tax_type || 'Exclusive', typeof items === 'string' ? items : JSON.stringify(items || []),
                 now, id, req.user.id
             );
@@ -712,9 +734,87 @@ const billingController = {
 
     // 9. History / Timeline
     getInvoiceHistory: async (req, res) => {
+        const { id } = req.params;
         try {
-            return sendSuccess(res, [], 'Timeline fetched successfully');
-        } catch (e) { return sendError(res, 'Failed to fetch timeline', 500); }
+            let inv;
+            if (isNaN(id)) {
+                inv = await db.prepare('SELECT * FROM business_invoices WHERE invoice_number = ? AND user_id = ?').get(id, req.user.id);
+            } else {
+                inv = await db.prepare('SELECT * FROM business_invoices WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            }
+            if (!inv) return sendError(res, 'Invoice not found', 404);
+
+            const timeline = [];
+            // 1. Created
+            timeline.push({
+                type: 'created',
+                title: 'Invoice Generated',
+                description: `Invoice created as ${inv.invoice_type || 'GST'} with base amount ₹${inv.amount}`,
+                timestamp: inv.created_at,
+                data: { amount: inv.amount, invoice_number: inv.invoice_number }
+            });
+
+            // 2. Tax & Discounts
+            if ((inv.tax_amount && inv.tax_amount > 0) || (inv.discount_amount && inv.discount_amount > 0)) {
+                timeline.push({
+                    type: 'adjustments',
+                    title: 'Tax & Discounts Applied',
+                    description: `Tax: ₹${inv.tax_amount || 0}, Discount: ₹${inv.discount_amount || 0}`,
+                    timestamp: inv.created_at,
+                    data: { tax_amount: inv.tax_amount, discount_amount: inv.discount_amount }
+                });
+            }
+
+            // 3. E-Invoice if present
+            if (inv.Irn || inv.AckNo) {
+                timeline.push({
+                    type: 'einvoice',
+                    title: 'E-Invoice IRN Generated',
+                    description: `Ack No: ${inv.AckNo || inv.ack_no}`,
+                    timestamp: inv.AckDt || inv.created_at,
+                    data: { ack_no: inv.AckNo || inv.ack_no }
+                });
+            }
+
+            // 4. Payments from business_invoice_payments
+            try {
+                const payments = await db.prepare('SELECT * FROM business_invoice_payments WHERE invoice_id = ? ORDER BY payment_date ASC').all(inv.id);
+                if (payments && payments.length > 0) {
+                    payments.forEach(p => {
+                        timeline.push({
+                            type: 'payment',
+                            title: `Payment Received: ₹${p.amount}`,
+                            description: `Mode: ${p.payment_method || 'Cash'}${p.reference_number ? ` (Ref: ${p.reference_number})` : ''}`,
+                            timestamp: p.payment_date,
+                            data: p
+                        });
+                    });
+                }
+            } catch (pe) {}
+
+            // 5. Current Payment Status
+            const total = parseFloat(inv.total_amount || inv.amount || 0);
+            const paid = parseFloat(inv.paid_amount || 0);
+            const due = inv.due_amount !== undefined ? parseFloat(inv.due_amount) : Math.max(0, total - paid);
+            let statusDesc = `Full payment of ₹${total} received via ${inv.payment_mode || 'Cash'}.`;
+            if (paid <= 0) {
+                statusDesc = `Awaiting full payment of ₹${total} via ${inv.payment_mode || 'Cash'}.`;
+            } else if (paid < total) {
+                statusDesc = `Partial payment of ₹${paid} received. Balance due: ₹${due}.`;
+            }
+            timeline.push({
+                type: 'status',
+                title: `Status: ${inv.status ? inv.status.toUpperCase() : 'ACTIVE'}`,
+                description: statusDesc,
+                timestamp: inv.updated_at || inv.created_at,
+                data: { status: inv.status, paid_amount: paid, due_amount: due, total_amount: total }
+            });
+
+            return sendSuccess(res, timeline, 'Timeline fetched successfully');
+        } catch (e) { 
+            console.error('[Billing Controller] getInvoiceHistory error:', e);
+            return sendError(res, 'Failed to fetch timeline', 500); 
+        }
     },
 
     // 10. Reports
