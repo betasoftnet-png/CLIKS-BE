@@ -79,7 +79,7 @@ const purchaseController = {
             } else if (doc_type === 'BILL') {
                 const totalPaid = (parseFloat(paid_amount) || 0) + (parseFloat(advance_amount) || 0);
                 const gTotal = parseFloat(grand_total) || 0;
-                if (payment_mode === 'Credit' || payment_mode === 'Payables' || totalPaid < gTotal) {
+                if (payment_mode === 'Credit' || payment_mode === 'Payables' || totalPaid < gTotal || totalPaid === 0) {
                     finalStatus = 'Pending';
                     finalPaymentStatus = 'pending';
                 } else {
@@ -109,7 +109,7 @@ const purchaseController = {
             `).run(
                 req.user.id, purchaseNum, purchase_type || 'GST', purchase_date || now.split('T')[0], due_date || now.split('T')[0], doc_type || 'PO', finalStatus,
                 supplierName, supplier_gstin || null, billing_address || null, contact_number || null, warehouse_id || 'Main Godown',
-                purchase_by || null, finalPaymentStatus, payment_mode || 'Cash', bank_account_id || null, parseFloat(paid_amount) || 0,
+                purchase_by || null, finalPaymentStatus, payment_mode || 'Credit', bank_account_id || null, parseFloat(paid_amount) || 0,
                 parseFloat(advance_amount) || 0, parseFloat(shipping_charge) || 0, parseFloat(round_off) || 0, place_of_supply || 'Maharashtra', return_reason || null,
                 parseFloat(subtotal) || 0, parseFloat(total_discount) || 0, parseFloat(total_tax) || 0, parseFloat(grand_total) || 0, now, now,
                 branchId || null, branchName || ''
