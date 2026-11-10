@@ -222,6 +222,8 @@ if (dbType === 'postgres') {
       "ALTER TABLE business_products ADD COLUMN conversion_rate NUMERIC DEFAULT 1",
       "ALTER TABLE business_products ADD COLUMN rack_location VARCHAR(100)",
       "ALTER TABLE business_products ADD COLUMN gst_percentage NUMERIC DEFAULT 18",
+      "UPDATE business_purchases SET status = 'Partial', payment_status = 'partial' WHERE doc_type = 'BILL' AND (COALESCE(paid_amount, 0) + COALESCE(advance_amount, 0)) > 0 AND (COALESCE(paid_amount, 0) + COALESCE(advance_amount, 0)) < grand_total AND (status = 'Pending' OR status = 'pending' OR status IS NULL)",
+      "UPDATE business_purchases SET status = 'Paid', payment_status = 'paid' WHERE doc_type = 'BILL' AND (COALESCE(paid_amount, 0) + COALESCE(advance_amount, 0)) >= grand_total AND grand_total > 0 AND (status = 'Pending' OR status = 'pending' OR status IS NULL)",
       "CREATE UNIQUE INDEX idx_invoices_inv_num ON invoices(invoice_number)",
       "CREATE UNIQUE INDEX idx_gst_invoices_inv_num ON gst_invoices(invoice_number)"
     ];
@@ -692,7 +694,9 @@ if (dbType === 'postgres') {
       "ALTER TABLE business_products ADD COLUMN secondary_unit TEXT DEFAULT 'box'",
       "ALTER TABLE business_products ADD COLUMN conversion_rate REAL DEFAULT 1",
       "ALTER TABLE business_products ADD COLUMN rack_location TEXT",
-      "ALTER TABLE business_products ADD COLUMN gst_percentage REAL DEFAULT 18"
+      "ALTER TABLE business_products ADD COLUMN gst_percentage REAL DEFAULT 18",
+      "UPDATE business_purchases SET status = 'Partial', payment_status = 'partial' WHERE doc_type = 'BILL' AND (COALESCE(paid_amount, 0) + COALESCE(advance_amount, 0)) > 0 AND (COALESCE(paid_amount, 0) + COALESCE(advance_amount, 0)) < grand_total AND (status = 'Pending' OR status = 'pending' OR status IS NULL)",
+      "UPDATE business_purchases SET status = 'Paid', payment_status = 'paid' WHERE doc_type = 'BILL' AND (COALESCE(paid_amount, 0) + COALESCE(advance_amount, 0)) >= grand_total AND grand_total > 0 AND (status = 'Pending' OR status = 'pending' OR status IS NULL)"
     ];
     for (const sql of alterCols) {
       try { rawDb.exec(sql); } catch (e) { }

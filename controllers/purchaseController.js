@@ -79,12 +79,25 @@ const purchaseController = {
             } else if (doc_type === 'BILL') {
                 const totalPaid = (parseFloat(paid_amount) || 0) + (parseFloat(advance_amount) || 0);
                 const gTotal = parseFloat(grand_total) || 0;
-                if (payment_mode === 'Credit' || payment_mode === 'Payables' || totalPaid < gTotal || totalPaid === 0) {
-                    finalStatus = 'Pending';
-                    finalPaymentStatus = 'pending';
-                } else {
+                if (gTotal > 0 && totalPaid >= gTotal) {
                     finalStatus = 'Paid';
                     finalPaymentStatus = 'paid';
+                } else if (totalPaid > 0) {
+                    finalStatus = 'Partial';
+                    finalPaymentStatus = 'partial';
+                } else {
+                    finalStatus = 'Pending';
+                    finalPaymentStatus = 'pending';
+                }
+            } else if (doc_type === 'PO') {
+                const totalPaid = (parseFloat(paid_amount) || 0) + (parseFloat(advance_amount) || 0);
+                const gTotal = parseFloat(grand_total) || 0;
+                if (gTotal > 0 && totalPaid >= gTotal) {
+                    finalPaymentStatus = 'paid';
+                } else if (totalPaid > 0) {
+                    finalPaymentStatus = 'partial';
+                } else {
+                    finalPaymentStatus = 'pending';
                 }
             }
 
@@ -408,6 +421,27 @@ const purchaseController = {
 
             for (const purchase of purchases) {
                 purchase.items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(purchase.id);
+                const paid = parseFloat(purchase.paid_amount) || 0;
+                const adv = parseFloat(purchase.advance_amount) || 0;
+                const totalPaid = paid + adv;
+                const gTotal = parseFloat(purchase.grand_total) || 0;
+                if (purchase.doc_type === 'BILL') {
+                    if (gTotal > 0 && totalPaid >= gTotal) {
+                        if (purchase.status !== 'Completed') purchase.status = 'Paid';
+                        purchase.payment_status = 'paid';
+                    } else if (totalPaid > 0) {
+                        if (purchase.status === 'Pending' || purchase.status === 'pending' || !purchase.status) {
+                            purchase.status = 'Partial';
+                        }
+                        purchase.payment_status = 'partial';
+                    }
+                } else if (purchase.doc_type === 'PO') {
+                    if (gTotal > 0 && totalPaid >= gTotal) {
+                        purchase.payment_status = 'paid';
+                    } else if (totalPaid > 0) {
+                        purchase.payment_status = 'partial';
+                    }
+                }
             }
 
             return sendSuccess(res, purchases, 'Purchases retrieved successfully');
@@ -452,6 +486,33 @@ const purchaseController = {
 
             const now = new Date().toISOString();
 
+            let finalStatus = status || 'Approved';
+            let finalPaymentStatus = payment_status || 'pending';
+            if (doc_type === 'BILL') {
+                const totalPaid = (parseFloat(paid_amount) || 0) + (parseFloat(advance_amount) || 0);
+                const gTotal = parseFloat(grand_total) || 0;
+                if (gTotal > 0 && totalPaid >= gTotal) {
+                    finalStatus = 'Paid';
+                    finalPaymentStatus = 'paid';
+                } else if (totalPaid > 0) {
+                    finalStatus = 'Partial';
+                    finalPaymentStatus = 'partial';
+                } else {
+                    finalStatus = 'Pending';
+                    finalPaymentStatus = 'pending';
+                }
+            } else if (doc_type === 'PO') {
+                const totalPaid = (parseFloat(paid_amount) || 0) + (parseFloat(advance_amount) || 0);
+                const gTotal = parseFloat(grand_total) || 0;
+                if (gTotal > 0 && totalPaid >= gTotal) {
+                    finalPaymentStatus = 'paid';
+                } else if (totalPaid > 0) {
+                    finalPaymentStatus = 'partial';
+                } else {
+                    finalPaymentStatus = 'pending';
+                }
+            }
+
             await db.prepare(`
                 UPDATE business_purchases SET
                     purchase_number = ?, purchase_type = ?, purchase_date = ?, due_date = ?, doc_type = ?, status = ?,
@@ -461,11 +522,11 @@ const purchaseController = {
                     subtotal = ?, total_discount = ?, total_tax = ?, grand_total = ?, updated_at = ?
                 WHERE id = ?
             `).run(
-                purchase_number, purchase_type || 'GST', purchase_date, due_date, doc_type || 'PO', status || 'Approved',
+                purchase_number, purchase_type || 'GST', purchase_date, due_date, doc_type || 'PO', finalStatus,
                 supplier_name, supplier_gstin || null, billing_address || null, contact_number || null, warehouse_id || 'Main Godown',
-                purchase_by || null, payment_status || 'pending', payment_mode || 'Cash', bank_account_id || null, paid_amount || 0,
-                advance_amount || 0, shipping_charge || 0, round_off || 0, place_of_supply || 'Maharashtra', return_reason || null,
-                subtotal || 0, total_discount || 0, total_tax || 0, grand_total || 0, now, id
+                purchase_by || null, finalPaymentStatus, payment_mode || 'Cash', bank_account_id || null, parseFloat(paid_amount) || 0,
+                parseFloat(advance_amount) || 0, parseFloat(shipping_charge) || 0, parseFloat(round_off) || 0, place_of_supply || 'Maharashtra', return_reason || null,
+                parseFloat(subtotal) || 0, parseFloat(total_discount) || 0, parseFloat(total_tax) || 0, parseFloat(grand_total) || 0, now, id
             );
 
             if (items && Array.isArray(items)) {
