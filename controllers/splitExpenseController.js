@@ -56,9 +56,25 @@ const getSplitExpenses = async (req, res) => {
     });
 
     for (const ticket of tickets) {
+      let creatorUser = null;
+      try {
+        creatorUser = await db.prepare("SELECT name, username, email FROM users WHERE id = ?").get(ticket.user_id);
+      } catch (e) {}
+      const creatorRealName = creatorUser?.username || creatorUser?.name || creatorUser?.email?.split('@')[0] || 'Admin';
+      const creatorRealEmail = (creatorUser?.email || '').toLowerCase();
+      ticket.creator_name = creatorRealName;
+      ticket.creator_email = creatorRealEmail;
+
       try {
         const rawParts = JSON.parse(ticket.participants || '[]');
-        ticket.participants = rawParts.map(p => normalizeParticipant(p));
+        ticket.participants = rawParts.map(p => {
+          const norm = normalizeParticipant(p);
+          if (norm.name.toLowerCase() === 'you') {
+            norm.name = creatorRealName;
+            norm.email = norm.email || creatorRealEmail;
+          }
+          return norm;
+        });
       } catch (e) {
         ticket.participants = [];
       }
@@ -72,8 +88,15 @@ const getSplitExpenses = async (req, res) => {
         } catch (e) {
           exp.shares = {};
         }
-        exp.paidBy = exp.paid_by;
+        let rawPaidBy = exp.paid_by;
+        if (rawPaidBy && rawPaidBy.toLowerCase() === 'you') {
+          rawPaidBy = creatorRealName;
+        }
+        exp.paidBy = rawPaidBy;
         delete exp.paid_by;
+        if (exp.shares && exp.shares['You'] !== undefined && creatorRealName) {
+          exp.shares[creatorRealName] = exp.shares['You'];
+        }
         exp.splitType = exp.split_type;
         delete exp.split_type;
         exp.amount = parseFloat(exp.amount) || 0;
@@ -116,7 +139,7 @@ const createSplitExpense = async (req, res) => {
     const now = new Date().toISOString();
 
     const creatorEmail = (req.user?.email || 'admin@bnxmail.com').toLowerCase();
-    const creatorName = req.user?.username || req.user?.name || 'You';
+    const creatorName = req.user?.username || req.user?.name || (creatorEmail.split('@')[0]) || 'Admin';
 
     const cleanParticipants = [];
     let hasAdmin = false;
@@ -127,6 +150,9 @@ const createSplitExpense = async (req, res) => {
         norm.isAdmin = true;
         norm.role = 'admin';
         norm.status = 'accepted';
+        if (norm.name.toLowerCase() === 'you') {
+          norm.name = creatorName;
+        }
         hasAdmin = true;
       }
       if (norm.name.toLowerCase() === 'you') {
@@ -134,6 +160,7 @@ const createSplitExpense = async (req, res) => {
         norm.role = 'admin';
         norm.status = 'accepted';
         norm.email = norm.email || creatorEmail;
+        norm.name = creatorName;
         hasAdmin = true;
       }
       cleanParticipants.push(norm);
@@ -237,6 +264,17 @@ const createExpense = async (req, res) => {
     const finalDocUrl = documentUrl || (attachment ? (attachment.startsWith('/') ? attachment : `/uploads/${attachment}`) : null);
     const finalDocName = documentName || (attachment ? path.basename(attachment).replace(/^\d+_/, '') : null);
 
+    let finalPaidBy = paidBy;
+    if (!finalPaidBy || finalPaidBy.toLowerCase() === 'you') {
+      finalPaidBy = req.user?.username || req.user?.name || req.user?.email?.split('@')[0] || 'Member';
+    }
+
+    const finalShares = { ...(shares || {}) };
+    if (finalShares['You'] !== undefined) {
+      finalShares[finalPaidBy] = finalShares['You'];
+      delete finalShares['You'];
+    }
+
     await db.prepare(`
       INSERT INTO split_ticket_expenses (id, split_ticket_id, user_id, title, amount, paid_by, date, attachment, document_name, document_url, split_type, shares, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -246,13 +284,13 @@ const createExpense = async (req, res) => {
       req.user.id, 
       title, 
       parseFloat(amount), 
-      paidBy, 
+      finalPaidBy, 
       date || now.split('T')[0], 
       finalDocUrl || attachment || null, 
       finalDocName || null, 
       finalDocUrl || null, 
       splitType || 'equal', 
-      JSON.stringify(shares || {}), 
+      JSON.stringify(finalShares), 
       now, 
       now
     );
