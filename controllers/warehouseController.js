@@ -227,6 +227,10 @@ const warehouseController = {
             const row = await db.prepare('SELECT * FROM warehouses WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
             if (!row) return sendError(res, 'Warehouse not found', 404);
 
+            if (req.body.warehouse_name && !req.body.name) req.body.name = req.body.warehouse_name;
+            if (req.body.warehouse_code && !req.body.code) req.body.code = req.body.warehouse_code;
+            if (req.body.warehouse_type && !req.body.type) req.body.type = req.body.warehouse_type;
+
             const updates = [];
             const params = [];
             const allowed = [
@@ -246,9 +250,66 @@ const warehouseController = {
                 await db.prepare(`UPDATE warehouses SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`).run(...params);
             }
 
+            // Sync stock & products if warehouse name changed
+            if (req.body.name && row.name && req.body.name !== row.name) {
+                try {
+                    await db.prepare("UPDATE stock SET location = ?, warehouse = ? WHERE user_id = ? AND (location = ? OR warehouse = ?)").run(req.body.name, req.body.name, req.user.id, row.name, row.name);
+                } catch (e) {}
+            }
+
             const updated = await db.prepare('SELECT * FROM warehouses WHERE id = ?').get(req.params.id);
+            if (updated) {
+                try {
+                    const stats = await db.prepare(`
+                        SELECT 
+                            COUNT(*) as total_items, 
+                            COALESCE(SUM(quantity), 0) as total_quantity, 
+                            COALESCE(SUM(quantity * purchase_price), 0) as total_value 
+                        FROM business_products 
+                        WHERE user_id = ? 
+                          AND (
+                            LOWER(warehouse_id) = ? 
+                            OR LOWER(warehouse_id) = ? 
+                            OR LOWER(warehouse_id) = ? 
+                            OR warehouse_id = ?
+                          )
+                    `).get(
+                        req.user.id, 
+                        String(updated.id).toLowerCase(), 
+                        (updated.name || '').toLowerCase(), 
+                        (updated.code || '').toLowerCase(),
+                        updated.id
+                    );
+
+                    const stockStats = await db.prepare(`
+                        SELECT 
+                            COUNT(*) as st_count, 
+                            COALESCE(SUM(quantity), 0) as st_qty, 
+                            COALESCE(SUM(quantity * unit_price), 0) as st_value 
+                        FROM stock 
+                        WHERE user_id = ? 
+                          AND (
+                            LOWER(location) LIKE ? 
+                            OR LOWER(location) = ? 
+                            OR LOWER(COALESCE(warehouse, '')) = ?
+                          )
+                    `).get(
+                        req.user.id,
+                        `%${(updated.name || '').toLowerCase()}%`,
+                        (updated.name || '').toLowerCase(),
+                        (updated.name || '').toLowerCase()
+                    );
+
+                    updated.total_items = (stats?.total_items || 0) + (stockStats?.st_count || 0);
+                    updated.total_quantity = (stats?.total_quantity || 0) + (stockStats?.st_qty || 0);
+                    updated.total_value = (stats?.total_value || 0) + (stockStats?.st_value || 0);
+                    updated.inventory_value = updated.total_value;
+                    updated.item_count = updated.total_items;
+                } catch(e) {}
+            }
             return sendSuccess(res, updated, 'Warehouse updated successfully');
         } catch (error) {
+            console.error('[Warehouse Controller] Error updating warehouse:', error);
             return sendError(res, 'Failed to update warehouse', 500);
         }
     },
