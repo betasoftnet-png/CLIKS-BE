@@ -764,14 +764,39 @@ const customerController = {
     respondB2BConnection: async (req, res) => {
         try {
             const b2bConnectionService = require('../utils/b2bConnectionService');
-            const { connection_id, action } = req.body;
-            if (!connection_id || !action) {
-                return sendError(res, 'connection_id and action are required', 400);
+            let { connection_id, action, sender_id, senderId } = req.body;
+            if (!action) {
+                return sendError(res, 'action is required (ACCEPT or REJECT)', 400);
+            }
+
+            let connId = connection_id ? parseInt(connection_id) : null;
+            if (!connId && (sender_id || senderId)) {
+                const sId = parseInt(sender_id || senderId);
+                const found = await db.prepare(`
+                    SELECT id FROM b2b_connections
+                    WHERE (target_user_id = ? AND requester_user_id = ?)
+                       OR (requester_user_id = ? AND target_user_id = ?)
+                    ORDER BY id DESC LIMIT 1
+                `).get(req.user.id, sId, req.user.id, sId);
+                if (found) connId = found.id;
+            }
+
+            if (!connId) {
+                const latestPending = await db.prepare(`
+                    SELECT id FROM b2b_connections
+                    WHERE target_user_id = ? AND status = 'PENDING'
+                    ORDER BY id DESC LIMIT 1
+                `).get(req.user.id);
+                if (latestPending) connId = latestPending.id;
+            }
+
+            if (!connId) {
+                return sendError(res, 'Connection request not found', 404);
             }
 
             const updated = await b2bConnectionService.respondToConnection({
                 user_id: req.user.id,
-                connection_id: parseInt(connection_id),
+                connection_id: connId,
                 action
             });
 

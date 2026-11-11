@@ -3258,7 +3258,7 @@ const caController = {
                 return true;
             });
 
-            const mapped = deduplicatedList.map(n => {
+            const mapped = await Promise.all(deduplicatedList.map(async (n) => {
                 let timeStr = 'Recently';
                 let rawIso = n.created_at || new Date().toISOString();
                 if (n.created_at) {
@@ -3275,6 +3275,28 @@ const caController = {
                     } catch (e) {}
                 }
 
+                let connectionId = n.related_task_id ? parseInt(n.related_task_id) : null;
+                let connectionStatus = null;
+                const isB2B = n.type === 'b2b_connection_request' || 
+                    (n.message && n.message.toLowerCase().includes('requested to connect with you as a supplier'));
+
+                if (isB2B) {
+                    try {
+                        const conn = connectionId 
+                            ? await db.prepare('SELECT id, status FROM b2b_connections WHERE id = ?').get(connectionId)
+                            : await db.prepare(`
+                                SELECT id, status FROM b2b_connections
+                                WHERE (target_user_id = ? AND requester_user_id = ?)
+                                   OR (requester_user_id = ? AND target_user_id = ?)
+                                ORDER BY id DESC LIMIT 1
+                            `).get(userId, n.sender_id, userId, n.sender_id);
+                        if (conn) {
+                            connectionId = conn.id;
+                            connectionStatus = conn.status;
+                        }
+                    } catch (cErr) {}
+                }
+
                 return {
                     id: n.id,
                     senderId: n.sender_id,
@@ -3283,6 +3305,8 @@ const caController = {
                     title: n.title || 'Notification',
                     message: n.message || '',
                     relatedTaskId: n.related_task_id,
+                    connectionId: connectionId,
+                    connectionStatus: connectionStatus,
                     isRead: n.is_read === 1 || n.is_read === true || n.is_read === 'true',
                     text: n.message || n.title || '',
                     time: timeStr,
@@ -3291,7 +3315,7 @@ const caController = {
                     createdAt: rawIso,
                     timestamp: rawIso
                 };
-            });
+            }));
 
             return sendSuccess(res, mapped, 'Notifications retrieved');
         } catch (error) {

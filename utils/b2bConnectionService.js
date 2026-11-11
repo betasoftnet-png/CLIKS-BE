@@ -122,11 +122,12 @@ const b2bConnectionService = {
             // Send Notification to Target User: "[Business Name] has requested to connect with you as a supplier."
             try {
                 await db.prepare(`
-                    INSERT INTO notifications (user_id, sender_id, receiver_id, type, title, message, is_read, created_at)
-                    VALUES (?, ?, ?, 'b2b_connection_request', 'B2B Supplier Connection Request', ?, 0, ?)
+                    INSERT INTO notifications (user_id, sender_id, receiver_id, type, title, message, related_task_id, is_read, created_at)
+                    VALUES (?, ?, ?, 'b2b_connection_request', 'B2B Supplier Connection Request', ?, ?, 0, ?)
                 `).run(
                     targetUser.id, requester_user_id, targetUser.id,
                     `${requesterBiz} has requested to connect with you as a supplier.`,
+                    existing.id,
                     now
                 );
             } catch (nErr) {
@@ -284,6 +285,68 @@ const b2bConnectionService = {
                 console.warn('[B2B Connection] Sub-connection sync warning:', syncErr.message);
             }
 
+            // 4. Retroactively sync all purchases created by Requester for this Target Supplier
+            try {
+                const reqUserId = conn.requester_user_id || (requesterUser ? requesterUser.id : null);
+                if (reqUserId && targetUser) {
+                    const tarBiz = targetName || (targetUser.business_name || targetUser.username || '');
+                    const tarMail = tarEmail || targetUser.email || '';
+
+                    // Find purchases in business_purchases created by buyer where supplier matches target
+                    const buyerPurchases = await db.prepare(`
+                        SELECT * FROM business_purchases
+                        WHERE user_id = ?
+                          AND (
+                              LOWER(supplier_name) = LOWER(?)
+                              OR LOWER(supplier_name) = LOWER(?)
+                              OR LOWER(supplier_name) = LOWER(?)
+                              OR LOWER(billing_address) LIKE LOWER(?)
+                              OR id IN (SELECT source_purchase_invoice_id FROM b2b_invoice_relationships WHERE supplier_user_id = ?)
+                          )
+                    `).all(reqUserId, tarBiz, tarMail, targetUser.username || '', `%${tarBiz}%`, targetUser.id);
+
+                    console.log(`[B2B Connection Accepted] Found ${buyerPurchases ? buyerPurchases.length : 0} purchases from buyer #${reqUserId} for supplier #${targetUser.id}`);
+
+                    for (const pur of (buyerPurchases || [])) {
+                        try {
+                            let purItems = [];
+                            try {
+                                purItems = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(pur.id);
+                            } catch (e) {
+                                purItems = typeof pur.items === 'string' ? JSON.parse(pur.items) : (pur.items || []);
+                            }
+
+                            await b2bConnectionService.syncPurchaseToSalesInvoice({
+                                purchaseId: pur.id,
+                                userId: reqUserId,
+                                supplierEmail: targetUser.email,
+                                purchaseData: {
+                                    ...pur,
+                                    items: purItems
+                                }
+                            });
+                        } catch (sErr) {
+                            console.warn(`[B2B Connection Accepted] Purchase #${pur.id} sync error:`, sErr.message);
+                        }
+                    }
+
+                    // Also update any already-created business_invoices from Pending Confirmation to Paid/Unpaid
+                    try {
+                        await db.prepare(`
+                            UPDATE business_invoices
+                            SET status = CASE WHEN paid_amount >= total_amount AND total_amount > 0 THEN 'Paid' ELSE 'Unpaid' END,
+                                notes = REPLACE(notes, ' (Pending Confirmation)', ''),
+                                updated_at = ?
+                            WHERE user_id = ? 
+                              AND (LOWER(client_name) = LOWER(?) OR LOWER(client_email) = LOWER(?))
+                              AND status = 'Pending Confirmation'
+                        `).run(now, targetUser.id, requesterName, reqEmail);
+                    } catch (uErr) {}
+                }
+            } catch (pSyncErr) {
+                console.warn('[B2B Connection Accepted] Error scanning and syncing purchases:', pSyncErr.message);
+            }
+
             // Notification to Requester: "[Business Name] accepted your supplier connection request."
             try {
                 if (conn.requester_user_id) {
@@ -328,24 +391,24 @@ const b2bConnectionService = {
         if (!purchaseId || !userId || !supplierEmail) return null;
 
         const emailLower = String(supplierEmail).trim().toLowerCase();
-        if (!emailLower || !emailLower.endsWith('@bnxmail.com')) return null;
+        if (!emailLower) return null;
 
-        // Lookup supplier user by email
-        const supplierUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE LOWER(email) = ?').get(emailLower);
+        // Lookup supplier user by email or username
+        let supplierUser = await db.prepare('SELECT id, email, username, business_name FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get(emailLower, emailLower);
         if (!supplierUser || supplierUser.id === userId) return null;
 
-        // Security check: Verify that an ACCEPTED connection exists between buyer and supplier
+        // Security check: Verify that a connection exists between buyer and supplier
         const connection = await db.prepare(`
             SELECT * FROM b2b_connections
             WHERE ((requester_user_id = ? AND target_user_id = ?) OR (requester_user_id = ? AND target_user_id = ?))
-              AND status = 'ACCEPTED'
         `).get(userId, supplierUser.id, supplierUser.id, userId);
 
         if (!connection) {
-            console.log(`[B2B Invoice Sync Security] No accepted connection between user #${userId} and supplier #${supplierUser.id} (${supplierEmail}). Sync blocked.`);
+            console.log(`[B2B Invoice Sync Security] No connection between user #${userId} and supplier #${supplierUser.id} (${supplierEmail}). Sync blocked.`);
             return null;
         }
 
+        const isAccepted = connection.status === 'ACCEPTED';
         const connectionTxId = `B2B-TXN-PO-${purchaseId}`;
         const now = new Date().toISOString();
 
@@ -357,6 +420,17 @@ const b2bConnectionService = {
 
         if (existingRel) {
             console.log(`[B2B Invoice Sync] Transaction #${purchaseId} already synced via rel #${existingRel.id}. Skipping duplicate.`);
+            if (isAccepted) {
+                try {
+                    await db.prepare(`
+                        UPDATE business_invoices
+                        SET status = CASE WHEN paid_amount >= total_amount AND total_amount > 0 THEN 'Paid' ELSE 'Unpaid' END,
+                            notes = REPLACE(notes, ' (Pending Confirmation)', ''),
+                            updated_at = ?
+                        WHERE id = ? AND status = 'Pending Confirmation'
+                    `).run(now, existingRel.generated_sales_invoice_id);
+                } catch(e) {}
+            }
             return existingRel;
         }
 
@@ -371,8 +445,10 @@ const b2bConnectionService = {
             : JSON.stringify(purchaseData.items || []);
 
         const isPaid = purchaseData.payment_status === 'paid' || purchaseData.status === 'Paid';
-        const invStatus = isPaid ? 'Paid' : 'Unpaid';
-        const sourceNote = `Source: Purchase Invoice from ${buyerName}`;
+        const invStatus = isAccepted ? (isPaid ? 'Paid' : 'Unpaid') : 'Pending Confirmation';
+        const sourceNote = isAccepted 
+            ? `Source: Purchase Invoice from ${buyerName}` 
+            : `Source: Purchase Invoice from ${buyerName} (Pending Confirmation)`;
 
         // Create Sales Invoice for Supplier
         const salesInvRes = await db.prepare(`
@@ -383,7 +459,7 @@ const b2bConnectionService = {
                 created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'B2B', ?, ?, ?, ?)
         `).run(
-            supplierUser.id, salesInvoiceNumber, buyerName, buyerUser.email, purchaseData.billing_address || null,
+            supplierUser.id, salesInvoiceNumber, buyerName, buyerUser ? buyerUser.email : null, purchaseData.billing_address || null,
             parseFloat(purchaseData.subtotal) || 0, parseFloat(purchaseData.total_tax) || 0,
             parseFloat(purchaseData.grand_total) || 0, isPaid ? (parseFloat(purchaseData.grand_total) || 0) : (parseFloat(purchaseData.paid_amount) || 0),
             isPaid ? 0 : ((parseFloat(purchaseData.grand_total) || 0) - (parseFloat(purchaseData.paid_amount) || 0)),
@@ -404,18 +480,19 @@ const b2bConnectionService = {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             purchaseId, salesInvoiceId,
-            userId, buyerUser.email, supplierUser.id, supplierUser.email,
+            userId, buyerUser ? buyerUser.email : null, supplierUser.id, supplierUser.email,
             connection.id, connectionTxId, now
         );
 
         // Send Notification to Supplier: "New purchase invoice received from [Business Name]."
         try {
             await db.prepare(`
-                INSERT INTO notifications (user_id, sender_id, receiver_id, type, title, message, is_read, created_at)
-                VALUES (?, ?, ?, 'b2b_purchase_invoice_received', 'New Purchase Invoice Received', ?, 0, ?)
+                INSERT INTO notifications (user_id, sender_id, receiver_id, type, title, message, related_task_id, is_read, created_at)
+                VALUES (?, ?, ?, 'b2b_purchase_invoice_received', 'New Purchase Invoice Received', ?, ?, 0, ?)
             `).run(
                 supplierUser.id, userId, supplierUser.id,
                 `New purchase invoice received from ${buyerName}.`,
+                salesInvoiceId,
                 now
             );
         } catch (nErr) {
