@@ -41,9 +41,16 @@ const b2bConnectionService = {
                 )
             `).run();
 
-            try {
-                await db.prepare('ALTER TABLE business_invoices ADD COLUMN notes TEXT').run();
-            } catch (e) {}
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN notes TEXT').run(); } catch (e) {}
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN client_email TEXT').run(); } catch (e) {}
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN invoice_type TEXT').run(); } catch (e) {}
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN due_amount REAL DEFAULT 0').run(); } catch (e) {}
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN discount_amount REAL DEFAULT 0').run(); } catch (e) {}
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN supplier_confirmation_status TEXT').run(); } catch (e) {}
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN supplier_response_type TEXT').run(); } catch (e) {}
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN supplier_status_message TEXT').run(); } catch (e) {}
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN expected_available_date TEXT').run(); } catch (e) {}
+            try { await db.prepare('ALTER TABLE business_invoices ADD COLUMN supplier_response_items TEXT').run(); } catch (e) {}
 
             tableEnsured = true;
         } catch (e) {
