@@ -44,7 +44,11 @@ const getSplitExpenses = async (req, res) => {
         const parts = JSON.parse(ticket.participants || '[]');
         return parts.some(p => {
           const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
-          return pEmail && pEmail === userEmail;
+          const pName = (typeof p === 'string' ? p.replace(/\s*\([^)]+\)/, '').trim() : (p.name || '')).toLowerCase();
+          const uName = (req.user?.username || req.user?.name || '').toLowerCase();
+          return (pEmail && pEmail === userEmail) || 
+                 (uName && pEmail && pEmail === `${uName}@bnxmail.com`) ||
+                 (uName && pName && pName === uName);
         });
       } catch (e) {
         return false;
@@ -384,12 +388,15 @@ const updateExpense = async (req, res) => {
 const respondInvite = async (req, res) => {
   try {
     const ticketId = req.params.id;
-    const { status, email } = req.body; // status: 'accepted' | 'rejected'
+    const { status, email } = req.body; // status: 'accepted' | 'rejected' | 'declined'
     const targetEmail = (email || req.user?.email || '').toLowerCase();
+    const targetUsername = (req.user?.username || req.user?.name || '').toLowerCase();
 
-    if (!['accepted', 'rejected'].includes(status)) {
-      return sendError(res, "Status must be 'accepted' or 'rejected'", 400, 'BAD_REQUEST');
+    if (!['accepted', 'rejected', 'declined'].includes(status)) {
+      return sendError(res, "Status must be 'accepted', 'rejected', or 'declined'", 400, 'BAD_REQUEST');
     }
+
+    const finalStatus = (status === 'rejected' || status === 'declined') ? 'declined' : 'accepted';
 
     const ticket = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
     if (!ticket) return sendError(res, 'Split ticket not found', 404, 'NOT_FOUND');
@@ -400,22 +407,18 @@ const respondInvite = async (req, res) => {
     let found = false;
     participants = participants.map(p => {
       const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
-      if (pEmail === targetEmail) {
+      const pName = (typeof p === 'string' ? p.replace(/\s*\([^)]+\)/, '').trim() : (p.name || '')).toLowerCase();
+      if ((pEmail && pEmail === targetEmail) || (targetUsername && (pName === targetUsername || pEmail === `${targetUsername}@bnxmail.com`))) {
         found = true;
         if (typeof p === 'string') {
-          return { name: p.replace(/\s*\([^)]+\)/, '').trim(), email: pEmail, role: 'viewer', status, isAdmin: false };
+          return { name: p.replace(/\s*\([^)]+\)/, '').trim(), email: pEmail || targetEmail, role: 'viewer', status: finalStatus, isAdmin: false };
         }
-        return { ...p, status };
+        return { ...p, status: finalStatus };
       }
       return p;
     });
 
-    if (status === 'rejected') {
-      participants = participants.filter(p => {
-        const pEmail = (typeof p === 'string' ? (p.match(/\(([^)]+@bnxmail\.com)\)/i)?.[1] || (p.includes('@') ? p : '')) : (p.email || '')).toLowerCase();
-        return pEmail !== targetEmail;
-      });
-    }
+    // Do NOT remove participant on decline/reject so ticket remains visible to both user and admin with 'declined' status!
 
     const now = new Date().toISOString();
     await db.prepare("UPDATE split_tickets SET participants = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(participants), now, ticketId);
@@ -425,7 +428,7 @@ const respondInvite = async (req, res) => {
     updated.currencySymbol = updated.currency_symbol;
     delete updated.currency_symbol;
 
-    return sendSuccess(res, updated, `Invitation ${status} successfully`);
+    return sendSuccess(res, updated, `Invitation ${finalStatus} successfully`);
   } catch (error) {
     console.error('Error responding to invite:', error);
     return sendError(res, error.message, 500);
