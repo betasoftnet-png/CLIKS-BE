@@ -548,7 +548,7 @@ const updateMemberRole = async (req, res) => {
 const inviteMember = async (req, res) => {
   try {
     const ticketId = req.params.id;
-    const { name, email, role = 'viewer', isAdmin = false } = req.body;
+    const { name, email, role = 'viewer', isAdmin = false, includeInPastExpenses = false } = req.body;
     if (!email) return sendError(res, 'Email is required', 400, 'BAD_REQUEST');
 
     if (!BNX_EMAIL_REGEX.test(email.trim())) {
@@ -599,10 +599,39 @@ const inviteMember = async (req, res) => {
     const now = new Date().toISOString();
     await db.prepare("UPDATE split_tickets SET participants = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(participants), now, ticketId);
 
+    // If explicitly requested to include in past expenses, recalculate previous equal-split expenses
+    if (includeInPastExpenses) {
+      const allExps = await db.prepare("SELECT * FROM split_ticket_expenses WHERE split_ticket_id = ?").all(ticketId);
+      for (const exp of allExps) {
+        if (exp.split_type === 'equal') {
+          const count = participants.length;
+          const equalShare = Math.floor(((parseFloat(exp.amount) || 0) / count) * 100) / 100;
+          const remainder = Math.round(((parseFloat(exp.amount) || 0) - (equalShare * count)) * 100) / 100;
+          const newShares = {};
+          participants.forEach((p, idx) => {
+            const pName = typeof p === 'string' ? p : (p.name || p.email);
+            newShares[pName] = idx === count - 1 ? Math.round((equalShare + remainder) * 100) / 100 : equalShare;
+          });
+          await db.prepare("UPDATE split_ticket_expenses SET shares = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(newShares), now, exp.id);
+        }
+      }
+    }
+
     const updated = await db.prepare("SELECT * FROM split_tickets WHERE id = ?").get(ticketId);
     updated.participants = JSON.parse(updated.participants || '[]');
     updated.currencySymbol = updated.currency_symbol;
     delete updated.currency_symbol;
+
+    const expenses = await db.prepare("SELECT * FROM split_ticket_expenses WHERE split_ticket_id = ? ORDER BY created_at DESC").all(ticketId);
+    for (const exp of expenses) {
+      try { exp.shares = JSON.parse(exp.shares || '{}'); } catch (e) { exp.shares = {}; }
+      exp.paidBy = exp.paid_by;
+      delete exp.paid_by;
+      exp.splitType = exp.split_type;
+      delete exp.split_type;
+      exp.amount = parseFloat(exp.amount) || 0;
+    }
+    updated.expenses = expenses;
 
     return sendSuccess(res, updated, `Invitation sent to ${cleanEmail}`, 201);
   } catch (error) {
