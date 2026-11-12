@@ -492,10 +492,28 @@ const gstController = {
             const tax = amt * (pct / (100 + pct));
             const taxable = amt - tax;
             
-            const isLocal = vendor_gstin ? vendor_gstin.startsWith('27') : true;
-            const cgst = isLocal ? tax / 2 : 0;
-            const sgst = isLocal ? tax / 2 : 0;
-            const igst = isLocal ? 0 : tax;
+            // Get user's business state code from settings
+            let myStateCode = '05';
+            try {
+                const user = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+                if (user && user.settings) {
+                    const parsed = JSON.parse(user.settings);
+                    if (parsed.gstin && parsed.gstin.length >= 2) {
+                        myStateCode = parsed.gstin.slice(0, 2);
+                    } else if (parsed.state_code) {
+                        myStateCode = String(parsed.state_code).padStart(2, '0');
+                    }
+                }
+            } catch (e) {}
+
+            const cleanGstin = String(vendor_gstin || '').trim();
+            const vendorCodeMatch = cleanGstin.match(/^\s*(\d{2})/);
+            const vendorCode = vendorCodeMatch ? vendorCodeMatch[1] : '';
+            const isInterState = vendorCode && vendorCode.length === 2 && vendorCode !== myStateCode && !['00', '99'].includes(vendorCode);
+
+            const cgst = isInterState ? 0 : Math.round((tax / 2) * 100) / 100;
+            const sgst = isInterState ? 0 : Math.round((tax - cgst) * 100) / 100;
+            const igst = isInterState ? tax : 0;
             
             const now = new Date().toISOString();
 
