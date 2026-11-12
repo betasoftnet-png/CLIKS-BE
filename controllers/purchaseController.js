@@ -485,11 +485,32 @@ const purchaseController = {
                         if (usrRow && usrRow.email) targetSupplierEmail = usrRow.email;
                     } catch (e) {}
                 }
-                if (targetSupplierEmail) {
+                if (targetSupplierEmail || supplierName) {
                     await b2bConnectionService.syncPurchaseToSalesInvoice({
                         purchaseId: purchaseId,
                         userId: req.user.id,
                         supplierEmail: targetSupplierEmail,
+                        purchaseData: {
+                            ...req.body,
+                            purchase_number: purchaseNum,
+                            subtotal: parseFloat(subtotal) || 0,
+                            total_tax: parseFloat(total_tax) || 0,
+                            total_discount: parseFloat(total_discount) || 0,
+                            grand_total: parseFloat(grand_total) || 0,
+                            paid_amount: parseFloat(paid_amount) || 0,
+                            payment_status: finalPaymentStatus,
+                            payment_mode: payment_mode,
+                            due_date: due_date || purchase_date,
+                            items: created.items || items || []
+                        }
+                    });
+
+                    // Sync to Supplier's Sales Orders Center
+                    await b2bConnectionService.syncPurchaseToSalesOrder({
+                        purchaseId: purchaseId,
+                        userId: req.user.id,
+                        supplierEmail: targetSupplierEmail,
+                        supplierName: supplierName,
                         purchaseData: {
                             ...req.body,
                             purchase_number: purchaseNum,
@@ -794,6 +815,21 @@ const purchaseController = {
                 } catch (expSyncErr) {
                     console.warn('[Purchase Controller] Expense sync warning on update:', expSyncErr.message);
                 }
+            }
+
+            // --- Sync updated Purchase Bill / Order to Supplier's Sales Order Center ---
+            try {
+                await b2bConnectionService.syncPurchaseToSalesOrder({
+                    purchaseId: id,
+                    userId: req.user.id,
+                    supplierName: supplier_name || updated.supplier_name,
+                    purchaseData: {
+                        ...updated,
+                        items: updated.items || []
+                    }
+                });
+            } catch (soSyncErr) {
+                console.warn('[Purchase Controller] Sales Order sync warning on update:', soSyncErr.message);
             }
 
             return sendSuccess(res, updated, 'Purchase record updated successfully');

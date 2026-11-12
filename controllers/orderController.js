@@ -3,6 +3,174 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { processCustomerInvoiceIntegration } = require('../utils/customerIntegration');
 const { getNextSequence } = require('../utils/sequenceGenerator');
 
+// Ensure required columns exist
+const ensureOrderColumns = async () => {
+    try {
+        const rawDb = db.raw || db;
+        try { await rawDb.exec('ALTER TABLE business_orders ADD COLUMN source_purchase_id INTEGER'); } catch (e) {}
+        try { await rawDb.exec('ALTER TABLE business_orders ADD COLUMN source_purchase_number TEXT'); } catch (e) {}
+        try { await rawDb.exec('ALTER TABLE business_orders ADD COLUMN source_buyer_id INTEGER'); } catch (e) {}
+        try { await rawDb.exec("ALTER TABLE business_orders ADD COLUMN order_type TEXT DEFAULT 'INTERNAL'"); } catch (e) {}
+    } catch (err) {
+        console.warn('[Order Controller] Table init note:', err.message);
+    }
+};
+ensureOrderColumns();
+
+// Auto-sync incoming customer purchase bills / orders where this user is the vendor/supplier
+const syncIncomingCustomerPurchases = async (user) => {
+    if (!user || !user.id) return;
+    try {
+        const userId = user.id;
+        const userEmail = (user.email || '').toLowerCase().trim();
+        const username = (user.username || '').toLowerCase().trim();
+        const bizName = (user.business_name || '').toLowerCase().trim();
+        const now = new Date().toISOString();
+
+        // Find customer purchases where this user is targeted as the supplier
+        const incomingPurchases = await db.prepare(`
+            SELECT DISTINCT p.*, 
+                   u.business_name as buyer_biz_name, 
+                   u.username as buyer_username, 
+                   u.email as buyer_email,
+                   u.phone as buyer_phone
+            FROM business_purchases p
+            LEFT JOIN users u ON p.user_id = u.id
+            LEFT JOIN b2b_invoice_relationships rel ON p.id = rel.source_purchase_invoice_id
+            WHERE p.user_id != ?
+              AND (
+                  (rel.supplier_user_id IS NOT NULL AND rel.supplier_user_id = ?)
+                  OR (rel.supplier_email IS NOT NULL AND LOWER(rel.supplier_email) = ?)
+                  OR (LOWER(p.supplier_name) = ? AND ? != '')
+                  OR (LOWER(p.supplier_name) = ? AND ? != '')
+                  OR (LOWER(p.supplier_name) = ? AND ? != '')
+                  OR p.user_id IN (
+                      SELECT requester_user_id FROM b2b_connections 
+                      WHERE (target_user_id = ? OR LOWER(target_email) = ?)
+                  )
+                  OR p.user_id IN (
+                      SELECT target_user_id FROM b2b_connections 
+                      WHERE (requester_user_id = ? OR LOWER(requester_email) = ?)
+                  )
+                  OR p.user_id IN (
+                      SELECT business_id FROM supplier_connections 
+                      WHERE (supplier_user_id = ? OR LOWER(supplier_email) = ?)
+                  )
+              )
+            ORDER BY p.id DESC
+        `).all(
+            userId, 
+            userId, 
+            userEmail, 
+            bizName, bizName, 
+            username, username, 
+            userEmail, userEmail,
+            userId, userEmail,
+            userId, userEmail,
+            userId, userEmail
+        );
+
+        for (const pur of incomingPurchases) {
+            let existingOrder = await db.prepare(`
+                SELECT id, status FROM business_orders 
+                WHERE user_id = ? AND (source_purchase_id = ? OR source_purchase_number = ? OR order_number = ?)
+            `).get(userId, pur.id, pur.purchase_number, pur.purchase_number);
+
+            const buyerDisplayName = pur.buyer_biz_name || pur.buyer_username || pur.buyer_email || `Customer #${pur.user_id}`;
+            const targetStatus = pur.status === 'Paid' ? 'Invoiced' 
+                : (pur.status === 'Cancelled' ? 'Cancelled' 
+                : (pur.status === 'Shipped' ? 'Shipped' : 'Confirmed'));
+
+            const purNum = pur.purchase_number || `PO-${pur.id}`;
+            const orderNum = purNum.startsWith('SO-') ? purNum : `SO-${purNum}`;
+            const subtotal = parseFloat(pur.subtotal) || 0;
+            const totalDiscount = parseFloat(pur.total_discount) || 0;
+            const totalTax = parseFloat(pur.total_tax) || 0;
+            const grandTotal = parseFloat(pur.grand_total) || 0;
+            const advanceAmount = parseFloat(pur.advance_amount || pur.paid_amount) || 0;
+            const shippingCharge = parseFloat(pur.shipping_charge) || 0;
+            const pendingAmount = grandTotal > advanceAmount ? (grandTotal - advanceAmount) : 0;
+
+            if (!existingOrder) {
+                let purchaseItems = [];
+                try {
+                    purchaseItems = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(pur.id);
+                } catch (e) {
+                    purchaseItems = [];
+                }
+
+                const insertRes = await db.prepare(`
+                    INSERT INTO business_orders (
+                        user_id, customer_id, order_number, customer, customer_phone, customer_gstin,
+                        billing_address, shipping_address, date, delivery_date, status,
+                        advance_amount, shipping_charge, subtotal, total_discount, total_tax,
+                        grand_total, pending_amount, source_purchase_id, source_purchase_number,
+                        source_buyer_id, order_type, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'B2B_INCOMING', ?, ?)
+                `).run(
+                    userId,
+                    pur.user_id,
+                    orderNum,
+                    buyerDisplayName,
+                    pur.contact_number || pur.buyer_phone || null,
+                    pur.supplier_gstin || null,
+                    pur.billing_address || null,
+                    pur.billing_address || null,
+                    pur.purchase_date || now.split('T')[0],
+                    pur.due_date || pur.purchase_date || now.split('T')[0],
+                    targetStatus,
+                    advanceAmount,
+                    shippingCharge,
+                    subtotal,
+                    totalDiscount,
+                    totalTax,
+                    grandTotal,
+                    pendingAmount,
+                    pur.id,
+                    pur.purchase_number,
+                    pur.user_id,
+                    pur.created_at || now,
+                    now
+                );
+
+                const newOrderId = insertRes.lastInsertRowid;
+
+                if (purchaseItems.length > 0) {
+                    const itemStmt = db.prepare(`
+                        INSERT INTO business_order_items (
+                            order_id, name, sku, hsn, quantity, price, discount, gst, total
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `);
+                    for (const item of purchaseItems) {
+                        itemStmt.run(
+                            newOrderId,
+                            item.product_name || item.item_name || item.name || 'Ordered Product',
+                            item.sku || null,
+                            item.hsn_code || item.hsn || null,
+                            parseFloat(item.quantity) || 1,
+                            parseFloat(item.purchase_price || item.rate || item.price || item.unit_price) || 0,
+                            parseFloat(item.discount) || 0,
+                            parseFloat(item.gst_percentage || item.gst || item.tax_rate) || 0,
+                            parseFloat(item.total || item.total_amount) || 0
+                        );
+                    }
+                }
+            } else {
+                if (existingOrder.status !== targetStatus && existingOrder.status !== 'Invoiced') {
+                    await db.prepare(`
+                        UPDATE business_orders SET
+                            status = ?, subtotal = ?, total_discount = ?, total_tax = ?,
+                            grand_total = ?, advance_amount = ?, pending_amount = ?, updated_at = ?
+                        WHERE id = ?
+                    `).run(targetStatus, subtotal, totalDiscount, totalTax, grandTotal, advanceAmount, pendingAmount, now, existingOrder.id);
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('[Order Controller] syncIncomingCustomerPurchases error:', err.message);
+    }
+};
+
 const orderController = {
     // 1. Create Sales Order
     createOrder: async (req, res) => {
@@ -69,6 +237,9 @@ const orderController = {
     getOrders: async (req, res) => {
         const { search, status, customer_id } = req.query;
         try {
+            // Automatically synchronize incoming purchase bills / orders raised by customers
+            await syncIncomingCustomerPurchases(req.user);
+
             let query = `SELECT * FROM business_orders WHERE user_id = ?`;
             const params = [req.user.id];
 
