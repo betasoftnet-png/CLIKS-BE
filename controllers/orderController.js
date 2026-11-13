@@ -184,10 +184,16 @@ const orderController = {
         if (!customer) return sendError(res, 'Customer name is required', 400);
 
         try {
+            let userSettings = {};
+            try {
+                const userRow = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+                if (userRow?.settings) userSettings = JSON.parse(userRow.settings);
+            } catch (e) {}
+
             const order_number = await getNextSequence({
                 userId: req.user.id,
                 docType: 'ORDER',
-                prefix: 'SO-',
+                prefix: userSettings.prefixSaleOrder || 'SO-',
                 padding: 6
             });
             const now = new Date().toISOString();
@@ -473,10 +479,16 @@ const orderController = {
             const orderItems = await db.prepare('SELECT * FROM business_order_items WHERE order_id = ?').all(id);
             
             const now = new Date().toISOString();
+            let userSettings = {};
+            try {
+                const userRow = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+                if (userRow?.settings) userSettings = JSON.parse(userRow.settings);
+            } catch (e) {}
+
             const invoiceNumber = await getNextSequence({
                 userId: req.user.id,
                 docType: 'INVOICE',
-                prefix: 'INV-',
+                prefix: userSettings.prefixSale || 'INV-',
                 padding: 6
             });
 

@@ -210,21 +210,27 @@ const billingController = {
             }
 
             if (!invNum || isTimestampLike || isDuplicate) {
+                let userSettings = {};
+                try {
+                    const userRow = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+                    if (userRow?.settings) userSettings = JSON.parse(userRow.settings);
+                } catch (e) {}
+
                 let docType = 'INVOICE';
-                let prefix = 'INV-';
+                let prefix = userSettings.prefixSale || 'INV-';
 
                 if (invoice_type === 'Quotation' || invoice_type === 'Estimate') {
                     docType = 'ESTIMATE';
-                    prefix = 'EST-';
+                    prefix = userSettings.prefixEstimate || 'EST-';
                 } else if (invoice_type === 'Proforma') {
                     docType = 'PROFORMA';
-                    prefix = 'PRO-';
+                    prefix = userSettings.prefixProforma || 'PRO-';
                 } else if (invoice_type === 'Return' || invoice_type === 'CreditNote') {
                     docType = 'RETURN';
-                    prefix = 'RET-';
+                    prefix = userSettings.prefixCredit || 'CN-';
                 } else if (invoice_type === 'POS') {
                     docType = 'POS';
-                    prefix = 'POS-';
+                    prefix = userSettings.prefixPos || 'POS-';
                 } else if (resolvedBranchId) {
                     try {
                         const br = await db.prepare('SELECT invoice_prefix FROM branches WHERE id = ? AND user_id = ?').get(resolvedBranchId, req.user.id);
@@ -702,10 +708,16 @@ const billingController = {
             if (!src) return sendError(res, 'Source invoice not found', 404);
 
             const now = new Date().toISOString();
+            let userSettings = {};
+            try {
+                const userRow = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+                if (userRow?.settings) userSettings = JSON.parse(userRow.settings);
+            } catch (e) {}
+
             const invNum = await getNextSequence({
                 userId: req.user.id,
                 docType: 'INVOICE',
-                prefix: 'INV-',
+                prefix: userSettings.prefixSale || 'INV-',
                 padding: 6
             });
 
@@ -1027,22 +1039,29 @@ const billingController = {
     getNextNumber: async (req, res) => {
         try {
             const userId = req.user.id;
-            const { type = 'GST', branch_id } = req.query;
+            const { type = 'GST', branch_id, prefix: reqPrefix } = req.query;
+
+            let userSettings = {};
+            try {
+                const userRow = await db.prepare('SELECT settings FROM users WHERE id = ?').get(userId);
+                if (userRow?.settings) userSettings = JSON.parse(userRow.settings);
+            } catch (e) {}
+
             let docType = 'INVOICE';
-            let prefix = 'INV-';
+            let prefix = reqPrefix || userSettings.prefixSale || 'INV-';
 
             if (type === 'Quotation' || type === 'Estimate') {
                 docType = 'ESTIMATE';
-                prefix = 'EST-';
+                prefix = reqPrefix || userSettings.prefixEstimate || 'EST-';
             } else if (type === 'Proforma') {
                 docType = 'PROFORMA';
-                prefix = 'PRO-';
+                prefix = reqPrefix || userSettings.prefixProforma || 'PRO-';
             } else if (type === 'Return' || type === 'CreditNote') {
                 docType = 'RETURN';
-                prefix = 'RET-';
+                prefix = reqPrefix || userSettings.prefixCredit || 'CN-';
             } else if (type === 'POS') {
                 docType = 'POS';
-                prefix = 'POS-';
+                prefix = reqPrefix || userSettings.prefixPos || 'POS-';
             } else {
                 const effBranchId = branch_id || req.user?.branch_id;
                 if (effBranchId) {

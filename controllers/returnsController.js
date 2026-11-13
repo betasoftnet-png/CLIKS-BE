@@ -267,10 +267,16 @@ const returnsController = {
             const now = new Date().toISOString();
             let retNum = return_number ? String(return_number).trim() : '';
             if (!retNum || /^RET-\d{6,}$/i.test(retNum)) {
+                let userSettings = {};
+                try {
+                    const userRow = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+                    if (userRow?.settings) userSettings = JSON.parse(userRow.settings);
+                } catch (e) {}
+
                 retNum = await getNextSequence({
                     userId: req.user.id,
                     docType: 'RETURN',
-                    prefix: 'RET-',
+                    prefix: userSettings.prefixCredit || 'CN-',
                     padding: 6
                 });
             }

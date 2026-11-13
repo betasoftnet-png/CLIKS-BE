@@ -227,11 +227,17 @@ const purchaseController = {
             const now = new Date().toISOString();
             let purchaseNum = purchase_number ? String(purchase_number).trim() : '';
             if (!purchaseNum || /^(PO|BILL|PUR)-\d{6,}$/i.test(purchaseNum)) {
+                let userSettings = {};
+                try {
+                    const userRow = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+                    if (userRow?.settings) userSettings = JSON.parse(userRow.settings);
+                } catch (e) {}
+
                 purchaseNum = await getNextSequence({
                     userId: req.user.id,
                     branchId: req.user.branch_id || req.body.branch_id || null,
                     docType: 'PURCHASE',
-                    prefix: 'PO-',
+                    prefix: userSettings.prefixPurchase || 'PO-',
                     padding: 6
                 });
             }
