@@ -212,11 +212,11 @@ const updateProfile = async (req, res) => {
       params.push(activeSubsStr);
     }
     if (favorite_products !== undefined) { updates.push('favorite_products = ?'); params.push(favorite_products); }
-    if (business_name !== undefined) { updates.push('business_name = ?'); params.push(business_name); }
-    if (gstin !== undefined) { updates.push('gstin = ?'); params.push(gstin); }
-    if (state_registered !== undefined) { updates.push('state_registered = ?'); params.push(state_registered); }
-    if (address !== undefined) { updates.push('address = ?'); params.push(address); }
-    if (pincode !== undefined) { updates.push('pincode = ?'); params.push(pincode); }
+    if (business_name !== undefined && business_name !== null) { updates.push('business_name = ?'); params.push(business_name); }
+    if (gstin !== undefined && gstin !== null) { updates.push('gstin = ?'); params.push(gstin); }
+    if (state_registered !== undefined && state_registered !== null) { updates.push('state_registered = ?'); params.push(state_registered); }
+    if (address !== undefined && address !== null) { updates.push('address = ?'); params.push(address); }
+    if (pincode !== undefined && pincode !== null) { updates.push('pincode = ?'); params.push(pincode); }
     updates.push('updated_at = ?');
     params.push(new Date().toISOString());
   }
