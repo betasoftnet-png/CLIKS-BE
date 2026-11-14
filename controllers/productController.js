@@ -743,7 +743,7 @@ const productController = {
 
     // 17. Categories
     createCategory: async (req, res) => {
-        const { category_name, parent_id, description, image_url, icon } = req.body || {};
+        const { category_name, parent_id, description, image_url, icon, product_ids } = req.body || {};
         if (!category_name || !String(category_name).trim()) return sendError(res, 'Category name is required', 400);
         
         try {
@@ -772,12 +772,61 @@ const productController = {
                 return sendError(res, parentVal ? 'A subcategory with this name already exists in this category' : 'A category with this name already exists', 400);
             }
 
+            const now = new Date().toISOString();
             const result = await db.prepare(`
                 INSERT INTO product_categories (user_id, category_name, parent_id, description, image_url, icon, is_active, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-            `).run(req.user.id, trimmedName, parentVal, description || null, image_url || null, icon || null, new Date().toISOString());
+            `).run(req.user.id, trimmedName, parentVal, description || null, image_url || null, icon || null, now);
 
-            const created = await db.prepare('SELECT * FROM product_categories WHERE id = ?').get(result.lastInsertRowid);
+            const newCategoryId = result.lastInsertRowid;
+
+            // Associate any selected products during category creation
+            if (Array.isArray(product_ids) && product_ids.length > 0) {
+                const cleanIds = product_ids.map(Number).filter(id => !isNaN(id) && id > 0);
+                if (cleanIds.length > 0) {
+                    if (parentVal) {
+                        // Subcategory creation: resolve parent category name
+                        const parentCat = await db.prepare('SELECT id, category_name FROM product_categories WHERE id = ? AND user_id = ?').get(parentVal, req.user.id);
+                        const parentName = parentCat ? parentCat.category_name.trim() : '';
+                        const resolvedCatName = parentName ? `${parentName} > ${trimmedName}` : trimmedName;
+
+                        for (const pid of cleanIds) {
+                            await db.prepare(`
+                                UPDATE business_products 
+                                SET category = ?, group_id = ?, subgroup_id = ?, updated_at = ?
+                                WHERE id = ? AND user_id = ?
+                            `).run(resolvedCatName, parentVal, newCategoryId, now, pid, req.user.id);
+
+                            try {
+                                const prodRow = await db.prepare('SELECT name, sku FROM business_products WHERE id = ?').get(pid);
+                                if (prodRow) {
+                                    await db.prepare('UPDATE stock SET category = ?, updated_at = ? WHERE user_id = ? AND (sku = ? OR LOWER(name) = LOWER(?))')
+                                        .run(resolvedCatName, now, req.user.id, prodRow.sku || '', prodRow.name || '');
+                                }
+                            } catch (_) {}
+                        }
+                    } else {
+                        // Main category creation
+                        for (const pid of cleanIds) {
+                            await db.prepare(`
+                                UPDATE business_products 
+                                SET category = ?, group_id = ?, subgroup_id = NULL, updated_at = ?
+                                WHERE id = ? AND user_id = ?
+                            `).run(trimmedName, newCategoryId, now, pid, req.user.id);
+
+                            try {
+                                const prodRow = await db.prepare('SELECT name, sku FROM business_products WHERE id = ?').get(pid);
+                                if (prodRow) {
+                                    await db.prepare('UPDATE stock SET category = ?, updated_at = ? WHERE user_id = ? AND (sku = ? OR LOWER(name) = LOWER(?))')
+                                        .run(trimmedName, now, req.user.id, prodRow.sku || '', prodRow.name || '');
+                                }
+                            } catch (_) {}
+                        }
+                    }
+                }
+            }
+
+            const created = await db.prepare('SELECT * FROM product_categories WHERE id = ?').get(newCategoryId);
             return sendSuccess(res, created, 'Category created successfully', 201);
         } catch (error) {
             console.error('[Product Controller] Create category error:', error);
@@ -821,7 +870,11 @@ const productController = {
                 SELECT c.*, p.category_name as parent_name,
                        (SELECT COUNT(*) FROM business_products bp 
                         WHERE bp.user_id = c.user_id 
-                          AND (bp.subgroup_id = c.id OR bp.group_id = c.id OR bp.category = c.category_name)
+                          AND (
+                            (c.parent_id IS NULL AND (bp.group_id = c.id OR bp.category = c.category_name OR bp.category LIKE (c.category_name || ' > %')))
+                            OR
+                            (c.parent_id IS NOT NULL AND (bp.subgroup_id = c.id OR bp.category = c.category_name OR bp.category LIKE ('% > ' || c.category_name)))
+                          )
                        ) as product_count,
                        (SELECT COUNT(*) FROM product_categories sc 
                         WHERE sc.parent_id = c.id AND sc.user_id = c.user_id
@@ -861,7 +914,7 @@ const productController = {
 
     updateCategory: async (req, res) => {
         const { categoryId } = req.params;
-        const { category_name, parent_id, description, image_url, icon, is_active } = req.body || {};
+        const { category_name, parent_id, description, image_url, icon, is_active, product_ids } = req.body || {};
         try {
             const existing = await db.prepare('SELECT * FROM product_categories WHERE id = ? AND user_id = ?').get(categoryId, req.user.id);
             if (!existing) return sendError(res, 'Category not found', 404);
@@ -872,6 +925,7 @@ const productController = {
             const descVal = description !== undefined ? description : existing.description;
             const imgVal = image_url !== undefined ? image_url : existing.image_url;
             const iconVal = icon !== undefined ? icon : existing.icon;
+            const now = new Date().toISOString();
 
             // Check duplicate if name changed
             if (trimmedName.toLowerCase() !== existing.category_name.toLowerCase()) {
@@ -880,7 +934,18 @@ const productController = {
 
                 // Cascade category rename to existing products
                 try {
-                    await db.prepare('UPDATE business_products SET category = ? WHERE user_id = ? AND category = ?').run(trimmedName, req.user.id, existing.category_name);
+                    if (parentVal) {
+                        const parentCat = await db.prepare('SELECT id, category_name FROM product_categories WHERE id = ? AND user_id = ?').get(parentVal, req.user.id);
+                        const parentName = parentCat ? parentCat.category_name.trim() : '';
+                        const newFullString = parentName ? `${parentName} > ${trimmedName}` : trimmedName;
+                        await db.prepare('UPDATE business_products SET category = ? WHERE user_id = ? AND subgroup_id = ?').run(newFullString, req.user.id, categoryId);
+                    } else {
+                        await db.prepare('UPDATE business_products SET category = ? WHERE user_id = ? AND group_id = ? AND (subgroup_id IS NULL OR subgroup_id = 0)').run(trimmedName, req.user.id, categoryId);
+                        const subcats = await db.prepare('SELECT id, category_name FROM product_categories WHERE parent_id = ? AND user_id = ?').all(categoryId, req.user.id);
+                        for (const sc of subcats) {
+                            await db.prepare('UPDATE business_products SET category = ? WHERE user_id = ? AND subgroup_id = ?').run(`${trimmedName} > ${sc.category_name}`, req.user.id, sc.id);
+                        }
+                    }
                 } catch (e) {
                     console.error('[Product Controller] Error renaming category on products:', e);
                 }
@@ -891,6 +956,76 @@ const productController = {
                 SET category_name = ?, parent_id = ?, description = ?, image_url = ?, icon = ?, is_active = ?
                 WHERE id = ? AND user_id = ?
             `).run(trimmedName, parentVal, descVal, imgVal, iconVal, activeVal, categoryId, req.user.id);
+
+            // Handle product assignments if product_ids array is provided
+            if (Array.isArray(product_ids)) {
+                const cleanIds = product_ids.map(Number).filter(id => !isNaN(id) && id > 0);
+                if (parentVal) {
+                    // Subcategory: resolve parent category name
+                    const parentCat = await db.prepare('SELECT id, category_name FROM product_categories WHERE id = ? AND user_id = ?').get(parentVal, req.user.id);
+                    const parentName = parentCat ? parentCat.category_name.trim() : '';
+                    const resolvedCatName = parentName ? `${parentName} > ${trimmedName}` : trimmedName;
+
+                    // Demote unselected products that were previously in this subcategory back to parent category
+                    const currentInSub = await db.prepare('SELECT id FROM business_products WHERE subgroup_id = ? AND user_id = ?').all(categoryId, req.user.id);
+                    for (const row of currentInSub) {
+                        if (!cleanIds.includes(row.id)) {
+                            await db.prepare(`
+                                UPDATE business_products 
+                                SET category = ?, group_id = ?, subgroup_id = NULL, updated_at = ?
+                                WHERE id = ? AND user_id = ?
+                            `).run(parentName || null, parentVal, now, row.id, req.user.id);
+                        }
+                    }
+
+                    // Assign selected products to this subcategory
+                    for (const pid of cleanIds) {
+                        await db.prepare(`
+                            UPDATE business_products 
+                            SET category = ?, group_id = ?, subgroup_id = ?, updated_at = ?
+                            WHERE id = ? AND user_id = ?
+                        `).run(resolvedCatName, parentVal, categoryId, now, pid, req.user.id);
+
+                        try {
+                            const prodRow = await db.prepare('SELECT name, sku FROM business_products WHERE id = ?').get(pid);
+                            if (prodRow) {
+                                await db.prepare('UPDATE stock SET category = ?, updated_at = ? WHERE user_id = ? AND (sku = ? OR LOWER(name) = LOWER(?))')
+                                    .run(resolvedCatName, now, req.user.id, prodRow.sku || '', prodRow.name || '');
+                            }
+                        } catch (_) {}
+                    }
+                } else {
+                    // Main category
+                    // Unlink unselected products that were previously in this main category (and not in any subcategory)
+                    const currentInMain = await db.prepare('SELECT id FROM business_products WHERE group_id = ? AND (subgroup_id IS NULL OR subgroup_id = 0) AND user_id = ?').all(categoryId, req.user.id);
+                    for (const row of currentInMain) {
+                        if (!cleanIds.includes(row.id)) {
+                            await db.prepare(`
+                                UPDATE business_products 
+                                SET category = NULL, group_id = NULL, subgroup_id = NULL, updated_at = ?
+                                WHERE id = ? AND user_id = ?
+                            `).run(now, row.id, req.user.id);
+                        }
+                    }
+
+                    // Assign selected products to this main category
+                    for (const pid of cleanIds) {
+                        await db.prepare(`
+                            UPDATE business_products 
+                            SET category = ?, group_id = ?, subgroup_id = NULL, updated_at = ?
+                            WHERE id = ? AND user_id = ?
+                        `).run(trimmedName, categoryId, now, pid, req.user.id);
+
+                        try {
+                            const prodRow = await db.prepare('SELECT name, sku FROM business_products WHERE id = ?').get(pid);
+                            if (prodRow) {
+                                await db.prepare('UPDATE stock SET category = ?, updated_at = ? WHERE user_id = ? AND (sku = ? OR LOWER(name) = LOWER(?))')
+                                    .run(trimmedName, now, req.user.id, prodRow.sku || '', prodRow.name || '');
+                            }
+                        } catch (_) {}
+                    }
+                }
+            }
 
             const updated = await db.prepare('SELECT * FROM product_categories WHERE id = ?').get(categoryId);
             return sendSuccess(res, updated, 'Category updated successfully');
