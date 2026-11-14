@@ -39,11 +39,11 @@ const likeLimiter = rateLimit({
 
 const globalLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 1200,
+  max: 2400,
   skip: (req) => {
     // Exempt background polling, presence heartbeats, and announcements
     const p = req.path || req.originalUrl || '';
-    return p.includes('/heartbeat') || p.includes('/announcement') || p.includes('/notifications');
+    return p.includes('/heartbeat') || p.includes('/announcement') || p.includes('/notifications') || p.includes('/presence');
   },
   standardHeaders: true,
   legacyHeaders: false,
