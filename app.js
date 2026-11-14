@@ -47,7 +47,9 @@ const allowedOrigins = [
   'http://127.0.0.1:3000',
   'http://127.0.0.1:5173',
   'https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/',
-  'https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io'
+  'https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io',
+  'https://07b0lcf6hdobzm2tucd31oh8.151.185.41.212.sslip.io/',
+  'https://07b0lcf6hdobzm2tucd31oh8.151.185.41.212.sslip.io'
 ];
 
 const corsOptions = {
