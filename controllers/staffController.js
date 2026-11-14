@@ -23,6 +23,7 @@ const initColumns = async () => {
         'deduct_tds',
         'monthly_leave_quota',
         'annual_bonus',
+        'annual_bonus_pct',
         'weekly_off',
         'esi_number',
         'employee_code',
@@ -211,13 +212,32 @@ const staffController = {
                 }
             }
 
-            const tableCols = (await db.prepare('PRAGMA table_info(employees)').all()).map(c => c.name);
+            const ALLOWED_STAFF_COLS = [
+                'name', 'role', 'email', 'phone', 'salary', 'status', 'hire_date',
+                'department', 'designation', 'emergency_contact', 'bank_details',
+                'address', 'shift', 'notes', 'salary_structure', 'roles', 'permissions',
+                'profile_photo', 'documents', 'salary_type', 'performance_rating',
+                'target_score', 'leave_balance', 'deduct_tds', 'monthly_leave_quota',
+                'annual_bonus', 'annual_bonus_pct', 'weekly_off', 'esi_number', 'employee_code',
+                'city', 'state', 'pincode'
+            ];
+
+            let tableCols = ALLOWED_STAFF_COLS;
+            try {
+                const pragmaCols = await db.prepare('PRAGMA table_info(employees)').all();
+                if (Array.isArray(pragmaCols) && pragmaCols.length > 0) {
+                    tableCols = pragmaCols.map(c => c.name);
+                }
+            } catch (pragmaErr) {
+                console.warn('[Staff Controller] PRAGMA table_info fallback to allowed columns');
+            }
+
             const updates = [];
             const params = [];
             for (const [key, value] of Object.entries(fields)) {
                 if (key !== 'id' && key !== 'user_id' && tableCols.includes(key)) {
                     updates.push(`${key} = ?`);
-                    params.push(typeof value === 'object' ? JSON.stringify(value) : value);
+                    params.push(typeof value === 'object' && value !== null ? JSON.stringify(value) : value);
                 }
             }
 

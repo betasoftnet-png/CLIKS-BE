@@ -209,6 +209,32 @@ if (dbType === 'postgres') {
       "ALTER TABLE business_suppliers ADD COLUMN payment_terms VARCHAR(100) DEFAULT 'Net 30'",
       "ALTER TABLE business_suppliers ADD COLUMN opening_balance NUMERIC DEFAULT 0",
       "ALTER TABLE business_suppliers ADD COLUMN supplier_code VARCHAR(100)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS department VARCHAR(255)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS designation VARCHAR(255)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS emergency_contact TEXT",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_details TEXT",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS address TEXT",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS shift TEXT",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS notes TEXT",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS salary_structure TEXT",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS roles TEXT",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS permissions TEXT",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS profile_photo TEXT",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS documents TEXT",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS salary_type VARCHAR(100)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS performance_rating VARCHAR(50)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS target_score VARCHAR(50)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS leave_balance VARCHAR(50)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS deduct_tds VARCHAR(50)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS monthly_leave_quota VARCHAR(50)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS annual_bonus VARCHAR(50)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS annual_bonus_pct VARCHAR(50)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS weekly_off VARCHAR(100)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS esi_number VARCHAR(100)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS employee_code VARCHAR(100)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS city VARCHAR(100)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS state VARCHAR(100)",
+      "ALTER TABLE employees ADD COLUMN IF NOT EXISTS pincode VARCHAR(50)",
       "ALTER TABLE business_products ADD COLUMN display_name VARCHAR(255)",
       "ALTER TABLE business_products ADD COLUMN short_name VARCHAR(255)",
       "ALTER TABLE business_products ADD COLUMN wholesale_price NUMERIC DEFAULT 0",
@@ -242,6 +268,12 @@ if (dbType === 'postgres') {
 
   const convertQuery = (sql) => {
     let pgSql = sql;
+
+    // Replace SQLite PRAGMA table_info(tableName) with PostgreSQL information_schema query
+    const pragmaMatch = pgSql.match(/^\s*PRAGMA\s+table_info\((\w+)\)\s*$/i);
+    if (pragmaMatch) {
+      return `SELECT column_name AS name FROM information_schema.columns WHERE LOWER(table_name) = '${pragmaMatch[1].toLowerCase()}'`;
+    }
 
     // Replace SQLite strftime with PostgreSQL TO_CHAR
     // Specifically handle the formats used in the project: strftime('%Y-%m', ...)
