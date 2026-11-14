@@ -61,6 +61,20 @@ const payrollController = {
             
             const currentMonthName = new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
             const selectedMonth = month || currentMonthName;
+            const parsedEmpId = parseEmployeeId(employee_id || 'EMP-001');
+            const cleanEmpName = String(employee_name || '').trim();
+
+            // Anti-duplicate protection: prevent duplicate record on rapid consecutive clicks
+            const existingPayroll = await db.prepare(`
+                SELECT * FROM payroll 
+                WHERE user_id = ? 
+                  AND (employee_id = ? OR (LOWER(TRIM(employee_name)) = LOWER(?) AND ? != ''))
+                  AND month = ?
+            `).get(req.user.id, parsedEmpId, cleanEmpName, cleanEmpName, selectedMonth);
+
+            if (existingPayroll) {
+                return sendSuccess(res, existingPayroll, 'Payroll already processed for this period', 200);
+            }
 
             const baseVal = (basic_salary !== undefined && basic_salary !== null && basic_salary !== '') ? parseFloat(basic_salary) : (amount ? parseFloat(amount) : 30000);
             const hraVal = (hra_amount !== undefined && hra_amount !== null && hra_amount !== '') ? parseFloat(hra_amount) : 0;
