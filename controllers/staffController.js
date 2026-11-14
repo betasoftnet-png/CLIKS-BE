@@ -47,6 +47,40 @@ const staffController = {
         if (!name) return sendError(res, 'Name is required', 400);
 
         try {
+            // Prevent duplicate employee code for the same organization
+            if (employee_code && String(employee_code).trim()) {
+                const cleanCode = String(employee_code).trim();
+                const existingCode = await db.prepare('SELECT * FROM employees WHERE user_id = ? AND LOWER(TRIM(employee_code)) = LOWER(?)').get(req.user.id, cleanCode);
+                if (existingCode) {
+                    return sendSuccess(res, existingCode, 'Staff already onboarded', 200);
+                }
+            }
+
+            // Anti-duplicate protection: prevent duplicate record on rapid consecutive clicks
+            const trimmedName = String(name).trim();
+            const cleanPhone = phone ? String(phone).trim() : null;
+            const cleanEmail = email ? String(email).trim() : null;
+            if (trimmedName && (cleanPhone || cleanEmail)) {
+                let dupCheckQuery = 'SELECT * FROM employees WHERE user_id = ? AND LOWER(TRIM(name)) = LOWER(?)';
+                const dupCheckParams = [req.user.id, trimmedName];
+                if (cleanPhone && cleanEmail) {
+                    dupCheckQuery += ' AND (phone = ? OR LOWER(email) = LOWER(?))';
+                    dupCheckParams.push(cleanPhone, cleanEmail);
+                } else if (cleanPhone) {
+                    dupCheckQuery += ' AND phone = ?';
+                    dupCheckParams.push(cleanPhone);
+                } else if (cleanEmail) {
+                    dupCheckQuery += ' AND LOWER(email) = LOWER(?)';
+                    dupCheckParams.push(cleanEmail);
+                }
+                dupCheckQuery += ' ORDER BY id DESC LIMIT 1';
+
+                const existingStaff = await db.prepare(dupCheckQuery).get(...dupCheckParams);
+                if (existingStaff) {
+                    return sendSuccess(res, existingStaff, 'Staff already onboarded', 200);
+                }
+            }
+
             if (esi_number && String(esi_number).trim()) {
                 const cleanEsi = String(esi_number).trim();
                 const existingWithEsi = await db.prepare(`
