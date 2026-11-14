@@ -73,7 +73,8 @@ const initTables = async () => {
         const txColumns = [
             'purchase_bill_ref TEXT',
             'received_by TEXT',
-            'warehouse_id INTEGER'
+            'warehouse_id INTEGER',
+            'zone TEXT'
         ];
         for (const col of txColumns) {
             try {
@@ -1232,7 +1233,8 @@ const warehouseController = {
                 SELECT t.*, 
                        COALESCE(MAX(s.name), MAX(bp.name), 'Unknown Item') as product_name, 
                        COALESCE(MAX(w.name), MAX(w2.name), MAX(w3.name), ?) as warehouse_name,
-                       COALESCE(MAX(t.received_by), MAX(u.username), 'Authorized Staff') as received_by
+                       COALESCE(MAX(t.received_by), MAX(u.username), 'Authorized Staff') as received_by,
+                       COALESCE(MAX(t.zone), MAX(s.zone), MAX(bp.zone), 'Zone A') as zone
                 FROM stock_transactions t 
                 LEFT JOIN stock s ON t.stock_id = s.id AND s.user_id = t.user_id
                 LEFT JOIN business_products bp ON (t.stock_id = bp.id OR CAST(t.stock_id AS TEXT) = CAST(bp.id AS TEXT)) AND bp.user_id = t.user_id

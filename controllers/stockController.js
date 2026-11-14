@@ -51,7 +51,7 @@ const ensureStockTable = async () => {
     await db.prepare("ALTER TABLE stock ADD COLUMN hsn_code TEXT").run();
   } catch (e) {}
   try {
-    const txColumns = ['purchase_bill_ref TEXT', 'received_by TEXT', 'warehouse_id INTEGER', 'notes TEXT', 'supplier_name TEXT', 'unit_price REAL'];
+    const txColumns = ['purchase_bill_ref TEXT', 'received_by TEXT', 'warehouse_id INTEGER', 'notes TEXT', 'supplier_name TEXT', 'unit_price REAL', 'zone TEXT', 'rack_number TEXT'];
     for (const col of txColumns) {
       try { await db.prepare(`ALTER TABLE stock_transactions ADD COLUMN ${col}`).run(); } catch (e) {}
     }
@@ -286,13 +286,23 @@ const adjustQuantity = async (req, res) => {
 
   // Log transaction
   try {
-    const { purchase_bill_ref, received_by, staff_name, warehouse_id, destination_warehouse_id, notes, supplier_name, unit_price, date } = req.body;
+    const { purchase_bill_ref, received_by, staff_name, warehouse_id, destination_warehouse_id, notes, supplier_name, unit_price, date, zone, storage_zone } = req.body;
     const finalWhId = warehouse_id || destination_warehouse_id || null;
     const finalStaff = received_by || staff_name || (req.user ? (req.user.name || req.user.username) : null) || 'Authorized Staff';
+    const finalZone = zone || storage_zone || 'Zone A';
     const txDate = date || now;
+
+    // Also update zone on stock item if supplied
+    if (finalZone && finalZone !== 'N/A') {
+      try {
+        await db.prepare('UPDATE stock SET zone = ? WHERE id = ? AND user_id = ?').run(finalZone, req.params.id, req.user.id);
+        await db.prepare('UPDATE business_products SET zone = ? WHERE id = ? AND user_id = ?').run(finalZone, req.params.id, req.user.id);
+      } catch (_) {}
+    }
+
     await db.prepare(`
-      INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at, purchase_bill_ref, received_by, warehouse_id, notes, supplier_name, unit_price)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO stock_transactions (stock_id, user_id, type, quantity, date, created_at, purchase_bill_ref, received_by, warehouse_id, notes, supplier_name, unit_price, zone)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.params.id, 
       req.user.id, 
@@ -305,7 +315,8 @@ const adjustQuantity = async (req, res) => {
       finalWhId,
       notes || null,
       supplier_name || null,
-      unit_price ? Number(unit_price) : null
+      unit_price ? Number(unit_price) : null,
+      finalZone
     );
   } catch (e) {}
 
