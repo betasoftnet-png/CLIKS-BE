@@ -44,7 +44,7 @@ const safeUser = (user) => {
   }
 
   const userCreatedAt = user.created_at || new Date().toISOString();
-  const rawBusiness = parsedSubs?.business || { active: true, plan: user.tier || 'Starter Plan' };
+  const rawBusiness = parsedSubs?.business || { active: true, plan: user.tier || 'Trial Plan' };
   const rawFinPro = parsedSubs?.fin_pro || (Boolean(user.finpro_plan || user.ca_plan) ? { active: true, plan: user.finpro_plan || user.ca_plan } : null);
   const rawInvestor = parsedSubs?.investor || (Boolean(user.investor_plan || user.betaclub_investor_plan) ? { active: true, plan: user.investor_plan || user.betaclub_investor_plan } : null);
   const rawPoster = parsedSubs?.poster || (Boolean(user.poster_plan || user.founder_plan) ? { active: true, plan: user.poster_plan || user.founder_plan } : null);
@@ -54,25 +54,38 @@ const safeUser = (user) => {
     const plan = sub.plan || defaultPlan;
     const startDate = sub.startDate || sub.updated_at || userCreatedAt;
     const isMonthly = String(plan).toLowerCase().includes('monthly');
-    const duration = sub.duration_days || (isMonthly ? 30 : defaultDays);
+    const isTrial = String(plan).toLowerCase().includes('trial') || plan === 'Free Plan';
+    const duration = sub.duration_days || (isTrial ? (Number(user.subscription_days_remaining) || 15) : (isMonthly ? 30 : defaultDays));
     const startMs = new Date(startDate).getTime() || Date.now();
     const expiryDate = sub.expiryDate || sub.valid_until || new Date(startMs + duration * 24 * 60 * 60 * 1000).toISOString();
     return {
       ...sub,
       active: sub.active ?? true,
       plan,
+      duration_days: duration,
       startDate,
       expiryDate,
       valid_until: expiryDate
     };
   };
 
+  const businessSub = enrichSub(rawBusiness, user.tier || 'Trial Plan', 365);
   safe.active_subscriptions = {
-    business: enrichSub(rawBusiness, user.tier || 'Starter Plan', 365),
+    business: businessSub,
     fin_pro: enrichSub(rawFinPro, 'Fin-Pro Solo', 365),
     investor: { active: false, plan: null },
     poster: { active: false, plan: null }
   };
+
+  if (businessSub && businessSub.expiryDate) {
+    const now = Date.now();
+    const expMs = new Date(businessSub.expiryDate).getTime();
+    const remaining = Math.max(0, Math.ceil((expMs - now) / (1000 * 60 * 60 * 24)));
+    safe.days_remaining = remaining;
+    safe.subscription_days_remaining = remaining;
+  } else {
+    safe.days_remaining = user.subscription_days_remaining ?? 0;
+  }
 
   safe.business_name = user.business_name || null;
   safe.gstin = user.gstin || null;

@@ -266,6 +266,10 @@ const getPlatformConfig = async (req, res) => {
     rows.forEach(r => {
       mappedConfig[r.key] = r.value;
     });
+
+    if (!mappedConfig.default_trial_days) {
+      mappedConfig.default_trial_days = '15';
+    }
     
     return sendSuccess(res, mappedConfig, 'Global configuration loaded.');
   } catch (err) {

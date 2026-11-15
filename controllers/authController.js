@@ -90,6 +90,17 @@ const ssoLogin = async (req, res) => {
   // If the user's name is multiple words, extract a username if missing
   const username = email.split('@')[0];
 
+  // Query default trial days from platform_config (defaults to 15)
+  let defaultTrialDays = 15;
+  try {
+    const cfgRow = await db.prepare('SELECT value FROM platform_config WHERE key = ?').get('default_trial_days');
+    if (cfgRow && cfgRow.value && !isNaN(Number(cfgRow.value))) {
+      defaultTrialDays = Math.max(1, parseInt(cfgRow.value, 10));
+    }
+  } catch (cfgErr) {
+    console.warn('Could not read default_trial_days from platform_config:', cfgErr.message);
+  }
+
   // Check if user exists
   let user = await db.prepare('SELECT * FROM users WHERE email = ?').get(email);
 
@@ -98,6 +109,20 @@ const ssoLogin = async (req, res) => {
     const now = new Date().toISOString();
     const role = accountType === 'BUSINESS' ? 'business' : 'user';
     const hash = 'sso-managed'; // No local password
+    const expiryDate = new Date(Date.now() + defaultTrialDays * 24 * 60 * 60 * 1000).toISOString();
+    const initialSubs = JSON.stringify({
+      business: {
+        active: true,
+        plan: 'Trial Plan',
+        startDate: now,
+        duration_days: defaultTrialDays,
+        expiryDate: expiryDate,
+        valid_until: expiryDate
+      },
+      fin_pro: { active: false, plan: null },
+      investor: { active: false, plan: null },
+      poster: { active: false, plan: null }
+    });
 
     // Try to use email prefix as username, fallback to full email if prefix is taken
     let finalUsername = username;
@@ -108,21 +133,47 @@ const ssoLogin = async (req, res) => {
 
     try {
       const info = await db.prepare(
-        'INSERT INTO users (username, email, password_hash, role, tier, subscription_days_remaining, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      ).run(finalUsername, email, hash, role, 'Free Plan', 0, now, now);
+        'INSERT INTO users (username, email, password_hash, role, tier, subscription_days_remaining, active_subscriptions, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(finalUsername, email, hash, role, 'Trial Plan', defaultTrialDays, initialSubs, now, now);
 
-      user = await db.prepare('SELECT id, username, email, role, created_at FROM users WHERE id = ?').get(info.lastInsertRowid || info.id || info[0]?.id);
+      user = await db.prepare('SELECT id, username, email, role, created_at, tier, subscription_days_remaining, active_subscriptions FROM users WHERE id = ?').get(info.lastInsertRowid || info.id || info[0]?.id);
     } catch (dbErr) {
       // Final safety fallback if even full email as username somehow fails (e.g. race condition)
       if (dbErr.message.includes('UNIQUE constraint failed: users.username') || dbErr.message.includes('duplicate key value')) {
         finalUsername = `${username}_${Math.floor(Math.random() * 10000)}`;
         const info = await db.prepare(
-          'INSERT INTO users (username, email, password_hash, role, tier, subscription_days_remaining, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(finalUsername, email, hash, role, 'Free Plan', 0, now, now);
-        user = await db.prepare('SELECT id, username, email, role, created_at FROM users WHERE id = ?').get(info.lastInsertRowid || info.id || info[0]?.id);
+          'INSERT INTO users (username, email, password_hash, role, tier, subscription_days_remaining, active_subscriptions, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(finalUsername, email, hash, role, 'Trial Plan', defaultTrialDays, initialSubs, now, now);
+        user = await db.prepare('SELECT id, username, email, role, created_at, tier, subscription_days_remaining, active_subscriptions FROM users WHERE id = ?').get(info.lastInsertRowid || info.id || info[0]?.id);
       } else {
         throw dbErr;
       }
+    }
+  } else if (!user.tier || user.tier === 'Free Plan') {
+    // If existing account has no active plan or is on Free Plan, initialize trial
+    const now = new Date().toISOString();
+    const expiryDate = new Date(Date.now() + defaultTrialDays * 24 * 60 * 60 * 1000).toISOString();
+    const initialSubs = JSON.stringify({
+      business: {
+        active: true,
+        plan: 'Trial Plan',
+        startDate: user.created_at || now,
+        duration_days: defaultTrialDays,
+        expiryDate: expiryDate,
+        valid_until: expiryDate
+      },
+      fin_pro: { active: false, plan: null },
+      investor: { active: false, plan: null },
+      poster: { active: false, plan: null }
+    });
+    try {
+      await db.prepare('UPDATE users SET tier = ?, subscription_days_remaining = ?, active_subscriptions = ? WHERE id = ?')
+        .run('Trial Plan', defaultTrialDays, initialSubs, user.id);
+      user.tier = 'Trial Plan';
+      user.subscription_days_remaining = defaultTrialDays;
+      user.active_subscriptions = initialSubs;
+    } catch (updErr) {
+      console.warn('Could not update user to trial plan:', updErr.message);
     }
   }
 
@@ -179,6 +230,10 @@ const ssoLogin = async (req, res) => {
     accountType: 'BUSINESS',
     tier: user.tier,
     subscription_days_remaining: user.subscription_days_remaining,
+    days_remaining: user.subscription_days_remaining,
+    active_subscriptions: typeof user.active_subscriptions === 'string'
+      ? JSON.parse(user.active_subscriptions)
+      : user.active_subscriptions,
     receive_purchase_data: user.receive_purchase_data,
     created_at: user.created_at
   };
@@ -304,13 +359,39 @@ const register = async (req, res) => {
 
   const ownReferralCode = `CLIKS-BIZ-${Math.floor(10000 + Math.random() * 90000)}X`;
 
+  // Fetch admin configured trial days
+  let defaultTrialDays = 15;
+  try {
+    const cfgRow = await db.prepare('SELECT value FROM platform_config WHERE key = ?').get('default_trial_days');
+    if (cfgRow && cfgRow.value && !isNaN(Number(cfgRow.value))) {
+      defaultTrialDays = Math.max(1, parseInt(cfgRow.value, 10));
+    }
+  } catch (cfgErr) {
+    console.warn('Could not read default_trial_days from platform_config:', cfgErr.message);
+  }
+
+  const expiryDate = new Date(Date.now() + defaultTrialDays * 24 * 60 * 60 * 1000).toISOString();
+  const initialSubs = JSON.stringify({
+    business: {
+      active: true,
+      plan: 'Trial Plan',
+      startDate: now,
+      duration_days: defaultTrialDays,
+      expiryDate: expiryDate,
+      valid_until: expiryDate
+    },
+    fin_pro: { active: false, plan: null },
+    investor: { active: false, plan: null },
+    poster: { active: false, plan: null }
+  });
+
   // Insert user record with isVerified: true (is_verified: 1)
   const insertUserStmt = db.prepare(`
     INSERT INTO users (
       username, email, password_hash, role, business_name, tier,
       subscription_days_remaining, is_online, created_at, updated_at,
-      referral_code, is_verified, referral_points
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      referral_code, is_verified, referral_points, active_subscriptions
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const info = await insertUserStmt.run(
@@ -319,14 +400,15 @@ const register = async (req, res) => {
     passwordHash,
     'business',
     rawBusinessName,
-    'Starter Plan',
-    365,
+    'Trial Plan',
+    defaultTrialDays,
     1,
     now,
     now,
     ownReferralCode,
     1, // is_verified: true
-    initialBonusPoints
+    initialBonusPoints,
+    initialSubs
   );
 
   const newUserId = info.lastInsertRowid || info.id;
