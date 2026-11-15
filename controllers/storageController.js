@@ -57,11 +57,11 @@ const formatBytes = (bytes) => {
 };
 
 const MODULE_CONFIGS = [
-    { canonical: 'audit_tax', label: 'Audit & Tax (FIN-PRO)', defaultShare: '40%', files: 'PDFs, XLS, Signed Certificates', color: '#2563EB', badgeBg: '#EFF6FF' },
-    { canonical: 'sales_purchases', label: 'Sales & Purchases', defaultShare: '25%', files: 'PDF Invoices, Vendor Bills', color: '#10B981', badgeBg: '#ECFDF5' },
-    { canonical: 'expenses', label: 'Expenses', defaultShare: '15%', files: 'Receipt Scans, Images', color: '#8B5CF6', badgeBg: '#F5F3FF' },
-    { canonical: 'hr_payroll', label: 'HR & Payroll', defaultShare: '10%', files: 'ID Documents, Payslip PDFs', color: '#F59E0B', badgeBg: '#FFFBEB' },
-    { canonical: 'inventory_media', label: 'Inventory & Media', defaultShare: '10%', files: 'Product Photos, Barcodes', color: '#06B6D4', badgeBg: '#ECFEFF' }
+    { canonical: 'audit_tax', label: 'Audit & Tax (FIN-PRO)', defaultShare: '40%', quotaShare: 0.40, files: 'PDFs, XLS, Signed Certificates', color: '#2563EB', badgeBg: '#EFF6FF' },
+    { canonical: 'sales_purchases', label: 'Sales & Purchases', defaultShare: '25%', quotaShare: 0.25, files: 'PDF Invoices, Vendor Bills', color: '#10B981', badgeBg: '#ECFDF5' },
+    { canonical: 'expenses', label: 'Expenses', defaultShare: '15%', quotaShare: 0.15, files: 'Receipt Scans, Images', color: '#8B5CF6', badgeBg: '#F5F3FF' },
+    { canonical: 'hr_payroll', label: 'HR & Payroll', defaultShare: '10%', quotaShare: 0.10, files: 'ID Documents, Payslip PDFs', color: '#F59E0B', badgeBg: '#FFFBEB' },
+    { canonical: 'inventory_media', label: 'Inventory & Media', defaultShare: '10%', quotaShare: 0.10, files: 'Product Photos, Barcodes', color: '#06B6D4', badgeBg: '#ECFEFF' }
 ];
 
 const recordStorageFileHelper = async (userId, fileName, fileType, fileSize, storagePath, moduleName, userEmail) => {
@@ -161,15 +161,22 @@ const calculateStorageUsage = async (userId, userEmail) => {
 
     const moduleBreakdown = MODULE_CONFIGS.map(cfg => {
         const mBytes = moduleBytesMap[cfg.canonical] || 0;
-        const sharePercent = usedBytes > 0 ? parseFloat(((mBytes / usedBytes) * 100).toFixed(1)) : 0;
+        const allocatedQuotaBytes = Math.round(totalCapacityBytes * cfg.quotaShare);
+        const percentOfTotalQuota = parseFloat(((mBytes / totalCapacityBytes) * 100).toFixed(2));
+        const percentOfModuleQuota = parseFloat(((mBytes / allocatedQuotaBytes) * 100).toFixed(1));
+        const shareOfUsed = usedBytes > 0 ? parseFloat(((mBytes / usedBytes) * 100).toFixed(1)) : 0;
         return {
             module: cfg.label,
             canonicalModule: cfg.canonical,
             bytes: mBytes,
             formatted: formatBytes(mBytes),
-            share: `${sharePercent}%`,
-            sharePercent,
+            allocatedBytes: allocatedQuotaBytes,
+            allocatedFormatted: formatBytes(allocatedQuotaBytes),
             typicalQuota: cfg.defaultShare,
+            percentOfTotalQuota,
+            percentOfModuleQuota,
+            shareOfUsed: `${shareOfUsed}%`,
+            sharePercent: shareOfUsed,
             files: cfg.files,
             color: cfg.color,
             badgeBg: cfg.badgeBg
