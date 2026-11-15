@@ -198,8 +198,14 @@ const staffController = {
         const { id } = req.params;
         const fields = req.body;
         try {
-            const existing = await db.prepare('SELECT * FROM employees WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            const numericId = parseInt(id, 10);
+            const existing = await db.prepare(`
+                SELECT * FROM employees 
+                WHERE (id = ? ${!isNaN(numericId) ? 'OR id = ?' : ''} OR employee_code = ?) AND user_id = ?
+            `).get(...(!isNaN(numericId) ? [id, numericId, String(id), req.user.id] : [id, String(id), req.user.id]));
+
             if (!existing) return sendError(res, 'Staff member not found', 404);
+            const targetId = existing.id;
 
             if (fields.esi_number && String(fields.esi_number).trim()) {
                 const cleanEsi = String(fields.esi_number).trim();
@@ -244,12 +250,12 @@ const staffController = {
             if (updates.length > 0) {
                 updates.push('updated_at = ?');
                 params.push(new Date().toISOString());
-                params.push(id, req.user.id);
+                params.push(targetId, req.user.id);
 
                 await db.prepare(`UPDATE employees SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`).run(...params);
             }
 
-            const updated = await db.prepare('SELECT * FROM employees WHERE id = ?').get(id);
+            const updated = await db.prepare('SELECT * FROM employees WHERE id = ?').get(targetId);
             return sendSuccess(res, updated, 'Staff member updated successfully');
         } catch (error) {
             console.error('[Staff Controller] Error updating staff:', error);
