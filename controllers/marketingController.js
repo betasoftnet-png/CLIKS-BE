@@ -36,6 +36,8 @@ const initTable = async () => {
         try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN executed_at TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN execution_error TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN recipient_emails TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN recurring_campaign INTEGER DEFAULT 0").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN recurrence_frequency TEXT DEFAULT 'none'").run(); } catch(e) {}
     } catch (err) {
         console.warn('[Marketing Controller] Table Init:', err.message);
     }
@@ -297,7 +299,7 @@ const marketingController = {
         const { 
             campaign_name, campaign_type, campaign_status, target_audience, 
             total_recipients, message_title, message_content, scheduled_date, scheduled_time,
-            recipient_emails 
+            recipient_emails, recurring_campaign, recurrence_frequency
         } = req.body;
 
         if (!campaign_name) return sendError(res, 'Campaign name is required', 400);
@@ -310,18 +312,21 @@ const marketingController = {
             const sentCount = isSent ? (total_recipients || 1) : 0;
             const deliveredCount = isSent ? Math.floor(sentCount * 0.98) : 0;
             const roi = isSent ? 180 : 0;
+            const isRecurring = (recurring_campaign === true || recurring_campaign === 1 || recurring_campaign === '1' || recurring_campaign === 'true') ? 1 : 0;
+            const recFreq = isRecurring ? (recurrence_frequency && recurrence_frequency !== 'none' ? recurrence_frequency : 'Weekly') : 'none';
 
             const result = await db.prepare(`
                 INSERT INTO marketing_campaigns (
                     user_id, campaign_name, campaign_type, campaign_status, target_audience,
                     total_recipients, message_title, message_content, scheduled_date, scheduled_time,
-                    recipient_emails, sent_count, delivered_count, roi_percentage, executed_at,
+                    recipient_emails, recurring_campaign, recurrence_frequency, sent_count, delivered_count, roi_percentage, executed_at,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, campaign_name.trim().slice(0, 50), campaign_type || 'Email', status,
                 target_audience, total_recipients || 0, message_title, message_content,
                 scheduled_date, scheduled_time, recipientsJson,
+                isRecurring, recFreq,
                 sentCount, deliveredCount, roi, isSent ? now : null,
                 now, now
             );
@@ -350,7 +355,8 @@ const marketingController = {
                 'campaign_name', 'campaign_type', 'campaign_status', 'target_audience',
                 'total_recipients', 'message_title', 'message_content', 'scheduled_date', 
                 'scheduled_time', 'sent_count', 'delivered_count', 'opened_count',
-                'clicked_count', 'conversion_count', 'roi_percentage'
+                'clicked_count', 'conversion_count', 'roi_percentage', 'recurring_campaign',
+                'recurrence_frequency'
             ];
 
             for (const field of fields) {
