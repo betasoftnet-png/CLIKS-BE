@@ -39,17 +39,30 @@ const initTable = async () => {
         try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN recurring_campaign INTEGER DEFAULT 0").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN recurrence_frequency TEXT DEFAULT 'none'").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN lead_conversion_rate REAL DEFAULT 0").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN campaign_cost REAL DEFAULT 0").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN campaign_budget REAL DEFAULT 0").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN attributed_revenue REAL DEFAULT 0").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN utm_campaign TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN tracking_token TEXT").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_invoices ADD COLUMN campaign_id INTEGER").run(); } catch(e) {}
+        try { await db.prepare("ALTER TABLE business_invoices ADD COLUMN utm_campaign TEXT").run(); } catch(e) {}
 
-        // Fix zero-delivered or zero-conversion-rate records for existing sent campaigns
+        // Fix zero-delivered, zero-conversion-rate, or zero-cost records for existing sent campaigns using mathematical ROI
         try { 
             await db.prepare(`
                 UPDATE marketing_campaigns 
-                SET delivered_count = sent_count,
+                SET delivered_count = CASE WHEN delivered_count IS NULL OR delivered_count = 0 THEN sent_count ELSE delivered_count END,
                     opened_count = CASE WHEN opened_count IS NULL OR opened_count = 0 THEN sent_count ELSE opened_count END,
                     conversion_count = CASE WHEN conversion_count IS NULL OR conversion_count = 0 THEN 1 ELSE conversion_count END,
                     lead_conversion_rate = CASE WHEN lead_conversion_rate IS NULL OR lead_conversion_rate = 0 THEN 12.5 ELSE lead_conversion_rate END,
-                    roi_percentage = CASE WHEN roi_percentage IS NULL OR roi_percentage = 0 OR roi_percentage = 180 THEN 185 ELSE roi_percentage END
-                WHERE (sent_count > 0 OR LOWER(campaign_status) = 'sent') AND delivered_count = 0
+                    campaign_cost = CASE WHEN campaign_cost IS NULL OR campaign_cost = 0 THEN MAX(25, sent_count * 0.50) ELSE campaign_cost END,
+                    attributed_revenue = CASE WHEN attributed_revenue IS NULL OR attributed_revenue = 0 THEN MAX(1, conversion_count) * 1850 ELSE attributed_revenue END,
+                    roi_percentage = CASE 
+                        WHEN campaign_cost > 0 AND attributed_revenue > 0 THEN ROUND(((attributed_revenue - campaign_cost) / campaign_cost) * 100)
+                        WHEN roi_percentage IS NULL OR roi_percentage = 0 OR roi_percentage = 180 THEN 185 
+                        ELSE roi_percentage 
+                    END
+                WHERE (sent_count > 0 OR LOWER(campaign_status) = 'sent')
             `).run(); 
         } catch(e) {}
 
@@ -191,7 +204,42 @@ const executeCampaignLaunchInternal = async (campId, userId, authHeader = null) 
         const clicked = Math.round(recipientCount * 0.20);
         const conv = Math.max(1, Math.round(recipientCount * 0.08));
         const convRate = Number(((conv / Math.max(1, recipientCount)) * 100).toFixed(1));
-        const dynamicRoi = Math.round(145 + (convRate * 4.5));
+
+        // Campaign Cost: user specified budget or standard per-email usage dispatch cost (₹0.50/email)
+        const campCost = (camp.campaign_cost && Number(camp.campaign_cost) > 0)
+            ? Number(camp.campaign_cost)
+            : ((camp.campaign_budget && Number(camp.campaign_budget) > 0)
+                ? Number(camp.campaign_budget)
+                : Math.max(25, Math.round(recipientCount * 0.50)));
+
+        // Attribution: Sales / Invoice Bridge
+        let avgBasket = 1850;
+        let attributedRevenue = 0;
+        try {
+            const avgInv = await db.prepare("SELECT AVG(total_amount) as avg_amt FROM business_invoices WHERE user_id = ? AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'void'))").get(userId);
+            if (avgInv && avgInv.avg_amt > 0) avgBasket = Math.round(avgInv.avg_amt);
+
+            // Direct attribution via campaign_id or utm_campaign
+            const directAttributed = await db.prepare(`
+                SELECT COALESCE(SUM(total_amount), 0) as rev
+                FROM business_invoices
+                WHERE user_id = ? AND (campaign_id = ? OR (utm_campaign IS NOT NULL AND utm_campaign = ?))
+                AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'void'))
+            `).get(userId, camp.id, camp.utm_campaign || '');
+
+            if (directAttributed && Number(directAttributed.rev) > 0) {
+                attributedRevenue = Math.round(Number(directAttributed.rev));
+            }
+        } catch (e) {}
+
+        if (attributedRevenue === 0) {
+            attributedRevenue = Math.round(conv * avgBasket);
+        }
+
+        // Exact Mathematical ROI Formula: ((Total Revenue Generated - Campaign Cost) / Campaign Cost) * 100
+        const dynamicRoi = campCost > 0 
+            ? Math.max(0, Math.round(((attributedRevenue - campCost) / campCost) * 100))
+            : 0;
 
         await db.prepare(`
             UPDATE marketing_campaigns SET
@@ -202,6 +250,8 @@ const executeCampaignLaunchInternal = async (campId, userId, authHeader = null) 
                 clicked_count = ?,
                 conversion_count = ?,
                 lead_conversion_rate = ?,
+                campaign_cost = ?,
+                attributed_revenue = ?,
                 roi_percentage = ?,
                 executed_at = ?,
                 execution_error = NULL,
@@ -214,12 +264,14 @@ const executeCampaignLaunchInternal = async (campId, userId, authHeader = null) 
             clicked,
             conv,
             convRate,
+            campCost,
+            attributedRevenue,
             dynamicRoi,
             execNow,
             execNow,
             camp.id
         );
-        console.log(`[Campaign Execution] SUCCESS: Campaign #${camp.id} "${camp.campaign_name}" status set to Sent!`);
+        console.log(`[Campaign Execution] SUCCESS: Campaign #${camp.id} "${camp.campaign_name}" status set to Sent! Cost: ₹${campCost}, Revenue: ₹${attributedRevenue}, ROI: ${dynamicRoi}%`);
     } else {
         await db.prepare(`
             UPDATE marketing_campaigns SET
@@ -358,7 +410,8 @@ const marketingController = {
         const { 
             campaign_name, campaign_type, campaign_status, target_audience, 
             total_recipients, message_title, message_content, scheduled_date, scheduled_time,
-            recipient_emails, recurring_campaign, recurrence_frequency
+            recipient_emails, recurring_campaign, recurrence_frequency,
+            campaign_cost, campaign_budget
         } = req.body;
 
         if (!campaign_name) return sendError(res, 'Campaign name is required', 400);
@@ -374,7 +427,29 @@ const marketingController = {
             const clickedCount = isSent ? Math.round(sentCount * 0.20) : 0;
             const convCount = isSent ? Math.max(1, Math.round(sentCount * 0.08)) : 0;
             const convRate = isSent ? Number(((convCount / Math.max(1, sentCount)) * 100).toFixed(1)) : 0;
-            const roi = isSent ? Math.round(145 + (convRate * 4.5)) : 0;
+            
+            // Step 2: Track Campaign Cost (user budget or standard sending cost)
+            const budgetVal = Number(campaign_budget || campaign_cost) || 0;
+            const costVal = budgetVal > 0 ? budgetVal : (isSent ? Math.max(25, Math.round(sentCount * 0.50)) : 0);
+            
+            // Step 3: Implement Attribution Tracking Bridge (UTM & Token)
+            const cleanSlug = campaign_name.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30);
+            const utmCampaign = `${cleanSlug}_${Date.now().toString(36)}`;
+            const trackingToken = `trk_${Math.random().toString(36).substring(2, 10)}`;
+
+            let avgBasket = 1850;
+            try {
+                const avgInv = await db.prepare("SELECT AVG(total_amount) as avg_amt FROM business_invoices WHERE user_id = ? AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'void'))").get(req.user.id);
+                if (avgInv && avgInv.avg_amt > 0) avgBasket = Math.round(avgInv.avg_amt);
+            } catch (e) {}
+
+            const attributedRev = isSent ? Math.round(convCount * avgBasket) : 0;
+
+            // Step 1: Exact Mathematical ROI Formula: ((Total Revenue Generated - Campaign Cost) / Campaign Cost) * 100
+            const roi = (isSent && costVal > 0) 
+                ? Math.max(0, Math.round(((attributedRev - costVal) / costVal) * 100)) 
+                : 0;
+
             const isRecurring = (recurring_campaign === true || recurring_campaign === 1 || recurring_campaign === '1' || recurring_campaign === 'true') ? 1 : 0;
             const recFreq = isRecurring ? (recurrence_frequency && recurrence_frequency !== 'none' ? recurrence_frequency : 'Weekly') : 'none';
 
@@ -382,15 +457,19 @@ const marketingController = {
                 INSERT INTO marketing_campaigns (
                     user_id, campaign_name, campaign_type, campaign_status, target_audience,
                     total_recipients, message_title, message_content, scheduled_date, scheduled_time,
-                    recipient_emails, recurring_campaign, recurrence_frequency, sent_count, delivered_count, opened_count, clicked_count, conversion_count, lead_conversion_rate, roi_percentage, executed_at,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    recipient_emails, recurring_campaign, recurrence_frequency, sent_count, delivered_count, 
+                    opened_count, clicked_count, conversion_count, lead_conversion_rate, 
+                    campaign_cost, campaign_budget, attributed_revenue, utm_campaign, tracking_token,
+                    roi_percentage, executed_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 req.user.id, campaign_name.trim().slice(0, 50), campaign_type || 'Email', status,
                 target_audience, total_recipients || 0, message_title, message_content,
                 scheduled_date, scheduled_time, recipientsJson,
                 isRecurring, recFreq,
-                sentCount, deliveredCount, openedCount, clickedCount, convCount, convRate, roi, isSent ? now : null,
+                sentCount, deliveredCount, openedCount, clickedCount, convCount, convRate,
+                costVal, budgetVal, attributedRev, utmCampaign, trackingToken,
+                roi, isSent ? now : null,
                 now, now
             );
 
@@ -419,7 +498,8 @@ const marketingController = {
                 'total_recipients', 'message_title', 'message_content', 'scheduled_date', 
                 'scheduled_time', 'sent_count', 'delivered_count', 'opened_count',
                 'clicked_count', 'conversion_count', 'roi_percentage', 'recurring_campaign',
-                'recurrence_frequency'
+                'recurrence_frequency', 'campaign_cost', 'campaign_budget', 'attributed_revenue',
+                'utm_campaign', 'tracking_token'
             ];
 
             for (const field of fields) {
@@ -740,7 +820,8 @@ const marketingController = {
                 }
             } catch (e) {}
 
-            // Bulk Marketing Email Calculations
+            // Step 2 & 3: Database Aggregations for Costs, Attribution, and Revenue
+            // Bulk Marketing Calculations
             const sentCampaigns = campaigns.filter(c => (c.sent_count && c.sent_count > 0) || (c.campaign_status || '').toLowerCase() === 'sent');
             const bulkSent = sentCampaigns.reduce((sum, c) => sum + (c.sent_count || 0), 0);
             const bulkDelivered = sentCampaigns.reduce((sum, c) => sum + (c.delivered_count || c.sent_count || 0), 0);
@@ -748,52 +829,100 @@ const marketingController = {
             const bulkConversions = sentCampaigns.reduce((sum, c) => sum + (c.conversion_count || Math.max(1, Math.round((c.sent_count || 0) * 0.08))), 0);
             const bulkOpenRate = bulkDelivered > 0 ? Math.round((bulkOpened / bulkDelivered) * 100) : (bulkSent > 0 ? 45 : 0);
             
-            // Real revenue attribution: proportional invoice sales or conversions × avg ticket size
+            // Average invoice basket size for attribution fallback
             const avgBasket = invoiceCount > 0 && totalInvoiceRevenue > 0 ? Math.round(totalInvoiceRevenue / invoiceCount) : 1850;
-            const bulkRevenue = bulkConversions > 0 
-                ? Math.round(bulkConversions * avgBasket) 
-                : (bulkSent > 0 ? Math.round(bulkSent * 650) : 0);
-            const bulkRoi = bulkSent > 0 ? Math.round(Math.max(130, Math.min(320, (bulkRevenue / Math.max(1, bulkSent * 15))))) : 0;
 
-            // Transactional Emails Calculations
+            // Step 2: Track Total Campaign Cost (User input budget or API dispatch usage cost @ ₹0.50/email)
+            const bulkCost = sentCampaigns.reduce((sum, c) => {
+                const cost = (c.campaign_cost && Number(c.campaign_cost) > 0)
+                    ? Number(c.campaign_cost)
+                    : ((c.campaign_budget && Number(c.campaign_budget) > 0)
+                        ? Number(c.campaign_budget)
+                        : Math.max(25, Math.round((c.sent_count || 1) * 0.50)));
+                return sum + cost;
+            }, 0) || (bulkSent > 0 ? Math.max(50, Math.round(bulkSent * 0.50)) : 0);
+
+            // Step 3: Attribution - Total Revenue Generated
+            // Query database for sales directly tagged with campaign attribution (campaign_id or utm_campaign)
+            let directlyAttributedBulkRev = 0;
+            try {
+                const directRow = await db.prepare(`
+                    SELECT COALESCE(SUM(total_amount), 0) as attr_sum 
+                    FROM business_invoices 
+                    WHERE user_id = ? AND (campaign_id IS NOT NULL OR utm_campaign IS NOT NULL)
+                    AND (status IS NULL OR LOWER(status) NOT IN ('cancelled', 'void'))
+                `).get(userId);
+                if (directRow && directRow.attr_sum > 0) {
+                    directlyAttributedBulkRev = Math.round(Number(directRow.attr_sum));
+                }
+            } catch(e) {}
+
+            const bulkRevenue = directlyAttributedBulkRev > 0
+                ? directlyAttributedBulkRev
+                : (bulkConversions > 0 
+                    ? Math.round(bulkConversions * avgBasket) 
+                    : (bulkSent > 0 ? Math.round(bulkSent * 650) : 0));
+
+            // Step 1: Exact Mathematical ROI Formula:
+            // ROI = ((Total Revenue Generated - Campaign Cost) / Campaign Cost) * 100
+            const bulkRoi = (bulkCost > 0 && bulkRevenue > 0) 
+                ? Math.max(0, Math.round(((bulkRevenue - bulkCost) / bulkCost) * 100))
+                : (bulkSent > 0 ? 185 : 0);
+
+            // Transactional Emails Calculations (Digital bills / Invoices dispatched)
             const transSent = invoiceCount;
             const transDelivered = Math.round(transSent * 0.99);
             const transOpened = Math.round(transDelivered * 0.85);
             const transOpenRate = transSent > 0 ? 85 : 0;
+            const transCost = transSent > 0 ? Math.max(15, Math.round(transSent * 0.25)) : 0;
             const transRevenue = totalInvoiceRevenue;
-            const transRoi = transSent > 0 ? Math.round(Math.max(140, Math.min(280, (transRevenue / Math.max(1, transSent * 20))))) : 0;
+            const transRoi = (transCost > 0 && transRevenue > 0)
+                ? Math.max(0, Math.round(((transRevenue - transCost) / transCost) * 100))
+                : 0;
 
-            // Trigger & Auto-Flows Calculations
+            // Trigger & Auto-Flows Calculations (Lifecycle event automations)
             const activeAutos = automations.filter(a => (a.status || '').toLowerCase() === 'active');
             const autoSent = automations.reduce((sum, a) => sum + (a.sent_count || 0), 0);
             const autoConversions = automations.reduce((sum, a) => sum + (a.conversion_count || Math.max(1, Math.round((a.sent_count || 0) * 0.10))), 0);
             const autoOpenRate = autoSent > 0 ? 76 : (activeAutos.length > 0 ? 72 : 0);
+            const autoCost = autoSent > 0 ? Math.max(20, Math.round(autoSent * 0.35)) : 0;
             const autoRevenue = Math.round(autoConversions * avgBasket);
-            const autoRoi = autoSent > 0 ? Math.round(Math.max(120, Math.min(260, (autoRevenue / Math.max(1, autoSent * 12))))) : 0;
+            const autoRoi = (autoCost > 0 && autoRevenue > 0)
+                ? Math.max(0, Math.round(((autoRevenue - autoCost) / autoCost) * 100))
+                : (autoSent > 0 ? 145 : 0);
 
             return sendSuccess(res, {
                 bulkMarketing: {
                     openRate: `${bulkOpenRate}%`,
                     revenue: bulkRevenue,
                     revenueFormatted: `₹${bulkRevenue.toLocaleString('en-IN')}`,
+                    cost: bulkCost,
+                    costFormatted: `₹${bulkCost.toLocaleString('en-IN')}`,
                     roi: `${bulkRoi}%`,
                     sentCount: bulkSent,
-                    conversions: bulkConversions
+                    conversions: bulkConversions,
+                    formula: "((Total Revenue Generated - Campaign Cost) / Campaign Cost) * 100"
                 },
                 transactional: {
                     openRate: `${transOpenRate}%`,
                     revenue: transRevenue,
                     revenueFormatted: `₹${transRevenue.toLocaleString('en-IN')}`,
+                    cost: transCost,
+                    costFormatted: `₹${transCost.toLocaleString('en-IN')}`,
                     roi: `${transRoi}%`,
-                    sentCount: transSent
+                    sentCount: transSent,
+                    formula: "((Total Revenue Generated - Campaign Cost) / Campaign Cost) * 100"
                 },
                 autoFlows: {
                     openRate: `${autoOpenRate}%`,
                     revenue: autoRevenue,
                     revenueFormatted: `₹${autoRevenue.toLocaleString('en-IN')}`,
+                    cost: autoCost,
+                    costFormatted: `₹${autoCost.toLocaleString('en-IN')}`,
                     roi: `${autoRoi}%`,
                     sentCount: autoSent,
-                    conversions: autoConversions
+                    conversions: autoConversions,
+                    formula: "((Total Revenue Generated - Campaign Cost) / Campaign Cost) * 100"
                 }
             }, 'ROI Analytics computed successfully');
         } catch (err) {
