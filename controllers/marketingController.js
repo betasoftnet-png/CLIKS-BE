@@ -38,6 +38,21 @@ const initTable = async () => {
         try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN recipient_emails TEXT").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN recurring_campaign INTEGER DEFAULT 0").run(); } catch(e) {}
         try { await db.prepare("ALTER TABLE marketing_campaigns ADD COLUMN recurrence_frequency TEXT DEFAULT 'none'").run(); } catch(e) {}
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS marketing_templates (
+                id ${idType},
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                subject TEXT,
+                body TEXT NOT NULL,
+                type TEXT DEFAULT 'Email',
+                label TEXT DEFAULT 'Custom',
+                is_custom INTEGER DEFAULT 1,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        `).run();
     } catch (err) {
         console.warn('[Marketing Controller] Table Init:', err.message);
     }
@@ -400,6 +415,91 @@ const marketingController = {
         } catch (error) {
             console.error('[Marketing Controller] Delete Error:', error);
             return sendError(res, 'Failed to delete campaign', 500);
+        }
+    },
+
+    getTemplates: async (req, res) => {
+        try {
+            const templates = await db.prepare('SELECT * FROM marketing_templates WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
+            return sendSuccess(res, templates, 'Templates fetched successfully');
+        } catch (error) {
+            console.error('[Marketing Controller] Fetch Templates Error:', error);
+            return sendError(res, 'Failed to fetch templates', 500);
+        }
+    },
+
+    createTemplate: async (req, res) => {
+        const { title, subject, body, type, label } = req.body;
+        if (!title || !body) return sendError(res, 'Template title and body are required', 400);
+
+        try {
+            const now = new Date().toISOString();
+            const result = await db.prepare(`
+                INSERT INTO marketing_templates (
+                    user_id, title, subject, body, type, label, is_custom, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            `).run(
+                req.user.id,
+                title.trim(),
+                subject ? subject.trim() : title.trim(),
+                body.trim(),
+                type || 'Email',
+                label || 'Custom',
+                now,
+                now
+            );
+
+            const newTemplate = await db.prepare('SELECT * FROM marketing_templates WHERE id = ?').get(result.lastInsertRowid);
+            return sendSuccess(res, newTemplate, 'Template created successfully', 201);
+        } catch (error) {
+            console.error('[Marketing Controller] Create Template Error:', error);
+            return sendError(res, 'Failed to create template', 500);
+        }
+    },
+
+    updateTemplate: async (req, res) => {
+        const { id } = req.params;
+        const { title, subject, body, type, label } = req.body;
+
+        try {
+            const updates = [];
+            const params = [];
+            if (title !== undefined) { updates.push('title = ?'); params.push(title.trim()); }
+            if (subject !== undefined) { updates.push('subject = ?'); params.push(subject.trim()); }
+            if (body !== undefined) { updates.push('body = ?'); params.push(body.trim()); }
+            if (type !== undefined) { updates.push('type = ?'); params.push(type); }
+            if (label !== undefined) { updates.push('label = ?'); params.push(label); }
+
+            if (updates.length === 0) return sendError(res, 'No fields to update', 400);
+
+            updates.push('updated_at = ?');
+            params.push(new Date().toISOString());
+            params.push(id, req.user.id);
+
+            const result = await db.prepare(`
+                UPDATE marketing_templates SET ${updates.join(', ')} 
+                WHERE id = ? AND user_id = ?
+            `).run(...params);
+
+            if (result.changes === 0) return sendError(res, 'Template not found', 404);
+
+            const updated = await db.prepare('SELECT * FROM marketing_templates WHERE id = ?').get(id);
+            return sendSuccess(res, updated, 'Template updated successfully');
+        } catch (error) {
+            console.error('[Marketing Controller] Update Template Error:', error);
+            return sendError(res, 'Failed to update template', 500);
+        }
+    },
+
+    deleteTemplate: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const result = await db.prepare('DELETE FROM marketing_templates WHERE id = ? AND user_id = ?').run(id, req.user.id);
+            if (result.changes === 0) return sendError(res, 'Template not found', 404);
+            return sendSuccess(res, null, 'Template deleted successfully');
+        } catch (error) {
+            console.error('[Marketing Controller] Delete Template Error:', error);
+            return sendError(res, 'Failed to delete template', 500);
         }
     }
 };
