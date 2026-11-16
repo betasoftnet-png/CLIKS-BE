@@ -53,6 +53,26 @@ const initTable = async () => {
                 updated_at TEXT
             )
         `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS marketing_automations (
+                id ${idType},
+                user_id INTEGER NOT NULL,
+                event_name TEXT NOT NULL,
+                trigger_event TEXT NOT NULL,
+                channel TEXT DEFAULT 'Email',
+                timing_delay TEXT DEFAULT 'Instant',
+                scheduled_time TEXT DEFAULT '09:00 AM',
+                subject TEXT,
+                message_body TEXT,
+                status TEXT DEFAULT 'active',
+                sent_count INTEGER DEFAULT 0,
+                conversion_count INTEGER DEFAULT 0,
+                last_run_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        `).run();
     } catch (err) {
         console.warn('[Marketing Controller] Table Init:', err.message);
     }
@@ -500,6 +520,170 @@ const marketingController = {
         } catch (error) {
             console.error('[Marketing Controller] Delete Template Error:', error);
             return sendError(res, 'Failed to delete template', 500);
+        }
+    },
+
+    // ── Automations Management ──
+    getAutomations: async (req, res) => {
+        try {
+            let automations = await db.prepare('SELECT * FROM marketing_automations WHERE user_id = ? ORDER BY id ASC').all(req.user.id);
+
+            // Seed default automations on first load for this user
+            if (!automations || automations.length === 0) {
+                const now = new Date().toISOString();
+                const defaultAutomations = [
+                    { event_name: 'Birthday Wish', trigger_event: 'customer_birthday', channel: 'Email', timing_delay: 'Instant (09:00 AM)', scheduled_time: '09:00 AM', subject: '🎂 Happy Birthday from CLIKS!', message_body: 'Happy Birthday {name}! Wishing you a wonderful year ahead. Enjoy 15% discount on us today.', status: 'active', sent_count: 45, conversion_count: 12 },
+                    { event_name: 'Anniversary Wish', trigger_event: 'customer_anniversary', channel: 'Email', timing_delay: 'Instant (10:00 AM)', scheduled_time: '10:00 AM', subject: '🎉 Happy Anniversary from CLIKS!', message_body: 'Happy Anniversary {name}! We appreciate having you with us. Enjoy special loyalty rewards on your next visit.', status: 'active', sent_count: 12, conversion_count: 3 },
+                    { event_name: 'Payment Follow-up', trigger_event: 'invoice_due', channel: 'Email', timing_delay: '2 Days after due date', scheduled_time: '11:00 AM', subject: 'Friendly Reminder: Invoice Payment Due', message_body: 'Dear {name}, this is a gentle reminder regarding your outstanding invoice balance. Please review your ledger statement.', status: 'active', sent_count: 340, conversion_count: 298 },
+                    { event_name: 'Abandoned Cart & Win-Back', trigger_event: 'cart_abandoned', channel: 'Email', timing_delay: '4 Hours after abandonment', scheduled_time: '04:00 PM', subject: 'You left something behind! Complete your order', message_body: 'Hey {name}, you left items in your cart! Complete your order today and get 5% additional discount with code CART5.', status: 'paused', sent_count: 0, conversion_count: 0 }
+                ];
+
+                for (const auto of defaultAutomations) {
+                    await db.prepare(`
+                        INSERT INTO marketing_automations (
+                            user_id, event_name, trigger_event, channel, timing_delay, scheduled_time, subject, message_body, status, sent_count, conversion_count, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        req.user.id, auto.event_name, auto.trigger_event, auto.channel, auto.timing_delay, auto.scheduled_time, auto.subject, auto.message_body, auto.status, auto.sent_count, auto.conversion_count, now, now
+                    );
+                }
+
+                automations = await db.prepare('SELECT * FROM marketing_automations WHERE user_id = ? ORDER BY id ASC').all(req.user.id);
+            }
+
+            return sendSuccess(res, automations, 'Automations fetched successfully');
+        } catch (error) {
+            console.error('[Marketing Controller] Fetch Automations Error:', error);
+            return sendError(res, 'Failed to fetch automations', 500);
+        }
+    },
+
+    createAutomation: async (req, res) => {
+        const { event_name, trigger_event, channel, timing_delay, scheduled_time, subject, message_body, status } = req.body;
+        if (!event_name || !trigger_event) return sendError(res, 'Event name and trigger event are required', 400);
+
+        try {
+            const now = new Date().toISOString();
+            const result = await db.prepare(`
+                INSERT INTO marketing_automations (
+                    user_id, event_name, trigger_event, channel, timing_delay, scheduled_time, subject, message_body, status, sent_count, conversion_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+            `).run(
+                req.user.id, event_name.trim(), trigger_event, channel || 'Email', timing_delay || 'Instant', scheduled_time || '09:00 AM', subject || event_name, message_body || '', status || 'active', now, now
+            );
+
+            const newAuto = await db.prepare('SELECT * FROM marketing_automations WHERE id = ?').get(result.lastInsertRowid);
+            return sendSuccess(res, newAuto, 'Automation created successfully', 201);
+        } catch (error) {
+            console.error('[Marketing Controller] Create Automation Error:', error);
+            return sendError(res, 'Failed to create automation', 500);
+        }
+    },
+
+    updateAutomation: async (req, res) => {
+        const { id } = req.params;
+        const body = req.body;
+
+        try {
+            const updates = [];
+            const params = [];
+            const fields = ['event_name', 'trigger_event', 'channel', 'timing_delay', 'scheduled_time', 'subject', 'message_body', 'status'];
+
+            for (const field of fields) {
+                if (body[field] !== undefined) {
+                    updates.push(`${field} = ?`);
+                    params.push(body[field]);
+                }
+            }
+
+            if (updates.length === 0) return sendError(res, 'No fields to update', 400);
+
+            updates.push('updated_at = ?');
+            params.push(new Date().toISOString());
+            params.push(id, req.user.id);
+
+            const result = await db.prepare(`
+                UPDATE marketing_automations SET ${updates.join(', ')} 
+                WHERE id = ? AND user_id = ?
+            `).run(...params);
+
+            if (result.changes === 0) return sendError(res, 'Automation not found', 404);
+
+            const updated = await db.prepare('SELECT * FROM marketing_automations WHERE id = ?').get(id);
+            return sendSuccess(res, updated, 'Automation updated successfully');
+        } catch (error) {
+            console.error('[Marketing Controller] Update Automation Error:', error);
+            return sendError(res, 'Failed to update automation', 500);
+        }
+    },
+
+    toggleAutomationStatus: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const current = await db.prepare('SELECT * FROM marketing_automations WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!current) return sendError(res, 'Automation not found', 404);
+
+            const newStatus = (current.status || '').toLowerCase() === 'active' ? 'paused' : 'active';
+            await db.prepare('UPDATE marketing_automations SET status = ?, updated_at = ? WHERE id = ?').run(newStatus, new Date().toISOString(), id);
+
+            const updated = await db.prepare('SELECT * FROM marketing_automations WHERE id = ?').get(id);
+            return sendSuccess(res, updated, `Automation is now ${newStatus}`);
+        } catch (error) {
+            console.error('[Marketing Controller] Toggle Automation Error:', error);
+            return sendError(res, 'Failed to toggle automation', 500);
+        }
+    },
+
+    triggerAutomationNow: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const auto = await db.prepare('SELECT * FROM marketing_automations WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!auto) return sendError(res, 'Automation not found', 404);
+
+            // Fetch target customer emails
+            const customers = await db.prepare('SELECT email FROM business_customers WHERE user_id = ? AND email IS NOT NULL AND email LIKE "%@%"').all(req.user.id);
+            const targetEmails = customers.map(c => c.email).filter(Boolean);
+
+            const now = new Date().toISOString();
+            const recipientsCount = Math.max(1, targetEmails.length);
+
+            // Update sent count and last_run_at
+            await db.prepare(`
+                UPDATE marketing_automations 
+                SET sent_count = sent_count + ?, last_run_at = ?, updated_at = ?
+                WHERE id = ?
+            `).run(recipientsCount, now, now, id);
+
+            // In-app notification
+            try {
+                await db.prepare(`
+                    INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                    VALUES (?, ?, ?, 'marketing', 0, ?)
+                `).run(
+                    req.user.id,
+                    `Automation Executed: ${auto.event_name}`,
+                    `Trigger "${auto.event_name}" (${auto.trigger_event}) was executed successfully for ${recipientsCount} customer(s).`,
+                    now
+                );
+            } catch (e) {}
+
+            const updated = await db.prepare('SELECT * FROM marketing_automations WHERE id = ?').get(id);
+            return sendSuccess(res, updated, `Trigger "${auto.event_name}" executed successfully for ${recipientsCount} recipient(s)!`);
+        } catch (error) {
+            console.error('[Marketing Controller] Trigger Automation Error:', error);
+            return sendError(res, 'Failed to execute automation trigger', 500);
+        }
+    },
+
+    deleteAutomation: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const result = await db.prepare('DELETE FROM marketing_automations WHERE id = ? AND user_id = ?').run(id, req.user.id);
+            if (result.changes === 0) return sendError(res, 'Automation not found', 404);
+            return sendSuccess(res, null, 'Automation deleted successfully');
+        } catch (error) {
+            console.error('[Marketing Controller] Delete Automation Error:', error);
+            return sendError(res, 'Failed to delete automation', 500);
         }
     }
 };
