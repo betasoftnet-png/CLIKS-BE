@@ -13,6 +13,9 @@ router.patch('/automations/:id/toggle', marketingController.toggleAutomationStat
 router.post('/automations/:id/trigger', marketingController.triggerAutomationNow);
 router.delete('/automations/:id', marketingController.deleteAutomation);
 
+// ROI Analytics endpoint
+router.get('/roi-analytics', marketingController.getRoiAnalytics);
+
 // Templates endpoints (must come before /:id)
 router.get('/templates', marketingController.getTemplates);
 router.post('/templates', marketingController.createTemplate);
