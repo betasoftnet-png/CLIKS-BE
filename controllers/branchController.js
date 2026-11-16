@@ -466,6 +466,14 @@ const branchController = {
                 return sendError(res, 'Branch Name is required', 400);
             }
 
+            let cleanGstin = '';
+            if (gstin && String(gstin).trim()) {
+                cleanGstin = String(gstin).trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15);
+                if (cleanGstin.length !== 15) {
+                    return sendError(res, 'Branch GSTIN must be exactly 15 alphanumeric characters', 400);
+                }
+            }
+
             const cleanCode = (code || `BR-${Date.now().toString().slice(-4)}`).toUpperCase().trim();
             const cleanPrefix = (invoice_prefix || cleanCode.slice(0, 3) + '-').toUpperCase().trim();
 
@@ -498,7 +506,7 @@ const branchController = {
                 pincode || '',
                 phone || '',
                 email || '',
-                gstin || '',
+                cleanGstin || '',
                 is_main_branch ? 1 : 0,
                 now,
                 now
@@ -552,6 +560,18 @@ const branchController = {
                 phone, email, gstin, is_main_branch, status
             } = req.body;
 
+            let cleanGstin = undefined;
+            if (gstin !== undefined) {
+                if (gstin && String(gstin).trim()) {
+                    cleanGstin = String(gstin).trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15);
+                    if (cleanGstin.length !== 15) {
+                        return sendError(res, 'Branch GSTIN must be exactly 15 alphanumeric characters', 400);
+                    }
+                } else {
+                    cleanGstin = '';
+                }
+            }
+
             const now = new Date().toISOString();
 
             if (is_main_branch) {
@@ -584,7 +604,7 @@ const branchController = {
                 pincode !== undefined ? pincode : null,
                 phone !== undefined ? phone : null,
                 email !== undefined ? email : null,
-                gstin !== undefined ? gstin : null,
+                cleanGstin !== undefined ? cleanGstin : null,
                 is_main_branch !== undefined ? (is_main_branch ? 1 : 0) : null,
                 status || null,
                 now,
