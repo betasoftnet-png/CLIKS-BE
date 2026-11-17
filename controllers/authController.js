@@ -5,6 +5,43 @@ const AppError = require('../utils/AppError');
 const TokenService = require('../utils/tokenService');
 const { ensureReferralsTable } = require('./referralsController');
 
+// ── Helper: Safely decode base64url JWT payload ──────────────────────────────
+const decodeJwtPayload = (token) => {
+  if (typeof token !== 'string' || !token.includes('.')) return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) {
+      b64 += '=';
+    }
+    const jsonStr = Buffer.from(b64, 'base64').toString('utf8');
+    return JSON.parse(jsonStr);
+  } catch (err) {
+    return null;
+  }
+};
+
+// ── Helper: Extract identity from claims / profile ────────────────────────────
+const extractIdentityFromClaims = (claims) => {
+  if (!claims || typeof claims !== 'object') return {};
+  const email = (
+    claims.email ||
+    claims.user_email ||
+    claims.user?.email ||
+    (typeof claims.sub === 'string' && claims.sub.includes('@') ? claims.sub : null) ||
+    claims.preferred_username ||
+    (typeof claims.username === 'string' && claims.username.includes('@') ? claims.username : null)
+  );
+  const name = claims.name || claims.fullName || claims.full_name || claims.displayName || claims.display_name || claims.username || (email ? email.split('@')[0] : null);
+  const accountType = claims.accountType || claims.account_type || claims.role || 'BUSINESS';
+  return { 
+    email: email ? email.toLowerCase().trim() : null, 
+    name, 
+    accountType 
+  };
+};
+
 // ── Zod Schemas ───────────────────────────────────────────────────────────────
 // ── SSO Login Gateway ────────────────────────────────────────────────────────
 const ssoLogin = async (req, res) => {
@@ -12,59 +49,71 @@ const ssoLogin = async (req, res) => {
   const appType = req.body?.appType || req.query?.appType || 'BUSINESS';
   if (!bnxToken) throw new AppError('BNX Token is required', 400, 'BAD_REQUEST');
 
-  // Verify token with BNX Mail API
-  let bnxProfile;
+  let email = null;
+  let name = null;
+  let accountType = 'BUSINESS';
+  let bnxProfile = null;
+
+  // 1. Verify token with BNX Mail API (with 6-second timeout)
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
     const bnxRes = await fetch('https://api.bnxmail.com/api/users/me', {
-      headers: { 'Authorization': `Bearer ${bnxToken}` }
+      headers: { 'Authorization': `Bearer ${bnxToken}` },
+      signal: controller.signal
+    }).catch(err => {
+      throw new Error(err.message || 'Network error reaching BNX API');
     });
+    clearTimeout(timeoutId);
+
     const bnxData = await bnxRes.json().catch(() => ({}));
-    
     if (bnxRes.ok && (bnxData.success || bnxData.email || bnxData.data?.email)) {
       bnxProfile = bnxData.data || bnxData;
+      const verified = extractIdentityFromClaims(bnxProfile);
+      if (verified.email) {
+        email = verified.email;
+        name = verified.name;
+        accountType = verified.accountType;
+      }
     } else {
-      throw new Error(bnxData.message || bnxData.error || 'BNX profile endpoint returned non-200');
+      console.warn('[SSO Warning] BNX profile endpoint returned non-200, attempting token payload extraction');
     }
   } catch (err) {
-    console.warn('[SSO Warning] External verification warning, decoding token payload:', err.message);
-    let email = 'user@cliks.com';
-    let accountType = 'BUSINESS';
-    try {
-      if (typeof bnxToken === 'string' && bnxToken.includes('.')) {
-        const payloadBase64 = bnxToken.split('.')[1];
-        const decoded = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
-        if (decoded.email) email = decoded.email;
-        if (decoded.accountType) accountType = decoded.accountType;
-        if (decoded.account_type) accountType = decoded.account_type;
-      }
-    } catch (e) {}
-    bnxProfile = { email, name: email.split('@')[0], accountType };
+    console.warn('[SSO Warning] External verification notice:', err.message);
   }
 
-  let { email, name: _name, accountType } = bnxProfile;
+  // 2. Decode JWT payload if external verification didn't provide email
+  const decoded = decodeJwtPayload(bnxToken);
+  if (decoded) {
+    const tokenIdentity = extractIdentityFromClaims(decoded);
+    if (!email && tokenIdentity.email) {
+      email = tokenIdentity.email;
+    }
+    if (!name && tokenIdentity.name) {
+      name = tokenIdentity.name;
+    }
+    if (tokenIdentity.accountType) {
+      accountType = tokenIdentity.accountType;
+    }
+  }
+
   let originalSubEmail = null;
   let originalSubPermissions = null;
   let originalSubBranchId = null;
   let originalSubBranchName = null;
 
-  // --- SUB-ID LOGIC ---
+  // 3. --- SUB-ID LOGIC ---
   // If the token indicates this is a Sub-ID, override the login email to be the parent's email.
-  // This will cause CLIKS-BE to issue an access token for the parent account, 
-  // granting the Sub-ID access to all parent data.
   try {
-    if (typeof bnxToken === 'string' && bnxToken.includes('.')) {
-      const payloadBase64 = bnxToken.split('.')[1];
-      const decoded = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
-      
-      // Fallback if the token uses 'sub' instead of 'email'
+    if (decoded) {
       if (!email && decoded.sub) {
-        email = decoded.sub;
+        email = decoded.sub.includes('@') ? decoded.sub.toLowerCase().trim() : decoded.sub;
       }
 
       if (decoded.is_sub_id === true && decoded.parent_account) {
         console.log(`[SSO] Sub-ID login detected for ${decoded.sub}. Mapping to parent account: ${decoded.parent_account}, Branch: ${decoded.branchName || decoded.branchId || 'N/A'}`);
         originalSubEmail = decoded.sub;
-        email = decoded.parent_account;
+        email = decoded.parent_account.toLowerCase().trim();
         if (decoded.permissions) {
           originalSubPermissions = decoded.permissions;
         }
@@ -79,6 +128,18 @@ const ssoLogin = async (req, res) => {
   } catch (e) {
     console.warn('[SSO Warning] Failed to parse token for sub-id check:', e.message);
   }
+
+  // 4. CRITICAL: Strictly reject if email could not be resolved! Never fall back to user@cliks.com!
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    console.error('[SSO Failure] Login rejected: Unable to resolve user identity from token.', {
+      tokenType: typeof bnxToken,
+      hasToken: !!bnxToken,
+      hasDecoded: !!decoded
+    });
+    throw new AppError('Unable to verify login session. Please sign in again.', 401, 'UNAUTHORIZED');
+  }
+
+  email = email.toLowerCase().trim();
 
   // Enforce Business Account strictly for cliksbusiness.com domain
   const origin = req.get('origin') || req.get('referer') || '';
