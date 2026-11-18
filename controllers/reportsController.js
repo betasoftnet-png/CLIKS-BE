@@ -133,7 +133,6 @@ const reportsController = {
                 }
             };
 
-            const requestedPeriod = req.query.period || 'financial_year';
             const activeData = breakdown[requestedPeriod] || breakdown.financial_year;
 
             // Monthly sales trend for the chart
