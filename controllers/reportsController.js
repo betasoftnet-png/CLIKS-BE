@@ -57,8 +57,14 @@ const reportsController = {
             const endOfFY = new Date(fyStartYear + 1, 2, 31, 23, 59, 59);
             const fyLabel = `FY ${fyStartYear}-${String(fyStartYear + 1).slice(-2)}`;
 
+            const requestedPeriod = req.query.period || 'financial_year';
+            const fromDateParam = req.query.from_date || req.query.startDate;
+            const toDateParam = req.query.to_date || req.query.endDate;
+            const customStart = fromDateParam ? new Date(fromDateParam + 'T00:00:00') : null;
+            const customEnd = toDateParam ? new Date(toDateParam + 'T23:59:59.999') : null;
+
             const computePeriodTotals = (items, getAmt, getDate) => {
-                let today = 0, this_week = 0, this_month = 0, financial_year = 0, all_time = 0;
+                let today = 0, this_week = 0, this_month = 0, financial_year = 0, all_time = 0, custom = 0;
                 for (const item of items) {
                     if (item.status && ['cancelled', 'void'].includes(String(item.status).toLowerCase())) continue;
                     if (item.is_claim === 'true' || item.is_budget === 'true') continue;
@@ -73,8 +79,9 @@ const reportsController = {
                     if (d >= startOfWeek) this_week += amt;
                     if (d >= startOfMonth) this_month += amt;
                     if (d >= startOfFY && d <= endOfFY) financial_year += amt;
+                    if ((!customStart || d >= customStart) && (!customEnd || d <= customEnd)) custom += amt;
                 }
-                return { today, this_week, this_month, financial_year, all_time };
+                return { today, this_week, this_month, financial_year, all_time, custom };
             };
 
             const s = computePeriodTotals(invoices, i => i.total_amount, i => i.created_at);
@@ -116,6 +123,13 @@ const reportsController = {
                     expenses: e.all_time, 
                     net_profit: s.all_time - e.all_time, 
                     label: 'All-Time' 
+                },
+                custom: {
+                    sales: s.custom,
+                    purchases: p.custom,
+                    expenses: e.custom,
+                    net_profit: s.custom - e.custom,
+                    label: fromDateParam && toDateParam ? `${fromDateParam} to ${toDateParam}` : 'Custom Range'
                 }
             };
 
