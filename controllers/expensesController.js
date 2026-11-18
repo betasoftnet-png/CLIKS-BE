@@ -310,6 +310,9 @@ const expensesController = {
             const now = new Date().toISOString();
             const expNum = `EXP-2026-${Date.now().toString().slice(-3)}`;
             const rawAmt = parseFloat(expense_amount) || 0;
+            if (!isFinite(rawAmt) || rawAmt < 0 || rawAmt > 9999999999) {
+                return sendError(res, 'Expense amount is invalid or exceeds maximum allowed limit (₹999 Crore).', 400);
+            }
             const gst = parseFloat(gst_percentage) || 0;
 
             let sub = req.body.subtotal !== undefined ? parseFloat(req.body.subtotal) : null;

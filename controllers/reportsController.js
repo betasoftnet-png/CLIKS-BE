@@ -36,7 +36,7 @@ const reportsController = {
             }
 
             try {
-                const expensesQuery = `SELECT id, amount, date, created_at, is_claim, is_budget FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false')${expBranchClause}`;
+                const expensesQuery = `SELECT id, amount, date, created_at, is_claim, is_budget FROM expenses WHERE user_id = ? AND (is_claim IS NULL OR is_claim = 'false') AND (is_budget IS NULL OR is_budget = 'false') AND (CAST(amount AS REAL) < 100000000000 OR amount IS NULL)${expBranchClause}`;
                 expenses = await db.prepare(expensesQuery).all(req.user.id, ...expBranchParams);
             } catch (expErr) {
                 expenses = [];
@@ -63,6 +63,7 @@ const reportsController = {
                     if (item.status && ['cancelled', 'void'].includes(String(item.status).toLowerCase())) continue;
                     if (item.is_claim === 'true' || item.is_budget === 'true') continue;
                     const amt = parseFloat(getAmt(item)) || 0;
+                    if (!isFinite(amt) || amt < 0 || amt > 100000000000) continue;
                     all_time += amt;
                     const rawDate = getDate(item);
                     if (!rawDate) continue;
@@ -447,97 +448,194 @@ const reportsController = {
     },
     getBalanceSheet: async (req, res) => {
         try {
-            const normalizePaymentMode = (mode) => {
-                if (!mode) return 'Cash in Hand';
+            const isCashMode = (mode) => {
+                if (!mode) return true;
                 const m = String(mode).trim().toLowerCase();
-                if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) {
-                    return 'Cash in Hand';
-                }
-                if (m.includes('hdfc')) {
-                    return 'HDFC Bank Account';
-                }
-                if (m.includes('icici')) {
-                    return 'ICICI Bank Account';
-                }
-                if (m.includes('sbi') || m.includes('state bank')) {
-                    return 'SBI Current Account';
-                }
-                if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) {
-                    return 'UPI / Razorpay';
-                }
-                if (m === 'bank' || m.includes('bank')) {
-                    return 'HDFC Bank Account';
-                }
-                return mode;
+                return m === 'cash' || m.includes('cash in hand') || m.includes('hand');
             };
 
-            const accounts = await db.prepare("SELECT * FROM bank_accounts WHERE user_id = ?").all(req.user.id);
-            const transactions = await db.prepare("SELECT mode, entry_type, SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') GROUP BY mode, entry_type").all(req.user.id);
+            const isBankMode = (mode) => {
+                if (!mode) return false;
+                const m = String(mode).trim().toLowerCase();
+                return m.includes('bank') || m.includes('hdfc') || m.includes('icici') || m.includes('sbi') || 
+                       m.includes('axis') || m.includes('kotak') || m === 'upi' || m.includes('razorpay') || 
+                       m.includes('gpay') || m.includes('phonepe') || m.includes('paytm') || m.includes('card') || 
+                       m.includes('online') || m.includes('transfer') || m.includes('neft') || m.includes('rtgs') || 
+                       m.includes('imps') || m.includes('cheque') || m.includes('check');
+            };
 
             let cashAsset = 0;
             let bankAsset = 0;
 
             // 1. Process initial balances from bank_accounts
-            for (const acc of accounts) {
-                const normName = normalizePaymentMode(acc.bank_name || acc.account_name);
-                const initialBal = parseFloat(acc.opening_balance || acc.balance) || 0;
-                
-                if (normName === 'Cash in Hand' || acc.bank_type === 'Cash' || (acc.account_name || '').toLowerCase().includes('cash')) {
-                    cashAsset += initialBal;
-                } else {
-                    bankAsset += initialBal;
+            try {
+                const accounts = await db.prepare("SELECT * FROM bank_accounts WHERE user_id = ?").all(req.user.id);
+                for (const acc of accounts) {
+                    const name = (acc.bank_name || acc.account_name || '').toLowerCase();
+                    const initialBal = parseFloat(acc.opening_balance || acc.balance || acc.current_balance) || 0;
+                    if (acc.bank_type === 'Cash' || name.includes('cash')) {
+                        cashAsset += initialBal;
+                    } else {
+                        bankAsset += initialBal;
+                    }
                 }
-            }
+            } catch (e) {}
 
-            // 2. Process all dynamic transactions
-            for (const tx of transactions) {
-                const normMode = normalizePaymentMode(tx.mode);
-                const val = parseFloat(tx.total) || 0;
-                
-                if (normMode === 'Cash in Hand') {
-                    if (tx.entry_type === 'income') cashAsset += val;
-                    else cashAsset -= val;
-                } else {
-                    if (tx.entry_type === 'income') bankAsset += val;
-                    else bankAsset -= val;
+            // 2. Process account configs from accounting table
+            try {
+                const acctConfigs = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").all(req.user.id);
+                for (const acc of acctConfigs) {
+                    const name = (acc.account_name || '').toLowerCase();
+                    const bal = parseFloat(acc.balance) || 0;
+                    if (name.includes('cash')) {
+                        cashAsset += bal;
+                    } else {
+                        bankAsset += bal;
+                    }
                 }
-            }
+            } catch (e) {}
 
-            // Accounts Receivable (outstanding invoices)
-            const recSum = await db.prepare("SELECT SUM(due_amount) as total FROM business_invoices WHERE user_id = ? AND status != 'Paid'").get(req.user.id);
-            const receivablesAsset = parseFloat(recSum?.total) || 0;
+            // 3. Process collections from business invoices (POS / Sales Billing)
+            try {
+                const invoicePayments = await db.prepare(`
+                    SELECT payment_mode, 
+                           SUM(CASE 
+                                WHEN paid_amount IS NOT NULL AND CAST(paid_amount AS REAL) > 0 THEN CAST(paid_amount AS REAL)
+                                WHEN LOWER(status) = 'paid' THEN CAST(total_amount AS REAL)
+                                ELSE (CAST(total_amount AS REAL) - CAST(COALESCE(due_amount, 0) AS REAL))
+                           END) as total_collected
+                    FROM business_invoices 
+                    WHERE user_id = ? AND LOWER(status) NOT IN ('cancelled', 'void')
+                    GROUP BY payment_mode
+                `).all(req.user.id);
 
-            // Inventory Asset Value
-            const productsVal = await db.prepare("SELECT SUM(quantity * purchase_price) as total FROM business_products WHERE user_id = ?").get(req.user.id);
-            const legacyVal = await db.prepare("SELECT SUM(quantity * price) as total FROM inventory WHERE user_id = ?").get(req.user.id);
-            const inventoryAsset = (parseFloat(productsVal?.total) || 0) + (parseFloat(legacyVal?.total) || 0);
+                for (const ip of invoicePayments) {
+                    const amt = Math.max(0, parseFloat(ip.total_collected) || 0);
+                    if (isBankMode(ip.payment_mode)) {
+                        bankAsset += amt;
+                    } else {
+                        cashAsset += amt;
+                    }
+                }
+            } catch (e) {}
 
-            // Fixed Assets from ledger
-            const faSum = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND category = 'Fixed Assets'").get(req.user.id);
-            const fixedAssetsAsset = parseFloat(faSum?.total) || 0;
+            // 4. Outflows: Deduct supplier purchase payouts
+            try {
+                const purchasePayouts = await db.prepare(`
+                    SELECT payment_mode, 
+                           SUM(CASE 
+                                WHEN paid_amount IS NOT NULL AND CAST(paid_amount AS REAL) > 0 THEN CAST(paid_amount AS REAL)
+                                WHEN LOWER(status) = 'paid' THEN CAST(grand_total AS REAL)
+                                ELSE 0 
+                           END) as total_paid
+                    FROM business_purchases 
+                    WHERE user_id = ? AND LOWER(status) NOT IN ('cancelled', 'void')
+                    GROUP BY payment_mode
+                `).all(req.user.id);
 
-            // Accounts Payable (outstanding purchases)
-            const payResult = await db.prepare("SELECT SUM(grand_total - paid_amount) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
-            const payablesLiability = parseFloat(payResult?.total) || 0;
+                for (const pp of purchasePayouts) {
+                    const amt = Math.max(0, parseFloat(pp.total_paid) || 0);
+                    if (isBankMode(pp.payment_mode)) {
+                        bankAsset -= amt;
+                    } else {
+                        cashAsset -= amt;
+                    }
+                }
+            } catch (e) {}
 
-            // GST Payable
-            const gstSales = await db.prepare("SELECT SUM(tax_amount) as total FROM business_invoices WHERE user_id = ?").get(req.user.id);
-            const gstPurchases = await db.prepare("SELECT SUM(total_tax) as total FROM business_purchases WHERE user_id = ?").get(req.user.id);
-            const gstPayable = (parseFloat(gstSales?.total) || 0) - (parseFloat(gstPurchases?.total) || 0);
+            // 5. Outflows: Deduct operating expenses
+            try {
+                const expenseOutflows = await db.prepare(`
+                    SELECT payment_mode, SUM(CAST(amount AS REAL)) as total_spent
+                    FROM expenses 
+                    WHERE user_id = ? 
+                      AND (is_claim IS NULL OR is_claim = 'false') 
+                      AND (is_budget IS NULL OR is_budget = 'false')
+                      AND CAST(amount AS REAL) < 100000000000
+                    GROUP BY payment_mode
+                `).all(req.user.id);
 
-            // Loans liability (debts)
-            const loanResult = await db.prepare("SELECT SUM(amount - amount_paid) as total FROM debts WHERE user_id = ?").get(req.user.id);
-            const loansLiability = parseFloat(loanResult?.total) || 0;
+                for (const eo of expenseOutflows) {
+                    const amt = Math.max(0, parseFloat(eo.total_spent) || 0);
+                    if (isBankMode(eo.payment_mode)) {
+                        bankAsset -= amt;
+                    } else {
+                        cashAsset -= amt;
+                    }
+                }
+            } catch (e) {}
 
-            const totalAssets = cashAsset + bankAsset + inventoryAsset + receivablesAsset + fixedAssetsAsset;
+            // 6. Process accounting ledger entries if present
+            try {
+                const ledgerEntries = await db.prepare("SELECT mode, entry_type, SUM(amount) as total FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense') GROUP BY mode, entry_type").all(req.user.id);
+                for (const tx of ledgerEntries) {
+                    const val = parseFloat(tx.total) || 0;
+                    const isBank = isBankMode(tx.mode);
+                    if (tx.entry_type === 'income') {
+                        if (isBank) bankAsset += val;
+                        else cashAsset += val;
+                    } else {
+                        if (isBank) bankAsset -= val;
+                        else cashAsset -= val;
+                    }
+                }
+            } catch (e) {}
+
+            // 7. Accounts Receivable (unpaid / partially paid active customer invoices)
+            const recSum = await db.prepare(`
+                SELECT SUM(CAST(due_amount AS REAL)) as total 
+                FROM business_invoices 
+                WHERE user_id = ? 
+                  AND LOWER(status) NOT IN ('paid', 'cancelled', 'void') 
+                  AND CAST(due_amount AS REAL) > 0
+            `).get(req.user.id);
+            const receivablesAsset = Math.max(0, parseFloat(recSum?.total) || 0);
+
+            // 8. Inventory Asset Value
+            const productsVal = await db.prepare("SELECT SUM(CAST(quantity AS REAL) * CAST(purchase_price AS REAL)) as total FROM business_products WHERE user_id = ? AND CAST(quantity AS REAL) > 0").get(req.user.id);
+            const legacyVal = await db.prepare("SELECT SUM(CAST(quantity AS REAL) * CAST(price AS REAL)) as total FROM inventory WHERE user_id = ? AND CAST(quantity AS REAL) > 0").get(req.user.id);
+            const inventoryAsset = Math.max(0, (parseFloat(productsVal?.total) || 0) + (parseFloat(legacyVal?.total) || 0));
+
+            // 9. Fixed Assets from ledger
+            let fixedAssetsAsset = 0;
+            try {
+                const faSum = await db.prepare("SELECT SUM(amount) as total FROM accounting WHERE user_id = ? AND category = 'Fixed Assets'").get(req.user.id);
+                fixedAssetsAsset = Math.max(0, parseFloat(faSum?.total) || 0);
+            } catch (e) {}
+
+            // 10. Accounts Payable (outstanding vendor purchases)
+            const payResult = await db.prepare(`
+                SELECT SUM(CAST(grand_total AS REAL) - CAST(COALESCE(paid_amount, 0) AS REAL)) as total 
+                FROM business_purchases 
+                WHERE user_id = ? 
+                  AND LOWER(status) NOT IN ('paid', 'cancelled', 'void')
+                  AND (CAST(grand_total AS REAL) - CAST(COALESCE(paid_amount, 0) AS REAL)) > 0
+            `).get(req.user.id);
+            const payablesLiability = Math.max(0, parseFloat(payResult?.total) || 0);
+
+            // 11. GST Payable
+            const gstSales = await db.prepare("SELECT SUM(tax_amount) as total FROM business_invoices WHERE user_id = ? AND LOWER(status) NOT IN ('cancelled', 'void')").get(req.user.id);
+            const gstPurchases = await db.prepare("SELECT SUM(total_tax) as total FROM business_purchases WHERE user_id = ? AND LOWER(status) NOT IN ('cancelled', 'void')").get(req.user.id);
+            const gstPayable = Math.max(0, (parseFloat(gstSales?.total) || 0) - (parseFloat(gstPurchases?.total) || 0));
+
+            // 12. Loans liability (debts)
+            let loansLiability = 0;
+            try {
+                const loanResult = await db.prepare("SELECT SUM(amount - amount_paid) as total FROM debts WHERE user_id = ?").get(req.user.id);
+                loansLiability = Math.max(0, parseFloat(loanResult?.total) || 0);
+            } catch (e) {}
+
+            const finalCash = Math.max(0, cashAsset);
+            const finalBank = Math.max(0, bankAsset);
+            const totalAssets = finalCash + finalBank + inventoryAsset + receivablesAsset + fixedAssetsAsset;
             const liabilitiesExclEquity = payablesLiability + gstPayable + loansLiability;
-            const equityVal = totalAssets - liabilitiesExclEquity;
+            const equityVal = Math.max(0, totalAssets - liabilitiesExclEquity);
 
             return sendSuccess(res, {
                 assets: { 
-                    cash: Math.max(0, cashAsset), 
-                    bank: Math.max(0, bankAsset), 
-                    inventory: Math.max(0, inventoryAsset), 
+                    cash: finalCash, 
+                    bank: finalBank, 
+                    inventory: inventoryAsset, 
                     receivables: receivablesAsset, 
                     fixed_assets: fixedAssetsAsset 
                 },
