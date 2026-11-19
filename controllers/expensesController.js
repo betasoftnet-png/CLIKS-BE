@@ -503,7 +503,16 @@ const expensesController = {
     approveExpense: async (req, res) => {
         try {
             const now = new Date().toISOString();
-            await db.prepare("UPDATE expenses SET reimbursement_status = 'Approved', approval_by = 'Ankit Sharma (Manager)', updated_at = ? WHERE id = ? AND user_id = ?").run(now, req.params.id, req.user.id);
+            const userId = (req.user && req.user.id) ? req.user.id : 1;
+            const approver = req.user?.username || req.user?.email || 'Business Manager';
+            
+            let result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Approved', approval_by = ?, updated_at = ? WHERE id = ? AND user_id = ?").run(approver, now, req.params.id, userId);
+            
+            // If user_id didn't match (e.g. claim belongs to business staff/branch), update directly by ID
+            if (!result || result.changes === 0) {
+                result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Approved', approval_by = ?, updated_at = ? WHERE id = ?").run(approver, now, req.params.id);
+            }
+            
             return sendSuccess(res, null, 'Reimbursement approved');
         } catch (error) {
             console.error('[Expense Claim] Approve Error:', error);
@@ -514,10 +523,18 @@ const expensesController = {
         const { reason } = req.body;
         try {
             const now = new Date().toISOString();
+            const userId = (req.user && req.user.id) ? req.user.id : 1;
+            let result;
             if (reason) {
-                await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', description = ?, updated_at = ? WHERE id = ? AND user_id = ?").run(reason, now, req.params.id, req.user.id);
+                result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', description = ?, updated_at = ? WHERE id = ? AND user_id = ?").run(reason, now, req.params.id, userId);
+                if (!result || result.changes === 0) {
+                    result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', description = ?, updated_at = ? WHERE id = ?").run(reason, now, req.params.id);
+                }
             } else {
-                await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', updated_at = ? WHERE id = ? AND user_id = ?").run(now, req.params.id, req.user.id);
+                result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', updated_at = ? WHERE id = ? AND user_id = ?").run(now, req.params.id, userId);
+                if (!result || result.changes === 0) {
+                    result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', updated_at = ? WHERE id = ?").run(now, req.params.id);
+                }
             }
             return sendSuccess(res, null, 'Reimbursement rejected');
         } catch (error) {
