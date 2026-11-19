@@ -29,7 +29,9 @@ const initColumns = async () => {
         'employee_code',
         'city',
         'state',
-        'pincode'
+        'pincode',
+        'pan_number',
+        'pf_number'
     ];
     for (const col of columns) {
         try {
@@ -44,7 +46,7 @@ initColumns();
 const staffController = {
     // 1. POST /staff
     createStaff: async (req, res) => {
-        const { name, role, email, phone, salary, status, hire_date, department, designation, address, emergency_contact, bank_details, shift, deduct_tds, monthly_leave_quota, annual_bonus, weekly_off, esi_number, employee_code } = req.body;
+        const { name, role, email, phone, salary, status, hire_date, department, designation, address, emergency_contact, bank_details, shift, deduct_tds, monthly_leave_quota, annual_bonus, weekly_off, esi_number, employee_code, pan_number, pf_number, performance_rating, target_score } = req.body;
         if (!name) return sendError(res, 'Name is required', 400);
 
         try {
@@ -94,10 +96,8 @@ const staffController = {
             }
 
             const now = new Date().toISOString();
-            const result = await db.prepare(`
-                INSERT INTO employees (user_id, name, role, email, phone, salary, status, hire_date, department, designation, address, emergency_contact, bank_details, shift, deduct_tds, monthly_leave_quota, annual_bonus, weekly_off, esi_number, employee_code, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
+            const cols = ['user_id', 'name', 'role', 'email', 'phone', 'salary', 'status', 'hire_date', 'department', 'designation', 'address', 'emergency_contact', 'bank_details', 'shift', 'deduct_tds', 'monthly_leave_quota', 'annual_bonus', 'weekly_off', 'esi_number', 'employee_code', 'created_at', 'updated_at'];
+            const vals = [
                 req.user.id,
                 name,
                 role || 'Staff',
@@ -120,7 +120,31 @@ const staffController = {
                 employee_code || null,
                 now,
                 now
-            );
+            ];
+
+            try {
+                const pragmaCols = await db.prepare('PRAGMA table_info(employees)').all();
+                const pragmaColNames = (Array.isArray(pragmaCols) ? pragmaCols : []).map(c => c.name);
+                if (pragmaColNames.includes('pan_number') && pan_number !== undefined) {
+                    cols.push('pan_number');
+                    vals.push(pan_number);
+                }
+                if (pragmaColNames.includes('pf_number') && pf_number !== undefined) {
+                    cols.push('pf_number');
+                    vals.push(pf_number);
+                }
+                if (pragmaColNames.includes('performance_rating') && performance_rating !== undefined && performance_rating !== null && performance_rating !== '') {
+                    cols.push('performance_rating');
+                    vals.push(performance_rating);
+                }
+                if (pragmaColNames.includes('target_score') && target_score !== undefined && target_score !== null && target_score !== '') {
+                    cols.push('target_score');
+                    vals.push(target_score);
+                }
+            } catch (pragmaErr) {}
+
+            const placeholders = cols.map(() => '?').join(', ');
+            const result = await db.prepare(`INSERT INTO employees (${cols.join(', ')}) VALUES (${placeholders})`).run(...vals);
 
             const newStaff = await db.prepare('SELECT * FROM employees WHERE id = ?').get(result.lastInsertRowid);
             return sendSuccess(res, newStaff, 'Staff added successfully', 201);
@@ -225,7 +249,7 @@ const staffController = {
                 'profile_photo', 'documents', 'salary_type', 'performance_rating',
                 'target_score', 'leave_balance', 'deduct_tds', 'monthly_leave_quota',
                 'annual_bonus', 'annual_bonus_pct', 'weekly_off', 'esi_number', 'employee_code',
-                'city', 'state', 'pincode'
+                'city', 'state', 'pincode', 'pan_number', 'pf_number'
             ];
 
             let tableCols = ALLOWED_STAFF_COLS;
