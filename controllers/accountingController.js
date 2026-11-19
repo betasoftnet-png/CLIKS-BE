@@ -628,6 +628,13 @@ const accountingController = {
                 }
             }
 
+            // Also include sales from business_invoices so all POS & sales invoices are reflected
+            try {
+                const invRow = await db.prepare("SELECT COALESCE(SUM(CAST(total_amount AS REAL)), 0) as total FROM business_invoices WHERE user_id = ? AND LOWER(status) NOT IN ('cancelled', 'void')").get(req.user.id);
+                const invRevenue = parseFloat(invRow?.total) || 0;
+                grossRevenue = Math.max(grossRevenue, invRevenue);
+            } catch (invErr) {}
+
             const netProfit = grossRevenue - totalExpenses;
 
             return sendSuccess(res, {
@@ -703,9 +710,9 @@ const accountingController = {
             const recSum = await db.prepare("SELECT SUM(due_amount) as total FROM business_invoices WHERE user_id = ? AND status != 'Paid'").get(req.user.id);
             const receivablesAsset = parseFloat(recSum?.total) || 0;
 
-            // Inventory Asset Value
-            const productsVal = await db.prepare("SELECT SUM(quantity * purchase_price) as total FROM business_products WHERE user_id = ?").get(req.user.id);
-            const legacyVal = await db.prepare("SELECT SUM(quantity * price) as total FROM inventory WHERE user_id = ?").get(req.user.id);
+            // Inventory Asset Value: exclude unlimited / infinite products (quantity >= 999000 or services)
+            const productsVal = await db.prepare("SELECT SUM(CAST(quantity AS REAL) * CAST(purchase_price AS REAL)) as total FROM business_products WHERE user_id = ? AND CAST(quantity AS REAL) > 0 AND CAST(quantity AS REAL) < 999000 AND (product_type IS NULL OR product_type != 'service')").get(req.user.id);
+            const legacyVal = await db.prepare("SELECT SUM(CAST(quantity AS REAL) * CAST(price AS REAL)) as total FROM inventory WHERE user_id = ? AND CAST(quantity AS REAL) > 0 AND CAST(quantity AS REAL) < 999000").get(req.user.id);
             const inventoryAsset = (parseFloat(productsVal?.total) || 0) + (parseFloat(legacyVal?.total) || 0);
 
             // Fixed Assets from ledger
@@ -779,6 +786,12 @@ const accountingController = {
         }
 
         try {
+            // Restriction: Limit 5-10 accounts (maximum 10 cash & bank accounts)
+            const countRow = await db.prepare("SELECT COUNT(*) as count FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig'").get(req.user.id);
+            if ((countRow?.count || 0) >= 10) {
+                return sendError(res, 'Account limit reached. You cannot add more than 10 cash & bank accounts (limit: 5-10 accounts).', 400);
+            }
+
             // Check for duplicate account number
             const duplicate = await db.prepare("SELECT id FROM accounting WHERE user_id = ? AND entry_type = 'AccountConfig' AND account_number = ?").get(req.user.id, account_number);
             if (duplicate) {

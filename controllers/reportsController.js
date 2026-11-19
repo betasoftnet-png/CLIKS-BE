@@ -604,9 +604,9 @@ const reportsController = {
             `).get(req.user.id);
             const receivablesAsset = Math.max(0, parseFloat(recSum?.total) || 0);
 
-            // 8. Inventory Asset Value
-            const productsVal = await db.prepare("SELECT SUM(CAST(quantity AS REAL) * CAST(purchase_price AS REAL)) as total FROM business_products WHERE user_id = ? AND CAST(quantity AS REAL) > 0").get(req.user.id);
-            const legacyVal = await db.prepare("SELECT SUM(CAST(quantity AS REAL) * CAST(price AS REAL)) as total FROM inventory WHERE user_id = ? AND CAST(quantity AS REAL) > 0").get(req.user.id);
+            // 8. Inventory Asset Value: exclude unlimited / infinite products (quantity >= 999000 or services)
+            const productsVal = await db.prepare("SELECT SUM(CAST(quantity AS REAL) * CAST(purchase_price AS REAL)) as total FROM business_products WHERE user_id = ? AND CAST(quantity AS REAL) > 0 AND CAST(quantity AS REAL) < 999000 AND (product_type IS NULL OR product_type != 'service')").get(req.user.id);
+            const legacyVal = await db.prepare("SELECT SUM(CAST(quantity AS REAL) * CAST(price AS REAL)) as total FROM inventory WHERE user_id = ? AND CAST(quantity AS REAL) > 0 AND CAST(quantity AS REAL) < 999000").get(req.user.id);
             const inventoryAsset = Math.max(0, (parseFloat(productsVal?.total) || 0) + (parseFloat(legacyVal?.total) || 0));
 
             // 9. Fixed Assets from ledger
@@ -805,14 +805,14 @@ const reportsController = {
                     SELECT SUM(bs.quantity * p.purchase_price) as val
                     FROM branch_stock bs
                     JOIN business_products p ON bs.product_id = p.id
-                    WHERE bs.user_id = ? AND bs.branch_id = ?
+                    WHERE bs.user_id = ? AND bs.branch_id = ? AND bs.quantity > 0 AND bs.quantity < 999000 AND (p.product_type IS NULL OR p.product_type != 'service')
                 `).get(req.user.id, branchId);
                 totalValue = parseFloat(row?.val) || 0;
             } else {
                 const row = await db.prepare(`
                     SELECT SUM(quantity * purchase_price) as val
                     FROM business_products
-                    WHERE user_id = ?
+                    WHERE user_id = ? AND quantity > 0 AND quantity < 999000 AND (product_type IS NULL OR product_type != 'service')
                 `).get(req.user.id);
                 totalValue = parseFloat(row?.val) || 0;
             }

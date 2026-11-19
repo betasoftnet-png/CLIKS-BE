@@ -121,6 +121,12 @@ const bankAccountController = {
                 return sendError(res, 'Bank name and account number are required', 400);
             }
 
+            // Restriction: Limit 5-10 accounts (maximum 10 cash & bank accounts)
+            const countRow = await db.prepare("SELECT COUNT(*) as count FROM bank_accounts WHERE user_id = ?").get(userId);
+            if ((countRow?.count || 0) >= 10) {
+                return sendError(res, 'Account limit reached. You cannot add more than 10 cash & bank accounts (limit: 5-10 accounts).', 400);
+            }
+
             const now = new Date().toISOString();
 
             const result = await db.prepare(`
