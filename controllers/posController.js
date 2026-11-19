@@ -36,6 +36,13 @@ const posController = {
         const numIgst = parseFloat(req.body.igst_amount || 0);
         const invoiceStatus = numDue <= 0 ? 'Paid' : (numPaid > 0 ? 'Partially Paid' : 'Credit');
 
+        // Strictly disallow credit balance to anonymous walk-in customers
+        const isCreditSale = payment_mode === 'Credit' || numDue > 0;
+        const isWalkIn = !req.body.customer_id && (!client_name || client_name.trim().toLowerCase() === 'walk-in customer');
+        if (isCreditSale && isWalkIn) {
+            return sendError(res, 'Credit balance cannot be given to a walk-in customer. A registered customer is required to record credit debt against their ledger account.', 400);
+        }
+
         let isLoyaltyEnabled = true;
         try {
             const lRow = await db.prepare('SELECT loyalty_enabled FROM business_loyalty_settings WHERE user_id = ?').get(userId);
