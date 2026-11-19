@@ -2894,6 +2894,14 @@ CREATE TABLE IF NOT EXISTS money_trackers (
       await db.prepare("ALTER TABLE business_products ADD COLUMN shelf_number TEXT").run();
     } catch (e) {}
 
+    try {
+      await db.prepare("ALTER TABLE business_products ADD COLUMN image_url TEXT DEFAULT NULL").run();
+    } catch (e) {}
+
+    try {
+      await db.prepare("ALTER TABLE inventory ADD COLUMN image_url TEXT DEFAULT NULL").run();
+    } catch (e) {}
+
     await seedHsnMaster();
   } catch (hsnErr) {
     console.warn("⚠️ Error initializing HSN master migrations:", hsnErr.message);

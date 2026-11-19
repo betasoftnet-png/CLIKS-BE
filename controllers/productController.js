@@ -108,6 +108,11 @@ const productController = {
             if (result && result.lastInsertRowid) {
                 const assignedBarcode = (barcode && String(barcode).trim()) ? String(barcode).trim() : generateEan13FromId(result.lastInsertRowid, req.user.id);
                 try { await db.prepare('UPDATE business_products SET barcode = ?, is_weighted = ? WHERE id = ?').run(assignedBarcode, is_weighted, result.lastInsertRowid); } catch (_) {}
+                const imgVal = req.body.image_url || req.body.imageUrl || req.body.image || null;
+                if (imgVal) {
+                    try { await db.prepare("ALTER TABLE business_products ADD COLUMN image_url TEXT DEFAULT NULL").run(); } catch (_) {}
+                    try { await db.prepare('UPDATE business_products SET image_url = ? WHERE id = ?').run(imgVal, result.lastInsertRowid); } catch (_) {}
+                }
                 try { await db.prepare('UPDATE inventory SET barcode = ? WHERE (barcode IS NULL OR barcode = "") AND (sku = ? OR LOWER(name) = LOWER(?))').run(assignedBarcode, sku || '', name || ''); } catch (_) {}
                 try { await db.prepare('UPDATE stock SET barcode = ? WHERE (barcode IS NULL OR barcode = "") AND (sku = ? OR LOWER(name) = LOWER(?))').run(assignedBarcode, sku || '', name || ''); } catch (_) {}
             }
@@ -396,6 +401,22 @@ const productController = {
                 } catch (_) {}
                 try {
                     await db.prepare('UPDATE business_products SET is_weighted = ? WHERE id = ?').run(is_weighted_val, targetId);
+                } catch (_) {}
+            }
+
+            if (body.image_url !== undefined || body.imageUrl !== undefined || body.image !== undefined) {
+                const imgVal = body.image_url !== undefined ? body.image_url : (body.imageUrl !== undefined ? body.imageUrl : body.image);
+                try {
+                    await db.prepare("ALTER TABLE business_products ADD COLUMN image_url TEXT DEFAULT NULL").run();
+                } catch (_) {}
+                try {
+                    await db.prepare('UPDATE business_products SET image_url = ? WHERE id = ?').run(imgVal, targetId);
+                } catch (_) {}
+                try {
+                    await db.prepare("ALTER TABLE inventory ADD COLUMN image_url TEXT DEFAULT NULL").run();
+                } catch (_) {}
+                try {
+                    await db.prepare('UPDATE inventory SET image_url = ? WHERE user_id = ? AND (sku = ? OR LOWER(name) = LOWER(?))').run(imgVal, req.user.id, sku || '', name || '');
                 } catch (_) {}
             }
 
