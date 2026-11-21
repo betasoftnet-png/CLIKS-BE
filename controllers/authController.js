@@ -45,8 +45,46 @@ const extractIdentityFromClaims = (claims) => {
 // ── Zod Schemas ───────────────────────────────────────────────────────────────
 // ── SSO Login Gateway ────────────────────────────────────────────────────────
 const ssoLogin = async (req, res) => {
-  const bnxToken = req.body?.bnxToken || req.query?.bnxToken || req.query?.token;
+  let bnxToken = req.body?.bnxToken || req.query?.bnxToken || req.query?.token;
+  const code = req.body?.code || req.query?.code;
+  const clientId = req.body?.clientId || req.body?.client_id || 'cliks-app';
   const appType = req.body?.appType || req.query?.appType || 'BUSINESS';
+
+  // If bnxToken is missing but code is provided, attempt server-side exchange with BNX
+  if (!bnxToken && code) {
+    if (typeof code === 'string' && code.startsWith('eyJ')) {
+      bnxToken = code;
+    } else {
+      try {
+        const clientSecret = clientId.includes('biz') ? 'secure-cliks-biz-secret-2026' : 'secure-cliks-secret-2026';
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const tokenRes = await fetch('https://api.bnxmail.com/api/oauth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            grant_type: 'authorization_code',
+            grantType: 'authorization_code',
+            code,
+            client_id: clientId,
+            clientId: clientId,
+            client_secret: clientSecret,
+            clientSecret: clientSecret
+          }),
+          signal: controller.signal
+        }).catch(() => null);
+        clearTimeout(timeoutId);
+
+        if (tokenRes && tokenRes.ok) {
+          const tokenData = await tokenRes.json().catch(() => ({}));
+          bnxToken = tokenData.access_token || tokenData.data?.access_token || tokenData.token || tokenData.data?.token || (typeof tokenData.data === 'string' ? tokenData.data : null);
+        }
+      } catch (exchangeErr) {
+        console.warn('[SSO Warning] Server-side code exchange notice:', exchangeErr.message);
+      }
+    }
+  }
+
   if (!bnxToken) throw new AppError('BNX Token is required', 400, 'BAD_REQUEST');
 
   let email = null;
