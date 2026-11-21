@@ -128,6 +128,16 @@ app.use('/storage_root', express.static(storageRoot, cdnStaticOptions));
 // ── API Documentation (Swagger) ────────────────────────────────────────────────
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
+// ── Prefix Normalizer ─────────────────────────────────────────────────────────
+// If Nginx reverse proxy strips /api (e.g. proxy_pass http://localhost:3000/),
+// incoming requests like /v1/branches or /v1/auth/sso are restored to /api/v1/...
+app.use((req, res, next) => {
+  if (req.url.startsWith('/v1/') || req.url === '/v1' || req.url.startsWith('/v2/') || req.url === '/v2') {
+    req.url = '/api' + req.url;
+  }
+  next();
+});
+
 // ── Global Rate Limiter ───────────────────────────────────────────────────────
 app.use('/api/', globalLimiter);
 
