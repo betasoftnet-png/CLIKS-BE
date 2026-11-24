@@ -379,22 +379,41 @@ const payrollController = {
         }
         try {
             let targetId = id;
+            let existingLoans = [];
+            const newLoan = {
+                ...req.body,
+                loan_id: req.body.loan_id || `LN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                created_at: new Date().toISOString()
+            };
+
             if (empName) {
-                const existing = await db.prepare('SELECT id FROM payroll WHERE user_id = ? AND employee_name = ? ORDER BY id DESC LIMIT 1').get(req.user.id, empName);
+                const existing = await db.prepare('SELECT id, loans_data FROM payroll WHERE user_id = ? AND employee_name = ? ORDER BY id DESC LIMIT 1').get(req.user.id, empName);
                 if (existing) {
                     targetId = existing.id;
+                    if (existing.loans_data) {
+                        try {
+                            const parsed = JSON.parse(existing.loans_data);
+                            existingLoans = Array.isArray(parsed) ? parsed : [parsed];
+                        } catch (e) {
+                            existingLoans = [];
+                        }
+                    }
                 } else {
                     const now = new Date().toISOString();
                     const month = req.body.month || new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
                     const resIns = await db.prepare(`
                         INSERT INTO payroll (user_id, employee_id, employee_name, month, amount, basic_salary, status, loans_data, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
-                    `).run(req.user.id, empId || 1, empName, month, 0, 0, JSON.stringify(req.body), now, now);
+                    `).run(req.user.id, empId || 1, empName, month, 0, 0, JSON.stringify([newLoan]), now, now);
                     targetId = resIns.lastInsertRowid;
+                    return sendSuccess(res, newLoan, 'Loan registered successfully');
                 }
             }
-            await db.prepare('UPDATE payroll SET loans_data = ? WHERE id = ? AND user_id = ?').run(JSON.stringify(req.body), targetId, req.user.id);
-            return sendSuccess(res, req.body, 'Loan registered successfully');
+
+            // Append new loan to employee loans array (prevents overwriting second or subsequent loans)
+            existingLoans.push(newLoan);
+            await db.prepare('UPDATE payroll SET loans_data = ? WHERE id = ? AND user_id = ?').run(JSON.stringify(existingLoans), targetId, req.user.id);
+            return sendSuccess(res, newLoan, 'Loan registered successfully');
         } catch (error) {
             console.error('[Payroll Controller] postLoan error:', error);
             return sendError(res, 'Loan register failed', 500);
@@ -428,23 +447,43 @@ const payrollController = {
                     // Ignore table query error if employees table structure differs
                 }
             }
+
             let targetId = id;
+            let existingAdvances = [];
+            const newAdv = {
+                ...req.body,
+                advance_id: req.body.advance_id || `ADV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                created_at: new Date().toISOString()
+            };
+
             if (empName) {
-                const existing = await db.prepare('SELECT id FROM payroll WHERE user_id = ? AND employee_name = ? ORDER BY id DESC LIMIT 1').get(req.user.id, empName);
+                const existing = await db.prepare('SELECT id, advances_data FROM payroll WHERE user_id = ? AND employee_name = ? ORDER BY id DESC LIMIT 1').get(req.user.id, empName);
                 if (existing) {
                     targetId = existing.id;
+                    if (existing.advances_data) {
+                        try {
+                            const parsed = JSON.parse(existing.advances_data);
+                            existingAdvances = Array.isArray(parsed) ? parsed : [parsed];
+                        } catch (e) {
+                            existingAdvances = [];
+                        }
+                    }
                 } else {
                     const now = new Date().toISOString();
                     const month = req.body.recovery_month || req.body.month || new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
                     const resIns = await db.prepare(`
                         INSERT INTO payroll (user_id, employee_id, employee_name, month, amount, basic_salary, status, advances_data, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
-                    `).run(req.user.id, empId || 1, empName, month, 0, 0, JSON.stringify(req.body), now, now);
+                    `).run(req.user.id, empId || 1, empName, month, 0, 0, JSON.stringify([newAdv]), now, now);
                     targetId = resIns.lastInsertRowid;
+                    return sendSuccess(res, newAdv, 'Salary advance registered successfully');
                 }
             }
-            await db.prepare('UPDATE payroll SET advances_data = ? WHERE id = ? AND user_id = ?').run(JSON.stringify(req.body), targetId, req.user.id);
-            return sendSuccess(res, req.body, 'Salary advance registered successfully');
+
+            // Append new advance to employee advances array (prevents overwriting second or subsequent advances)
+            existingAdvances.push(newAdv);
+            await db.prepare('UPDATE payroll SET advances_data = ? WHERE id = ? AND user_id = ?').run(JSON.stringify(existingAdvances), targetId, req.user.id);
+            return sendSuccess(res, newAdv, 'Salary advance registered successfully');
         } catch (error) {
             console.error('[Payroll Controller] postAdvanceSalary error:', error);
             return sendError(res, 'Salary advance registration failed', 500);
@@ -487,16 +526,21 @@ const payrollController = {
             const payroll = await db.prepare("SELECT * FROM payroll WHERE id = ? AND user_id = ?").get(id, req.user.id);
             if (!payroll) return sendError(res, 'Payroll record not found', 404);
 
-            await db.prepare("UPDATE payroll SET status = 'paid' WHERE id = ? AND user_id = ?").run(id, req.user.id);
+            const now = new Date().toISOString();
+            await db.prepare("UPDATE payroll SET status = 'paid', updated_at = ? WHERE id = ? AND user_id = ?").run(now, id, req.user.id);
 
             // Sync to cash/bank ledger (accounting table) as Salary Expense from HDFC Bank Account
-            const now = new Date().toISOString();
-            await db.prepare(`
-                INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
-                VALUES (?, 'expense', ?, ?, 'Salary Expenses', 'HDFC Bank Account', ?, 'posted', ?, ?)
-            `).run(req.user.id, now.split('T')[0], payroll.amount, `Salary paid to ${payroll.employee_name} for ${payroll.month || 'Current Month'}`, now, now);
+            try {
+                await db.prepare(`
+                    INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                    VALUES (?, 'expense', ?, ?, 'Salary Expenses', 'HDFC Bank Account', ?, 'posted', ?, ?)
+                `).run(req.user.id, now.split('T')[0], payroll.amount, `Salary paid to ${payroll.employee_name} for ${payroll.month || 'Current Month'}`, now, now);
+            } catch (accErr) {
+                console.warn('[Payroll Controller] Accounting sync non-critical warning:', accErr.message);
+            }
 
-            return sendSuccess(res, null, 'NEFT Bank payout processed successfully');
+            const updated = await db.prepare("SELECT * FROM payroll WHERE id = ? AND user_id = ?").get(id, req.user.id);
+            return sendSuccess(res, updated || { ...payroll, status: 'paid' }, 'NEFT Bank payout processed successfully');
         } catch (error) {
             console.error('[Payroll Controller] postPayment error:', error);
             return sendError(res, 'NEFT Payout failed', 500);
