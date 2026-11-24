@@ -372,6 +372,11 @@ const payrollController = {
         const { id } = req.params;
         const empName = req.body.employee_name;
         const empId = req.body.employee_id;
+        const loanAmt = parseFloat(req.body.loan_amount) || 0;
+        const emiAmt = parseFloat(req.body.emi_amount) || 0;
+        if (loanAmt > 0 && emiAmt > loanAmt) {
+            return sendError(res, 'Monthly EMI cannot exceed total loan amount', 400);
+        }
         try {
             let targetId = id;
             if (empName) {
@@ -408,7 +413,21 @@ const payrollController = {
         const { id } = req.params;
         const empName = req.body.employee_name;
         const empId = req.body.employee_id;
+        const advAmt = parseFloat(req.body.advance_amount) || 0;
         try {
+            if (advAmt <= 0) {
+                return sendError(res, 'Advance amount must be greater than 0', 400);
+            }
+            if (empName && advAmt > 0) {
+                try {
+                    const emp = await db.prepare('SELECT salary FROM employees WHERE user_id = ? AND name = ?').get(req.user.id, empName);
+                    if (emp && emp.salary && advAmt > parseFloat(emp.salary)) {
+                        return sendError(res, `Salary advance cannot exceed monthly salary of ₹${parseFloat(emp.salary).toLocaleString()}`, 400);
+                    }
+                } catch (e) {
+                    // Ignore table query error if employees table structure differs
+                }
+            }
             let targetId = id;
             if (empName) {
                 const existing = await db.prepare('SELECT id FROM payroll WHERE user_id = ? AND employee_name = ? ORDER BY id DESC LIMIT 1').get(req.user.id, empName);
