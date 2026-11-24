@@ -914,11 +914,14 @@ const productController = {
             const groupMap = new Map();
             groups.forEach(g => {
                 g.subcategories = [];
-                if (g.id) groupMap.set(g.id, g);
+                if (g.id !== undefined && g.id !== null) {
+                    groupMap.set(Number(g.id), g);
+                }
             });
             subgroups.forEach(sg => {
-                if (groupMap.has(sg.parent_id)) {
-                    groupMap.get(sg.parent_id).subcategories.push(sg);
+                const pid = sg.parent_id !== undefined && sg.parent_id !== null ? Number(sg.parent_id) : null;
+                if (pid !== null && groupMap.has(pid)) {
+                    groupMap.get(pid).subcategories.push(sg);
                 }
             });
 
