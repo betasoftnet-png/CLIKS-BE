@@ -165,7 +165,12 @@ const productController = {
                         COALESCE(bs.low_stock_threshold, p.low_stock_threshold, 5) as low_stock_threshold,
                         COALESCE(bs.quantity, p.quantity, 0) as branch_stock,
                         b.name as branch_name,
-                        bs.branch_id
+                        bs.branch_id,
+                        COALESCE(
+                            (SELECT bp.supplier_name FROM business_purchases bp JOIN business_purchase_items bpi ON bp.id = bpi.purchase_id WHERE (bpi.product_id = p.id OR (bpi.sku IS NOT NULL AND bpi.sku != '' AND bpi.sku = p.sku) OR bpi.product_name = p.name) AND bp.supplier_name IS NOT NULL AND bp.supplier_name != '' ORDER BY bp.id DESC LIMIT 1),
+                            (SELECT COALESCE(company, name) FROM business_suppliers WHERE user_id = p.user_id LIMIT 1),
+                            'Standard Procurement Ltd'
+                        ) AS supplier_name
                     FROM business_products p
                     LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
                     LEFT JOIN branches b ON b.id = ?
@@ -173,7 +178,17 @@ const productController = {
                 `;
                 params.push(branchId, branchId, req.user.id);
             } else {
-                query = `SELECT p.* FROM business_products p WHERE p.user_id = ?`;
+                query = `
+                    SELECT 
+                        p.*,
+                        COALESCE(
+                            (SELECT bp.supplier_name FROM business_purchases bp JOIN business_purchase_items bpi ON bp.id = bpi.purchase_id WHERE (bpi.product_id = p.id OR (bpi.sku IS NOT NULL AND bpi.sku != '' AND bpi.sku = p.sku) OR bpi.product_name = p.name) AND bp.supplier_name IS NOT NULL AND bp.supplier_name != '' ORDER BY bp.id DESC LIMIT 1),
+                            (SELECT COALESCE(company, name) FROM business_suppliers WHERE user_id = p.user_id LIMIT 1),
+                            'Standard Procurement Ltd'
+                        ) AS supplier_name
+                    FROM business_products p 
+                    WHERE p.user_id = ?
+                `;
                 params.push(req.user.id);
             }
 
@@ -231,7 +246,17 @@ const productController = {
     getProductById: async (req, res) => {
         const { id } = req.params;
         try {
-            const product = await db.prepare('SELECT * FROM business_products WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            const product = await db.prepare(`
+                SELECT 
+                    p.*,
+                    COALESCE(
+                        (SELECT bp.supplier_name FROM business_purchases bp JOIN business_purchase_items bpi ON bp.id = bpi.purchase_id WHERE (bpi.product_id = p.id OR (bpi.sku IS NOT NULL AND bpi.sku != '' AND bpi.sku = p.sku) OR bpi.product_name = p.name) AND bp.supplier_name IS NOT NULL AND bp.supplier_name != '' ORDER BY bp.id DESC LIMIT 1),
+                        (SELECT COALESCE(company, name) FROM business_suppliers WHERE user_id = p.user_id LIMIT 1),
+                        'Standard Procurement Ltd'
+                    ) AS supplier_name
+                FROM business_products p 
+                WHERE p.id = ? AND p.user_id = ?
+            `).get(id, req.user.id);
             if (!product) return sendError(res, 'Product not found', 404);
             return sendSuccess(res, product, 'Product details retrieved successfully');
         } catch (error) {
