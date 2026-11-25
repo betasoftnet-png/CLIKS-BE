@@ -61,7 +61,8 @@ const initTables = async () => {
             'contact_person TEXT',
             'phone_number TEXT',
             'email TEXT',
-            'capacity_utilization TEXT DEFAULT \'0%\''
+            'capacity_utilization TEXT DEFAULT \'0%\'',
+            'total_capacity INTEGER DEFAULT 10000'
         ];
         for (const col of columns) {
             try {
@@ -92,20 +93,21 @@ const warehouseController = {
     createWarehouse: async (req, res) => {
         const { 
             name, location, code, type, status, address, city, state, pincode, 
-            contact_person, phone_number, email, capacity_utilization 
+            contact_person, phone_number, email, capacity_utilization, total_capacity 
         } = req.body;
         if (!name) return sendError(res, 'Warehouse Name is required', 400);
         try {
             const now = new Date().toISOString();
+            const cap = parseInt(total_capacity, 10) > 0 ? parseInt(total_capacity, 10) : 10000;
             const result = await db.prepare(
                 `INSERT INTO warehouses (
                     user_id, name, location, code, type, status, address, city, state, pincode, 
-                    contact_person, phone_number, email, capacity_utilization, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                    contact_person, phone_number, email, capacity_utilization, total_capacity, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             ).run(
                 req.user.id, name, location || null, code || null, type || 'godown', status || 'active',
                 address || null, city || null, state || null, pincode || null,
-                contact_person || null, phone_number || null, email || null, capacity_utilization || '0%', now
+                contact_person || null, phone_number || null, email || null, capacity_utilization || '0%', cap, now
             );
 
             const inserted = await db.prepare('SELECT * FROM warehouses WHERE id = ?').get(result.lastInsertRowid);
@@ -153,6 +155,8 @@ const warehouseController = {
                 query += ' AND city = ?';
                 params.push(city);
             }
+
+            query += ' ORDER BY id ASC';
 
             const rows = await db.prepare(query).all(...params);
             for (const wh of rows) {
@@ -202,6 +206,9 @@ const warehouseController = {
                     wh.total_value = (stats?.total_value || 0) + (stockStats?.st_value || 0);
                     wh.inventory_value = wh.total_value;
                     wh.item_count = wh.total_items;
+                    const cap = parseInt(wh.total_capacity, 10) > 0 ? parseInt(wh.total_capacity, 10) : 10000;
+                    wh.total_capacity = cap;
+                    wh.capacity_utilization = `${Math.min(100, Math.round((wh.total_quantity / cap) * 100))}%`;
                 } catch(e) {}
             }
             return sendSuccess(res, rows, 'Warehouses fetched successfully');
@@ -236,7 +243,7 @@ const warehouseController = {
             const params = [];
             const allowed = [
                 'name', 'location', 'code', 'type', 'status', 'address', 'city', 'state', 'pincode', 
-                'contact_person', 'phone_number', 'email', 'capacity_utilization'
+                'contact_person', 'phone_number', 'email', 'capacity_utilization', 'total_capacity'
             ];
 
             allowed.forEach(field => {
@@ -306,6 +313,9 @@ const warehouseController = {
                     updated.total_value = (stats?.total_value || 0) + (stockStats?.st_value || 0);
                     updated.inventory_value = updated.total_value;
                     updated.item_count = updated.total_items;
+                    const cap = parseInt(updated.total_capacity, 10) > 0 ? parseInt(updated.total_capacity, 10) : 10000;
+                    updated.total_capacity = cap;
+                    updated.capacity_utilization = `${Math.min(100, Math.round((updated.total_quantity / cap) * 100))}%`;
                 } catch(e) {}
             }
             return sendSuccess(res, updated, 'Warehouse updated successfully');
