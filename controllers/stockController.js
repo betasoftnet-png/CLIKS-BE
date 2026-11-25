@@ -336,9 +336,39 @@ const deleteStock = async (req, res) => {
 const getStockHistory = async (req, res) => {
   try {
     const rawId = req.params.id;
-    const cleanId = String(rawId).replace(/^STK-|^PROD-/i, '');
+    const cleanId = String(rawId).replace(/^STK-|^PROD-/i, '').trim();
     const numId = Number(cleanId);
     const hasNum = !isNaN(numId) && numId > 0;
+
+    const relatedIds = new Set([String(rawId), String(cleanId), `STK-${cleanId}`, `PROD-${cleanId}`]);
+    if (hasNum) relatedIds.add(String(numId));
+
+    try {
+      const stockRow = await db.prepare('SELECT id, sku, name FROM stock WHERE (id = ? OR CAST(id AS TEXT) = ?) AND user_id = ?').get(cleanId, cleanId, req.user.id);
+      const prodRow = await db.prepare('SELECT id, sku, name FROM business_products WHERE (id = ? OR CAST(id AS TEXT) = ?) AND user_id = ?').get(cleanId, cleanId, req.user.id);
+
+      const targetSku = (stockRow?.sku || prodRow?.sku || '').trim();
+      const targetName = (stockRow?.name || prodRow?.name || '').trim();
+
+      if (stockRow?.id) relatedIds.add(String(stockRow.id));
+      if (prodRow?.id) relatedIds.add(String(prodRow.id));
+
+      if (targetSku && targetSku !== 'N/A') {
+        const extraStocks = await db.prepare('SELECT id FROM stock WHERE sku = ? AND user_id = ?').all(targetSku, req.user.id);
+        extraStocks.forEach(s => relatedIds.add(String(s.id)));
+        const extraProds = await db.prepare('SELECT id FROM business_products WHERE sku = ? AND user_id = ?').all(targetSku, req.user.id);
+        extraProds.forEach(p => relatedIds.add(String(p.id)));
+      }
+      if (targetName) {
+        const extraStocksByName = await db.prepare('SELECT id FROM stock WHERE LOWER(name) = LOWER(?) AND user_id = ?').all(targetName, req.user.id);
+        extraStocksByName.forEach(s => relatedIds.add(String(s.id)));
+        const extraProdsByName = await db.prepare('SELECT id FROM business_products WHERE LOWER(name) = LOWER(?) AND user_id = ?').all(targetName, req.user.id);
+        extraProdsByName.forEach(p => relatedIds.add(String(p.id)));
+      }
+    } catch (_) {}
+
+    const idList = Array.from(relatedIds);
+    const placeholders = idList.map(() => '?').join(', ');
 
     const history = await db.prepare(`
       SELECT t.*, 
@@ -348,15 +378,10 @@ const getStockHistory = async (req, res) => {
         (w.id IS NOT NULL AND (t.warehouse_id = w.id OR CAST(t.warehouse_id AS TEXT) = CAST(w.id AS TEXT)))
         OR LOWER(CAST(COALESCE(t.warehouse_id, 0) AS TEXT)) = LOWER(w.name)
       )
-      WHERE (
-        CAST(t.stock_id AS TEXT) = ? 
-        OR CAST(t.stock_id AS TEXT) = ? 
-        OR CAST(t.stock_id AS TEXT) = ?
-        ${hasNum ? `OR t.stock_id = ${numId}` : ''}
-      ) AND t.user_id = ? 
+      WHERE CAST(t.stock_id AS TEXT) IN (${placeholders}) AND t.user_id = ? 
       ORDER BY t.created_at DESC 
       LIMIT 100
-    `).all(String(rawId), String(cleanId), `STK-${cleanId}`, req.user.id);
+    `).all(...idList, req.user.id);
     
     return sendSuccess(res, history || [], 'Stock history fetched');
   } catch (err) {
