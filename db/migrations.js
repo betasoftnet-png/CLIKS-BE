@@ -3015,6 +3015,31 @@ CREATE TABLE IF NOT EXISTS money_trackers (
     try {
       await db.prepare("ALTER TABLE business_invoices ADD COLUMN SignedQRCode TEXT").run();
     } catch (_) {}
+
+    // Safely add delivery tracking & OTP verification columns to delivery_challans if missing
+    const challanExtraCols = [
+      "ALTER TABLE delivery_challans ADD COLUMN delivery_number TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN driver_name TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN contact_number TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN city TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN state TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN pincode TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN package_count INTEGER DEFAULT 1",
+      "ALTER TABLE delivery_challans ADD COLUMN package_weight REAL DEFAULT 1.0",
+      "ALTER TABLE delivery_challans ADD COLUMN warehouse_id TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN dispatch_by TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN tracking_number TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN courier_name TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN otp_code TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN dispatch_status TEXT DEFAULT 'pending'",
+      "ALTER TABLE delivery_challans ADD COLUMN verified_at TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN delivered_date TEXT"
+    ];
+    for (const sql of challanExtraCols) {
+      try {
+        await db.prepare(sql).run();
+      } catch (_) {}
+    }
     // ── Manufacturing & Production Management Migrations ──────────────────
     try {
       const { runManufacturingMigrations } = require('./manufacturingMigration');
