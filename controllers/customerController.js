@@ -395,18 +395,24 @@ const customerController = {
             const userId = req.user.id;
             const body = req.body || {};
 
-            const name = body.name || body.customer_name || body.contact_person;
-            if (!name || !String(name).trim()) {
-                return sendError(res, 'Customer name is required', 400);
+            const name = (body.name || body.customer_name || body.contact_person || body.business_name || body.company || body.tradeName || body.legalName || '').toString().trim();
+            if (!name) {
+                return sendError(res, 'Customer name or Business name is required', 400);
             }
 
             const rawGstin = (body.gstin || body.customer_gstin || '').toString().trim().toUpperCase();
-            const rawPhone = (body.phone_number || body.phone || body.mobile || body.contact || '').toString().replace(/\D/g, '').slice(-10);
+            const rawPhoneDigits = (body.phone_number || body.phone || body.mobile || body.contact || '').toString().replace(/\D/g, '');
+            const rawPhone = rawPhoneDigits.length >= 10 ? rawPhoneDigits.slice(-10) : '';
             const rawEmail = (body.email || '').toString().trim().toLowerCase();
 
             // If GSTIN is provided, phone is optional; otherwise phone is required
             const isPhoneRequired = !rawGstin;
-            const phoneErr = validatePhone(rawPhone, isPhoneRequired);
+            let phoneErr = null;
+            if (isPhoneRequired) {
+                phoneErr = validatePhone(rawPhone, true);
+            } else if (rawPhoneDigits.length > 0 && rawPhoneDigits !== '91') {
+                phoneErr = validatePhone(rawPhone, false);
+            }
             if (phoneErr) return sendError(res, phoneErr, 400);
 
             if (body.email) {
@@ -483,7 +489,29 @@ const customerController = {
             const opening_balance = parseFloat(body.opening_balance || body.openingBalance) || 0;
             const credit_limit = parseFloat(body.credit_limit || body.creditLimit) || 0;
             const status = body.status || 'Active';
-            const customer_code = body.customer_code || `CUST-${Date.now().toString().slice(-4)}`;
+            let customer_code = (body.customer_code || '').toString().trim().toUpperCase();
+            if (!customer_code) {
+                const prefix = (business_name || company || name || 'CUST').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 5) || 'CUST';
+                let nextSeq = 1;
+                try {
+                    const existingCodes = await db.prepare(
+                        'SELECT customer_code FROM business_customers WHERE user_id = ? AND customer_code LIKE ?'
+                    ).all(userId, `${prefix}-%`);
+                    if (existingCodes && existingCodes.length > 0) {
+                        const regex = new RegExp(`^${prefix}-(\\d+)`, 'i');
+                        existingCodes.forEach(r => {
+                            const m = (r.customer_code || '').match(regex);
+                            if (m && m[1]) {
+                                const val = parseInt(m[1], 10);
+                                if (!isNaN(val) && val >= nextSeq) nextSeq = val + 1;
+                            }
+                        });
+                    }
+                } catch (e) {
+                    console.warn('[customerController] Error computing sequential code:', e.message);
+                }
+                customer_code = `${prefix}-${String(nextSeq).padStart(3, '0')}`;
+            }
             const due_days = parseInt(body.due_days) || 30;
             const notes = body.notes || null;
             const preferred_contact = body.preferred_contact || 'WhatsApp';

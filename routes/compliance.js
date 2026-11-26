@@ -107,6 +107,30 @@ function formatAddress(addrObj) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// In-Memory Cache and Rate Limiting for GSTIN Verification
+// ────────────────────────────────────────────────────────────────────────────
+const gstinCache = new Map();
+const GSTIN_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+const gstRateLimitMap = new Map();
+const GST_RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const MAX_GST_REQUESTS_PER_MIN = 15;
+
+function checkGstRateLimit(clientKey) {
+  const now = Date.now();
+  let record = gstRateLimitMap.get(clientKey);
+  if (!record || now - record.startTime > GST_RATE_LIMIT_WINDOW_MS) {
+    gstRateLimitMap.set(clientKey, { count: 1, startTime: now });
+    return true;
+  }
+  if (record.count >= MAX_GST_REQUESTS_PER_MIN) {
+    return false;
+  }
+  record.count += 1;
+  return true;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // 1. GET /api/v1/compliance/verify-gstin/:gstin
 // ────────────────────────────────────────────────────────────────────────────
 router.get('/verify-gstin/:gstin', async (req, res) => {
@@ -117,6 +141,19 @@ router.get('/verify-gstin/:gstin', async (req, res) => {
     }
 
     const cleanGstin = gstin.trim().toUpperCase();
+
+    // 1. Check in-memory cache first (prevents redundant API costs/calls)
+    const cached = gstinCache.get(cleanGstin);
+    if (cached && (Date.now() - cached.timestamp < GSTIN_CACHE_TTL_MS)) {
+      return sendSuccess(res, cached.data, 'GSTIN verified successfully (cached)');
+    }
+
+    // 2. Enforce API rate limiting
+    const clientKey = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'client';
+    if (!checkGstRateLimit(clientKey)) {
+      return sendError(res, 'GSTIN verification rate limit exceeded (maximum 15 lookups per minute). Please wait a moment before trying again.', 429);
+    }
+
     const rawResult = await mastersIndiaService.searchGstin(cleanGstin);
 
     // Masters India returns payload in either `data` or root
@@ -141,6 +178,12 @@ router.get('/verify-gstin/:gstin', async (req, res) => {
       einvoiceStatus: data.einvoiceStatus || 'No',
       raw: data
     };
+
+    // Store in cache
+    gstinCache.set(cleanGstin, {
+      timestamp: Date.now(),
+      data: result
+    });
 
     return sendSuccess(res, result, 'GSTIN verified successfully');
   } catch (error) {
