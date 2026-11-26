@@ -138,7 +138,7 @@ const getProgramSettings = async (req, res) => {
         `).run(
           userId, isEnabled, rsPer1Point, pointsPer1Rs, maxClaimPct,
           printShowLoyalty, printShowCredit, printShowGst, receiptPrinterSize,
-          1.0, 0.0, 10, 5000, 0, 50, 100, 1, JSON.stringify(DEFAULT_TIERS), 1, 1, 1, 0, 'Cliks VIP Rewards', now, now
+          1.0, 0.0, 10, 5000, 0, 50, 100, 1, JSON.stringify(DEFAULT_TIERS), 1, 1, 1, 0, '', now, now
         );
       } catch (_) {}
 
@@ -166,7 +166,7 @@ const getProgramSettings = async (req, res) => {
     return sendSuccess(res, {
       loyaltyEnabled: loyaltyEnabled,
       loyalty: loyaltyEnabled,
-      customProgramName: row.custom_program_name || 'Cliks VIP Rewards',
+      customProgramName: row.custom_program_name !== undefined ? row.custom_program_name : '',
       loyaltyRsPer1Point: Number(row.rs_per_point) || 100,
       pointsPerRs: Number(row.points_per_rs) || 100,
       pointValueCurrency: Number(row.point_value_currency !== undefined ? row.point_value_currency : 1.0),
@@ -219,15 +219,15 @@ const updateProgramSettings = async (req, res) => {
       enabledVal = existing.loyalty_enabled;
     }
 
-    const programName = body.customProgramName !== undefined ? String(body.customProgramName).trim() : (existing?.custom_program_name || 'Cliks VIP Rewards');
+    const programName = body.customProgramName !== undefined ? String(body.customProgramName).trim() : (existing?.custom_program_name !== undefined ? existing.custom_program_name : '');
     const rsPerPoint = body.loyaltyRsPer1Point !== undefined 
-      ? Number(body.loyaltyRsPer1Point) 
-      : (body.rs_per_point !== undefined ? Number(body.rs_per_point) : (existing?.rs_per_point || 100));
+      ? Math.max(1, Number(body.loyaltyRsPer1Point) || 100) 
+      : (body.rs_per_point !== undefined ? Math.max(1, Number(body.rs_per_point) || 100) : (existing?.rs_per_point || 100));
     const pointsPerRs = body.pointsPerRs !== undefined 
       ? Number(body.pointsPerRs) 
       : (body.points_per_rs !== undefined ? Number(body.points_per_rs) : rsPerPoint);
     const pointValue = body.pointValueCurrency !== undefined ? Number(body.pointValueCurrency) : (existing?.point_value_currency !== undefined ? existing.point_value_currency : 1.0);
-    const minSpend = body.minOrderSpend !== undefined ? Number(body.minOrderSpend) : (existing?.min_order_spend || 0);
+    const minSpend = body.minOrderSpend !== undefined ? Math.max(0, Number(body.minOrderSpend) || 0) : (existing?.min_order_spend !== undefined ? existing.min_order_spend : 0);
     const minRedeem = body.minPointsToRedeem !== undefined ? Number(body.minPointsToRedeem) : (existing?.min_points_to_redeem || 10);
     const maxClaimPct = body.loyaltyMaxClaimPercent !== undefined ? Number(body.loyaltyMaxClaimPercent) : (existing?.max_claim_percent || 50);
     const maxPtsPerOrder = body.maxPointsPerOrder !== undefined ? Number(body.maxPointsPerOrder) : (existing?.max_points_per_order || 5000);
@@ -340,7 +340,7 @@ const getLoyaltyStats = async (req, res) => {
 
     return sendSuccess(res, {
       activeProgram: Boolean(settings?.loyalty_enabled),
-      programName: settings?.custom_program_name || 'Cliks VIP Rewards',
+      programName: settings?.custom_program_name || '',
       pointValueCurrency: pointValue,
       totalMembers: Number(custAgg?.active_members || 0),
       totalCustomers: Number(custAgg?.total_customers || 0),

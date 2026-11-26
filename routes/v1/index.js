@@ -89,6 +89,7 @@ router.use('/tax-audit',       require('../taxAudit'));
 router.use('/compliance',      auth, require('../compliance'));
 router.use(['/billing', '/invoices'], auth, require('../billing'));
 router.use('/inventory',       auth, require('../inventory'));
+router.use(['/loyalty', '/loyalty-program'], auth, require('../loyalty'));
 router.use('/gst',             auth, require('../gst'));
 
 module.exports = router;
