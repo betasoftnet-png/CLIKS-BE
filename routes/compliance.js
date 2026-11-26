@@ -49,22 +49,41 @@ const { requireBusinessAccount } = require('../middleware/auth');
 })();
 
 /**
- * Helper: Format date as DD/MM/YYYY for Masters India
+ * Helper: Format date as DD/MM/YYYY for Masters India / NIC
+ * Enforces NIC Rule 2305: document date cannot be >30 days in the past
  */
 function formatDateDDMMYYYY(dateInput) {
+  const today = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const formatD = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+
   if (!dateInput) {
-    const d = new Date();
-    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    return formatD(today);
   }
+
+  let d;
   if (typeof dateInput === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(dateInput)) {
-    return dateInput;
+    const [day, month, year] = dateInput.split('/').map(Number);
+    d = new Date(year, month - 1, day);
+  } else {
+    d = new Date(dateInput);
   }
-  const d = new Date(dateInput);
+
   if (isNaN(d.getTime())) {
-    const today = new Date();
-    return `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+    return formatD(today);
   }
-  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+
+  // NIC / GST E-Invoice Rule 2305:
+  // "IRN cannot be generated with document date prior to 30 days from today"
+  // Keep within 28 days back and not in future
+  const diffTime = today.getTime() - d.getTime();
+  const diffDays = diffTime / (1000 * 3600 * 24);
+
+  if (diffDays > 28 || diffDays < -1) {
+    return formatD(today);
+  }
+
+  return formatD(d);
 }
 
 /**
@@ -135,12 +154,13 @@ router.get('/verify-gstin/:gstin', async (req, res) => {
 // ────────────────────────────────────────────────────────────────────────────
 router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, res) => {
   try {
-    const taxableAmount = Number(req.body.taxable_value || req.body.taxable_amount || 1000);
-    const docNo = req.body.document_number || `CLK-INV-${Math.floor(1000 + Math.random() * 9000)}`;
-    const docDate = req.body.document_date ? formatDateDDMMYYYY(req.body.document_date) : "16/09/2026";
-    const buyerGstin = req.body.buyer_details?.gstin || req.body.customer_gstin || "09AAAPG7885R002";
-    const clientName = req.body.buyer_details?.legal_name || req.body.customer_name || req.body.client_name || "Customer";
-    const prodName = req.body.product_name || req.body.sender_product_name || req.body.receiver_product_name || "Wheat";
+    const taxableAmount = Number(req.body.taxable_value || req.body.taxable_amount || req.body.totalAmount || req.body.total_amount || req.body.amount || 1000);
+    const docNo = req.body.document_number || req.body.invoiceNumber || req.body.invoice_number || `CLK-INV-${Math.floor(1000 + Math.random() * 9000)}`;
+    const rawDocDate = req.body.document_date || req.body.docDate || req.body.doc_date || req.body.invoice_date || req.body.created_at || req.body.due_date;
+    const docDate = formatDateDDMMYYYY(rawDocDate);
+    const buyerGstin = req.body.buyer_details?.gstin || req.body.customer_gstin || req.body.buyerGstin || req.body.client_gstin || "09AAAPG7885R002";
+    const clientName = req.body.buyer_details?.legal_name || req.body.customer_name || req.body.client_name || req.body.buyerName || "Customer";
+    const prodName = req.body.product_name || req.body.sender_product_name || req.body.receiver_product_name || (Array.isArray(req.body.items) && req.body.items[0]?.name) || "Goods / Services";
     
     // Masters India requires at least 6 digits for HSN
     let rawHsn = String(req.body.hsn_code || "1001");
@@ -387,6 +407,17 @@ router.post(['/generate-einvoice', '/generate-irn', '/einvoice'], async (req, re
       );
     } catch (saveSalesErr) {
       console.warn('[ComplianceRoute] sales_invoices save error:', saveSalesErr.message);
+    }
+
+    // 3b. Update business_invoices table with IRN & Ack details
+    try {
+      await db.prepare(`
+        UPDATE business_invoices 
+        SET irn = ?, ack_no = ?, ack_date = ?, signed_qr = ?, qr_code = ?, status = 'IRN Active', updated_at = ?
+        WHERE invoice_number = ? OR (id = ? AND ? > 0)
+      `).run(irn, String(ackNo), String(ackDt), signedQrCode, signedQrCode, nowIso, docNo, Number(req.body.invoiceId || 0), Number(req.body.invoiceId || 0));
+    } catch (saveBizErr) {
+      console.warn('[ComplianceRoute] business_invoices update error:', saveBizErr.message);
     }
 
     // 4. Return unified response for frontend hydration

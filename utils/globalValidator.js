@@ -3,12 +3,14 @@
  */
 
 const validatePhone = (phone, isRequired = false) => {
-    const clean = phone ? String(phone).trim() : '';
-    if (!clean) {
+    const raw = phone ? String(phone).trim() : '';
+    if (!raw) {
         if (isRequired) return 'Phone number is required.';
         return null;
     }
-    if (!/^\d+$/.test(clean) || clean.length !== 10) {
+    const digitsOnly = raw.replace(/\D/g, '');
+    const clean = digitsOnly.length > 10 ? digitsOnly.slice(-10) : digitsOnly;
+    if (!clean || clean.length !== 10) {
         return 'Phone number must contain exactly 10 digits.';
     }
     return null;
@@ -28,12 +30,12 @@ const validateEmail = (email, isRequired = false) => {
 };
 
 const validateGstin = (gstin, isRequired = false) => {
-    const clean = gstin ? String(gstin).trim() : '';
+    const clean = gstin ? String(gstin).trim().toUpperCase() : '';
     if (!clean) {
         if (isRequired) return 'GSTIN is required.';
         return null;
     }
-    if (clean.length !== 15 || !/^[a-zA-Z0-9]{15}$/.test(clean)) {
+    if (clean.length !== 15 || !/^[0-9A-Z]{15}$/.test(clean)) {
         return 'GSTIN must contain exactly 15 alphanumeric characters.';
     }
     return null;

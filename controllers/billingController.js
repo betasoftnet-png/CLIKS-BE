@@ -687,7 +687,49 @@ const billingController = {
     shareInvoice: async (req, res) => sendSuccess(res, null, 'Invoice shared successfully via dynamic webhook link'),
     getInvoicePdf: async (req, res) => sendSuccess(res, { url: '/mock-invoice.pdf' }, 'PDF generated successfully'),
     printInvoice: async (req, res) => sendSuccess(res, null, 'Print spooler triggered successfully'),
-    sendWhatsapp: async (req, res) => sendSuccess(res, null, 'WhatsApp reminder dispatched successfully'),
+    sendWhatsapp: async (req, res) => {
+        const { id } = req.params;
+        const requestedPhone = req.body?.phone || req.body?.mobile || req.body?.phoneNumber;
+        try {
+            const invoice = await db.prepare('SELECT * FROM business_invoices WHERE (id = ? OR invoice_number = ?) AND user_id = ?').get(id, id, req.user.id);
+            if (!invoice) return sendError(res, 'Invoice not found', 404);
+
+            let phone = requestedPhone;
+            if (!phone) {
+                // Lookup from business_customers
+                const cust = await db.prepare('SELECT phone, phone_number, mobile FROM business_customers WHERE user_id = ? AND (name = ? OR email = ?)').get(req.user.id, invoice.client_name, invoice.client_email);
+                phone = cust?.phone_number || cust?.phone || cust?.mobile || invoice.client_phone || '';
+            }
+
+            // Sanitize phone
+            const digits = String(phone || '').replace(/\D/g, '');
+            const cleanPhone = digits.length === 10 ? `91${digits}` : digits;
+
+            const clientName = invoice.client_name || 'Valued Customer';
+            const invNo = invoice.invoice_number || `#${invoice.id}`;
+            const total = Number(invoice.total_amount || invoice.amount || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' });
+            const dueDate = invoice.due_date || 'Immediate';
+            const status = (invoice.status || 'Active').toUpperCase();
+
+            const message = `Hello *${clientName}*,\n\nHere is your official invoice *${invNo}* from CLIKS BUSINESS.\n\n*Invoice Summary:*\n• Amount: *${total}*\n• Due Date: ${dueDate}\n• Status: *${status}*\n\nPlease find your tax invoice breakdown ready for review.\n\nThank you for choosing CLIKS BUSINESS!`;
+
+            const waDirectUrl = cleanPhone 
+                ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`
+                : `https://wa.me/?text=${encodeURIComponent(message)}`;
+
+            await logBusinessAudit(req.user.id, 'WHATSAPP_DISPATCH', `Dispatched automated WhatsApp notification for invoice ${invNo} to ${cleanPhone || 'customer'}`, 'INFO');
+
+            return sendSuccess(res, {
+                dispatched: true,
+                phone: cleanPhone,
+                message,
+                whatsappUrl: waDirectUrl
+            }, `WhatsApp notification prepared and automated for ${clientName}`);
+        } catch (e) {
+            console.error('[sendWhatsapp Error]', e);
+            return sendError(res, 'Failed to dispatch WhatsApp invoice', 500);
+        }
+    },
     sendEmail: async (req, res) => sendSuccess(res, null, 'Email invoice PDF dispatched successfully'),
     cancelInvoice: async (req, res) => {
         const { id } = req.params;

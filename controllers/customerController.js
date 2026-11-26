@@ -400,8 +400,13 @@ const customerController = {
                 return sendError(res, 'Customer name is required', 400);
             }
 
-            // Global Field Validations
-            const phoneErr = validatePhone(body.phone_number || body.phone || body.mobile || body.contact, true);
+            const rawGstin = (body.gstin || body.customer_gstin || '').toString().trim().toUpperCase();
+            const rawPhone = (body.phone_number || body.phone || body.mobile || body.contact || '').toString().replace(/\D/g, '').slice(-10);
+            const rawEmail = (body.email || '').toString().trim().toLowerCase();
+
+            // If GSTIN is provided, phone is optional; otherwise phone is required
+            const isPhoneRequired = !rawGstin;
+            const phoneErr = validatePhone(rawPhone, isPhoneRequired);
             if (phoneErr) return sendError(res, phoneErr, 400);
 
             if (body.email) {
@@ -412,9 +417,17 @@ const customerController = {
                 }
             }
 
-            if (body.gstin) {
-                const gstinErr = validateGstin(body.gstin, false);
+            if (rawGstin) {
+                const gstinErr = validateGstin(rawGstin, false);
                 if (gstinErr) return sendError(res, gstinErr, 400);
+
+                // If customer with same GSTIN already exists, return existing profile cleanly
+                const existingGstCust = await db.prepare(
+                    'SELECT * FROM business_customers WHERE user_id = ? AND UPPER(gstin) = ?'
+                ).get(userId, rawGstin);
+                if (existingGstCust) {
+                    return sendSuccess(res, existingGstCust, 'Customer with GSTIN already registered', 200);
+                }
             }
 
             if (body.pan || body.pan_number) {
@@ -422,29 +435,25 @@ const customerController = {
                 if (panErr) return sendError(res, panErr, 400);
             }
 
-            const rawPhone = (body.phone_number || body.phone || body.mobile || body.contact || '').toString().trim();
-            const rawEmail = (body.email || '').toString().trim().toLowerCase();
-
             // Uniqueness validation for phone number and email
             if (rawPhone) {
                 const existingPhoneCust = await db.prepare(
-                    'SELECT id, name FROM business_customers WHERE user_id = ? AND (phone = ? OR phone_number = ?)'
+                    'SELECT * FROM business_customers WHERE user_id = ? AND (phone = ? OR phone_number = ?)'
                 ).get(userId, rawPhone, rawPhone);
                 if (existingPhoneCust) {
-                    return sendError(res, `Already a customer with this phone number (${existingPhoneCust.name})`, 400);
+                    return sendSuccess(res, existingPhoneCust, `Customer already registered with phone (${existingPhoneCust.name})`, 200);
                 }
             }
 
             if (rawEmail) {
                 const existingEmailCust = await db.prepare(
-                    'SELECT id, name FROM business_customers WHERE user_id = ? AND LOWER(email) = ?'
+                    'SELECT * FROM business_customers WHERE user_id = ? AND LOWER(email) = ?'
                 ).get(userId, rawEmail);
                 if (existingEmailCust) {
-                    return sendError(res, `Already a customer with this email (${existingEmailCust.name})`, 400);
+                    return sendSuccess(res, existingEmailCust, `Customer already registered with email (${existingEmailCust.name})`, 200);
                 }
             }
 
-            const rawGstin = (body.gstin || '').toString().trim().toUpperCase();
             const rawPan = (body.pan_number || body.pan || '').toString().trim().toUpperCase();
 
             const company = body.company || body.business_name || null;
