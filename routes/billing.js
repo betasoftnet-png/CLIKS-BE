@@ -24,6 +24,31 @@ router.get('/invoices/search', billingController.searchInvoices);
 router.get('/next-number', billingController.getNextNumber);
 router.get('/invoices/next-number', billingController.getNextNumber);
 
+// ── Simple Billing Held Carts, Sessions & Records ────────
+router.get('/simple/held-carts', billingController.getSimpleHeldCarts);
+router.post('/simple/held-carts', billingController.saveSimpleHeldCart);
+router.delete('/simple/held-carts/:id', billingController.deleteSimpleHeldCart);
+router.delete('/simple/held-carts', billingController.clearSimpleHeldCarts);
+
+router.get('/simple/cart', billingController.getSimpleCartSession);
+router.post('/simple/cart', billingController.saveSimpleCartSession);
+router.delete('/simple/cart', billingController.clearSimpleCartSession);
+
+router.get('/simple/records', billingController.getSimpleBillingRecords);
+router.post('/simple/records', billingController.saveSimpleBillingRecord);
+router.delete('/simple/records/:id', billingController.deleteSimpleBillingRecord);
+router.delete('/simple/records', billingController.clearSimpleBillingRecords);
+
+// Direct aliases
+router.get('/held-carts', billingController.getSimpleHeldCarts);
+router.post('/held-carts', billingController.saveSimpleHeldCart);
+router.delete('/held-carts/:id', billingController.deleteSimpleHeldCart);
+router.delete('/held-carts', billingController.clearSimpleHeldCarts);
+
+router.get('/cart', billingController.getSimpleCartSession);
+router.post('/cart', billingController.saveSimpleCartSession);
+router.delete('/cart', billingController.clearSimpleCartSession);
+
 // ── Invoices CRUD (Both /billing and /billing/invoices endpoints) ────────
 // POST /billing or /billing/invoices
 router.post('/', billingController.createInvoice);

@@ -1085,6 +1085,359 @@ const billingController = {
         } catch (e) {
             return sendError(res, e.message || 'Failed to fetch next invoice number', 500);
         }
+    },
+
+    // ── Simple Billing Held Carts, Sessions & Records ────────
+    getSimpleHeldCarts: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+            const rows = await db.prepare(
+                'SELECT * FROM simple_held_carts WHERE user_id = ? ORDER BY created_at DESC'
+            ).all(userId);
+
+            const list = (rows || []).map(row => {
+                let products = [];
+                try {
+                    products = typeof row.products === 'string' ? JSON.parse(row.products) : (row.products || []);
+                } catch (err) {
+                    products = [];
+                }
+                return {
+                    id: row.id,
+                    label: row.label || '',
+                    customerName: row.customer_name || 'Walk-in Customer',
+                    customerPhone: row.customer_phone || '',
+                    paymentMode: row.payment_mode || 'Cash',
+                    billingOrder: row.billing_order || '',
+                    products,
+                    totalQuantity: Number(row.total_quantity) || 0,
+                    grandTotal: Number(row.grand_total) || 0,
+                    date: row.date || '',
+                    formattedDate: row.formatted_date || '',
+                    createdAt: row.created_at
+                };
+            });
+
+            return sendSuccess(res, list, 'Held carts retrieved successfully');
+        } catch (error) {
+            console.error('[Billing Controller] getSimpleHeldCarts error:', error);
+            return sendError(res, 'Failed to fetch held carts', 500);
+        }
+    },
+
+    saveSimpleHeldCart: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+            const now = new Date().toISOString();
+
+            const bulkCarts = Array.isArray(req.body) ? req.body : (Array.isArray(req.body.held_carts) ? req.body.held_carts : null);
+
+            if (bulkCarts) {
+                await db.prepare('DELETE FROM simple_held_carts WHERE user_id = ?').run(userId);
+                for (const item of bulkCarts) {
+                    const id = String(item.id || Date.now() + Math.random().toString(36).substring(2, 7));
+                    const productsJson = JSON.stringify(item.products || []);
+                    await db.prepare(`
+                        INSERT INTO simple_held_carts 
+                        (id, user_id, label, customer_name, customer_phone, payment_mode, billing_order, products, total_quantity, grand_total, date, formatted_date, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        id,
+                        userId,
+                        item.label || item.customerName || 'Held Bill',
+                        item.customerName || 'Walk-in Customer',
+                        item.customerPhone || '',
+                        item.paymentMode || 'Cash',
+                        item.billingOrder || '',
+                        productsJson,
+                        Number(item.totalQuantity) || 0,
+                        Number(item.grandTotal) || 0,
+                        item.date || '',
+                        item.formattedDate || '',
+                        item.createdAt || now
+                    );
+                }
+                return sendSuccess(res, bulkCarts, 'Held carts synced successfully');
+            }
+
+            const cart = req.body;
+            const id = String(cart.id || Date.now());
+            const label = cart.label || cart.customerName || 'Held Bill';
+            const customerName = cart.customerName || 'Walk-in Customer';
+            const customerPhone = cart.customerPhone || '';
+            const paymentMode = cart.paymentMode || 'Cash';
+            const billingOrder = cart.billingOrder || '';
+            const productsJson = typeof cart.products === 'string' ? cart.products : JSON.stringify(cart.products || []);
+            const totalQuantity = Number(cart.totalQuantity) || 0;
+            const grandTotal = Number(cart.grandTotal) || 0;
+            const date = cart.date || '';
+            const formattedDate = cart.formattedDate || '';
+            const createdAt = cart.createdAt || now;
+
+            const existing = await db.prepare('SELECT id FROM simple_held_carts WHERE id = ? AND user_id = ?').get(id, userId);
+            if (existing) {
+                await db.prepare(`
+                    UPDATE simple_held_carts
+                    SET label = ?, customer_name = ?, customer_phone = ?, payment_mode = ?, billing_order = ?, products = ?, total_quantity = ?, grand_total = ?, date = ?, formatted_date = ?
+                    WHERE id = ? AND user_id = ?
+                `).run(
+                    label, customerName, customerPhone, paymentMode, billingOrder, productsJson, totalQuantity, grandTotal, date, formattedDate, id, userId
+                );
+            } else {
+                await db.prepare(`
+                    INSERT INTO simple_held_carts 
+                    (id, user_id, label, customer_name, customer_phone, payment_mode, billing_order, products, total_quantity, grand_total, date, formatted_date, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    id, userId, label, customerName, customerPhone, paymentMode, billingOrder, productsJson, totalQuantity, grandTotal, date, formattedDate, createdAt
+                );
+            }
+
+            return sendSuccess(res, { id, label, customerName, totalQuantity, grandTotal }, 'Held cart saved successfully');
+        } catch (error) {
+            console.error('[Billing Controller] saveSimpleHeldCart error:', error);
+            return sendError(res, 'Failed to save held cart', 500);
+        }
+    },
+
+    deleteSimpleHeldCart: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+            const { id } = req.params;
+
+            await db.prepare('DELETE FROM simple_held_carts WHERE id = ? AND user_id = ?').run(id, userId);
+            return sendSuccess(res, { success: true, id }, 'Held cart deleted successfully');
+        } catch (error) {
+            console.error('[Billing Controller] deleteSimpleHeldCart error:', error);
+            return sendError(res, 'Failed to delete held cart', 500);
+        }
+    },
+
+    clearSimpleHeldCarts: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+
+            await db.prepare('DELETE FROM simple_held_carts WHERE user_id = ?').run(userId);
+            return sendSuccess(res, { success: true }, 'All held carts cleared');
+        } catch (error) {
+            console.error('[Billing Controller] clearSimpleHeldCarts error:', error);
+            return sendError(res, 'Failed to clear held carts', 500);
+        }
+    },
+
+    getSimpleCartSession: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+            const row = await db.prepare('SELECT cart_data FROM simple_cart_sessions WHERE user_id = ?').get(userId);
+            if (!row || !row.cart_data) {
+                return sendSuccess(res, null, 'No active cart session');
+            }
+            let data = null;
+            try {
+                data = JSON.parse(row.cart_data);
+            } catch (e) {
+                data = null;
+            }
+            return sendSuccess(res, data, 'Active cart session retrieved');
+        } catch (error) {
+            console.error('[Billing Controller] getSimpleCartSession error:', error);
+            return sendError(res, 'Failed to fetch cart session', 500);
+        }
+    },
+
+    saveSimpleCartSession: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+            const cartData = req.body.cart_data !== undefined ? req.body.cart_data : req.body;
+            const now = new Date().toISOString();
+            const jsonStr = typeof cartData === 'string' ? cartData : JSON.stringify(cartData);
+
+            const existing = await db.prepare('SELECT user_id FROM simple_cart_sessions WHERE user_id = ?').get(userId);
+            if (existing) {
+                await db.prepare('UPDATE simple_cart_sessions SET cart_data = ?, updated_at = ? WHERE user_id = ?').run(jsonStr, now, userId);
+            } else {
+                await db.prepare('INSERT INTO simple_cart_sessions (user_id, cart_data, updated_at) VALUES (?, ?, ?)').run(userId, jsonStr, now);
+            }
+
+            return sendSuccess(res, { success: true }, 'Cart session saved');
+        } catch (error) {
+            console.error('[Billing Controller] saveSimpleCartSession error:', error);
+            return sendError(res, 'Failed to save cart session', 500);
+        }
+    },
+
+    clearSimpleCartSession: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+            await db.prepare('DELETE FROM simple_cart_sessions WHERE user_id = ?').run(userId);
+            return sendSuccess(res, { success: true }, 'Cart session cleared');
+        } catch (error) {
+            console.error('[Billing Controller] clearSimpleCartSession error:', error);
+            return sendError(res, 'Failed to clear cart session', 500);
+        }
+    },
+
+    getSimpleBillingRecords: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+            const rows = await db.prepare(
+                'SELECT * FROM simple_billing_records WHERE user_id = ? ORDER BY created_at DESC'
+            ).all(userId);
+
+            const list = (rows || []).map(row => {
+                let products = [];
+                try {
+                    products = typeof row.products === 'string' ? JSON.parse(row.products) : (row.products || []);
+                } catch (err) {
+                    products = [];
+                }
+                return {
+                    id: row.id,
+                    billingOrder: row.billing_order || row.id,
+                    customerName: row.customer_name || 'Walk-in Customer',
+                    customerPhone: row.customer_phone || '',
+                    paymentMode: row.payment_mode || 'Cash',
+                    date: row.date || '',
+                    formattedDate: row.formatted_date || '',
+                    products,
+                    totalQuantity: Number(row.total_quantity) || 0,
+                    grandTotal: Number(row.grand_total) || 0,
+                    createdAt: row.created_at
+                };
+            });
+
+            return sendSuccess(res, list, 'Billing records retrieved successfully');
+        } catch (error) {
+            console.error('[Billing Controller] getSimpleBillingRecords error:', error);
+            return sendError(res, 'Failed to fetch billing records', 500);
+        }
+    },
+
+    saveSimpleBillingRecord: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+            const now = new Date().toISOString();
+            const record = req.body;
+            const id = String(record.id || `BILL-${Date.now().toString().slice(-6)}`);
+            const billingOrder = record.billingOrder || id;
+            const customerName = record.customerName || 'Walk-in Customer';
+            const customerPhone = record.customerPhone || '';
+            const paymentMode = record.paymentMode || 'Cash';
+            const date = record.date || now;
+            const formattedDate = record.formattedDate || '';
+            const productsJson = typeof record.products === 'string' ? record.products : JSON.stringify(record.products || []);
+            const totalQuantity = Number(record.totalQuantity) || 0;
+            const grandTotal = Number(record.grandTotal) || 0;
+
+            const existing = await db.prepare('SELECT id FROM simple_billing_records WHERE id = ? AND user_id = ?').get(id, userId);
+            if (existing) {
+                await db.prepare(`
+                    UPDATE simple_billing_records
+                    SET billing_order = ?, customer_name = ?, customer_phone = ?, payment_mode = ?, date = ?, formatted_date = ?, products = ?, total_quantity = ?, grand_total = ?
+                    WHERE id = ? AND user_id = ?
+                `).run(
+                    billingOrder, customerName, customerPhone, paymentMode, date, formattedDate, productsJson, totalQuantity, grandTotal, id, userId
+                );
+            } else {
+                await db.prepare(`
+                    INSERT INTO simple_billing_records
+                    (id, user_id, billing_order, customer_name, customer_phone, payment_mode, date, formatted_date, products, total_quantity, grand_total, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    id, userId, billingOrder, customerName, customerPhone, paymentMode, date, formattedDate, productsJson, totalQuantity, grandTotal, now
+                );
+            }
+
+            return sendSuccess(res, { id, billingOrder, customerName, grandTotal }, 'Billing record saved successfully');
+        } catch (error) {
+            console.error('[Billing Controller] saveSimpleBillingRecord error:', error);
+            return sendError(res, 'Failed to save billing record', 500);
+        }
+    },
+
+    deleteSimpleBillingRecord: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+            const { id } = req.params;
+
+            await db.prepare('DELETE FROM simple_billing_records WHERE id = ? AND user_id = ?').run(id, userId);
+            return sendSuccess(res, { success: true, id }, 'Billing record deleted');
+        } catch (error) {
+            console.error('[Billing Controller] deleteSimpleBillingRecord error:', error);
+            return sendError(res, 'Failed to delete billing record', 500);
+        }
+    },
+
+    clearSimpleBillingRecords: async (req, res) => {
+        try {
+            await ensureSimpleBillingTables();
+            const userId = String(req.user.id);
+
+            await db.prepare('DELETE FROM simple_billing_records WHERE user_id = ?').run(userId);
+            return sendSuccess(res, { success: true }, 'All billing records cleared');
+        } catch (error) {
+            console.error('[Billing Controller] clearSimpleBillingRecords error:', error);
+            return sendError(res, 'Failed to clear billing records', 500);
+        }
+    }
+};
+
+const ensureSimpleBillingTables = async () => {
+    try {
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS simple_held_carts (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                label TEXT,
+                customer_name TEXT,
+                customer_phone TEXT,
+                payment_mode TEXT,
+                billing_order TEXT,
+                products TEXT NOT NULL,
+                total_quantity REAL DEFAULT 0,
+                grand_total REAL DEFAULT 0,
+                date TEXT,
+                formatted_date TEXT,
+                created_at TEXT NOT NULL
+            )
+        `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS simple_cart_sessions (
+                user_id TEXT PRIMARY KEY,
+                cart_data TEXT,
+                updated_at TEXT NOT NULL
+            )
+        `).run();
+
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS simple_billing_records (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                billing_order TEXT,
+                customer_name TEXT,
+                customer_phone TEXT,
+                payment_mode TEXT,
+                date TEXT,
+                formatted_date TEXT,
+                products TEXT NOT NULL,
+                total_quantity REAL DEFAULT 0,
+                grand_total REAL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        `).run();
+    } catch (e) {
+        console.error('[Billing Controller] ensureSimpleBillingTables error:', e);
     }
 };
 
