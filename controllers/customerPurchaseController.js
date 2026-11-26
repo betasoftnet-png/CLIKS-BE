@@ -292,6 +292,10 @@ const customerPurchaseController = {
             }
 
             return sendSuccess(res, {
+                total_points: wallet?.points_balance || 0,
+                points_balance: wallet?.points_balance || 0,
+                total_earned: wallet?.total_earned || 0,
+                total_redeemed: wallet?.total_redeemed || 0,
                 wallet,
                 transactions: txList
             }, 'Loyalty wallet fetched successfully');
@@ -371,6 +375,55 @@ const customerPurchaseController = {
                 merchantMap[merchantId].points_redeemed += redeemed;
                 merchantMap[merchantId].net_points += net;
             });
+
+            // Decorate each merchant with live business loyalty configuration from Cliks Business
+            for (const merchantId of Object.keys(merchantMap)) {
+                const m = merchantMap[merchantId];
+                let loyaltyRow = null;
+                if (m.merchant_business_id) {
+                    try {
+                        loyaltyRow = await db.prepare('SELECT * FROM business_loyalty_settings WHERE user_id = ?').get(m.merchant_business_id);
+                    } catch (_) {}
+                }
+                if (!loyaltyRow && m.merchant_name) {
+                    try {
+                        const mUser = await db.prepare('SELECT id FROM users WHERE LOWER(business_name) = LOWER(?) OR LOWER(name) = LOWER(?) OR LOWER(username) = LOWER(?)').get(m.merchant_name, m.merchant_name, m.merchant_name);
+                        if (mUser?.id) {
+                            loyaltyRow = await db.prepare('SELECT * FROM business_loyalty_settings WHERE user_id = ?').get(mUser.id);
+                        }
+                    } catch (_) {}
+                }
+
+                const rsPerPt = loyaltyRow ? (Number(loyaltyRow.rs_per_point) || 100) : 100;
+                const ptVal = loyaltyRow ? Number(loyaltyRow.point_value_currency !== undefined ? loyaltyRow.point_value_currency : 1.0) : 1.0;
+                const progName = loyaltyRow?.custom_program_name || m.business_name || 'Store';
+                const tiersOn = loyaltyRow ? Boolean(loyaltyRow.enable_tiers) : true;
+                let tiersList = [
+                    { id: 'bronze', name: 'Bronze Club', min_spend: 0, multiplier: 1.0, color: '#CD7F32', badge_bg: '#FFF7ED', badge_text: '#9A3412' },
+                    { id: 'silver', name: 'Silver Star', min_spend: 5000, multiplier: 1.25, color: '#94A3B8', badge_bg: '#F8FAFC', badge_text: '#334155' },
+                    { id: 'gold', name: 'Gold Premier', min_spend: 15000, multiplier: 1.5, color: '#EAB308', badge_bg: '#FEF9C3', badge_text: '#854D0E' },
+                    { id: 'platinum', name: 'Platinum Elite', min_spend: 50000, multiplier: 2.0, color: '#6366F1', badge_bg: '#EEF2FF', badge_text: '#3730A3' }
+                ];
+                if (loyaltyRow?.tier_config) {
+                    try {
+                        tiersList = typeof loyaltyRow.tier_config === 'string' ? JSON.parse(loyaltyRow.tier_config) : loyaltyRow.tier_config;
+                    } catch (_) {}
+                }
+
+                m.rs_per_point = rsPerPt;
+                m.point_value_currency = ptVal;
+                m.custom_program_name = progName;
+                m.enable_tiers = tiersOn;
+                m.tier_config = tiersList;
+                m.cashback_value = (m.net_points * ptVal).toFixed(2);
+
+                if (tiersOn && Array.isArray(tiersList)) {
+                    const sortedTiers = [...tiersList].sort((a, b) => (Number(b.min_spend) || 0) - (Number(a.min_spend) || 0));
+                    m.current_tier = sortedTiers.find(t => m.total_spent >= (Number(t.min_spend) || 0)) || sortedTiers[sortedTiers.length - 1];
+                } else {
+                    m.current_tier = null;
+                }
+            }
 
             return sendSuccess(res, Object.values(merchantMap), 'Merchant summary loaded successfully');
         } catch (error) {

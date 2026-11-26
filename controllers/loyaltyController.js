@@ -364,6 +364,7 @@ const getLoyaltyCustomers = async (req, res) => {
 
     const settings = await db.prepare('SELECT * FROM business_loyalty_settings WHERE user_id = ?').get(userId);
     const pointValue = Number(settings?.point_value_currency !== undefined ? settings.point_value_currency : 1.0);
+    const tiersEnabled = settings?.enable_tiers !== undefined ? Boolean(settings.enable_tiers) : true;
     
     let tierConfig = DEFAULT_TIERS;
     try {
@@ -387,7 +388,9 @@ const getLoyaltyCustomers = async (req, res) => {
     const customers = rows.map(c => {
       const pts = Number(c.loyalty_points || 0);
       const spent = Number(c.total_spent || 0);
-      const assignedTier = computeCustomerTier(spent, tierConfig);
+      const assignedTier = tiersEnabled
+        ? computeCustomerTier(spent, tierConfig)
+        : { id: 'standard', name: 'Standard (Tiers Inactive)', multiplier: 1.0, color: '#64748B', badge_bg: '#F1F5F9', badge_text: '#475569' };
 
       return {
         id: c.id,
