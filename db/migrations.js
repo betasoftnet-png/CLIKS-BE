@@ -3040,6 +3040,24 @@ CREATE TABLE IF NOT EXISTS money_trackers (
         await db.prepare(sql).run();
       } catch (_) {}
     }
+
+    // ── Delivery Drivers Table ─────────────────────────────────────────────
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS delivery_drivers (
+        id ${idType},
+        user_id INTEGER NOT NULL,
+        driver_id TEXT,
+        name TEXT NOT NULL,
+        vehicle_number TEXT NOT NULL,
+        vehicle_type TEXT DEFAULT 'Van',
+        mobile TEXT NOT NULL,
+        status TEXT DEFAULT 'Available',
+        avg_time TEXT DEFAULT '45 mins',
+        delivery_success_rate INTEGER DEFAULT 100,
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `).run();
     // ── Manufacturing & Production Management Migrations ──────────────────
     try {
       const { runManufacturingMigrations } = require('./manufacturingMigration');

@@ -1213,4 +1213,191 @@ router.post(['/challans/:id/confirm', '/challans/confirm', '/challans/:id/verify
   }
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// 7. Delivery Drivers & Fleet Management Endpoints
+// ────────────────────────────────────────────────────────────────────────────
+
+router.get(['/drivers', '/delivery-staff', '/delivery-drivers'], async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?.userId || 1;
+    const result = await db.query(`
+      SELECT * FROM delivery_drivers
+      WHERE user_id = ?
+      ORDER BY created_at DESC, id DESC
+    `, [userId]);
+
+    const rows = result.rows || result || [];
+    const formatted = rows.map(r => ({
+      id: r.id,
+      staff_id: r.driver_id || `DRV-${r.id}`,
+      driver_id: r.driver_id || `DRV-${r.id}`,
+      name: r.name,
+      vehicle: r.vehicle_number,
+      vehicle_number: r.vehicle_number,
+      vehicle_type: r.vehicle_type || 'Van',
+      mobile: r.mobile,
+      status: r.status || 'Available',
+      avg_time: r.avg_time || '45 mins',
+      delivery_success_rate: Number(r.delivery_success_rate) || 100,
+      created_at: r.created_at
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: formatted,
+      drivers: formatted
+    });
+  } catch (error) {
+    console.error('[ComplianceRoute] get drivers error:', error.message);
+    return res.status(200).json({ success: true, data: [], drivers: [] });
+  }
+});
+
+router.post(['/drivers', '/delivery-staff', '/delivery-drivers'], async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?.userId || 1;
+    const { name, vehicle_number, vehicle, vehicle_type, mobile, status, avg_time, delivery_success_rate } = req.body || {};
+
+    const cleanName = (name || '').trim();
+    const cleanVehicle = (vehicle_number || vehicle || '').trim();
+    const cleanMobile = (mobile || '').trim();
+
+    if (!cleanName) {
+      return res.status(400).json({ success: false, message: 'Driver name is required.' });
+    }
+    if (!cleanVehicle) {
+      return res.status(400).json({ success: false, message: 'Vehicle number is required.' });
+    }
+
+    const countRes = await db.query('SELECT COUNT(*) as count FROM delivery_drivers WHERE user_id = ?', [userId]);
+    const count = (countRes.rows || countRes || [{ count: 0 }])[0]?.count || 0;
+    const driverId = `DRV-${String(Number(count) + 1).padStart(2, '0')}`;
+    const nowIso = new Date().toISOString();
+
+    const result = await db.query(`
+      INSERT INTO delivery_drivers (
+        user_id, driver_id, name, vehicle_number, vehicle_type, mobile,
+        status, avg_time, delivery_success_rate, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      userId,
+      driverId,
+      cleanName,
+      cleanVehicle,
+      vehicle_type || 'Van',
+      cleanMobile || 'N/A',
+      status || 'Available',
+      avg_time || '45 mins',
+      Number(delivery_success_rate) || 100,
+      nowIso,
+      nowIso
+    ]);
+
+    const newId = result.lastInsertRowid || result.insertId || result.id || 1;
+
+    const newDriver = {
+      id: newId,
+      staff_id: driverId,
+      driver_id: driverId,
+      name: cleanName,
+      vehicle: cleanVehicle,
+      vehicle_number: cleanVehicle,
+      vehicle_type: vehicle_type || 'Van',
+      mobile: cleanMobile || 'N/A',
+      status: status || 'Available',
+      avg_time: avg_time || '45 mins',
+      delivery_success_rate: Number(delivery_success_rate) || 100,
+      created_at: nowIso
+    };
+
+    return res.status(201).json({
+      success: true,
+      message: 'Driver added successfully',
+      data: newDriver
+    });
+  } catch (error) {
+    console.error('[ComplianceRoute] add driver error:', error.message);
+    return res.status(500).json({ success: false, message: error.message || 'Failed to add driver' });
+  }
+});
+
+router.put(['/drivers/:id', '/delivery-staff/:id', '/delivery-drivers/:id'], async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?.userId || 1;
+    const targetId = req.params.id;
+    const { name, vehicle_number, vehicle, vehicle_type, mobile, status, avg_time, delivery_success_rate } = req.body || {};
+    const nowIso = new Date().toISOString();
+
+    const findRes = await db.query(`
+      SELECT * FROM delivery_drivers
+      WHERE user_id = ? AND (id = ? OR driver_id = ?)
+      LIMIT 1
+    `, [userId, targetId || 0, targetId || '']);
+
+    const driver = (findRes.rows || findRes || [])[0];
+    if (!driver) {
+      return res.status(404).json({ success: false, message: 'Driver not found' });
+    }
+
+    const updatedName = name !== undefined ? String(name).trim() : driver.name;
+    const updatedVehicle = (vehicle_number || vehicle) !== undefined ? String(vehicle_number || vehicle).trim() : driver.vehicle_number;
+    const updatedMobile = mobile !== undefined ? String(mobile).trim() : driver.mobile;
+    const updatedStatus = status !== undefined ? String(status).trim() : driver.status;
+    const updatedType = vehicle_type !== undefined ? String(vehicle_type).trim() : driver.vehicle_type;
+    const updatedAvg = avg_time !== undefined ? String(avg_time).trim() : driver.avg_time;
+    const updatedRate = delivery_success_rate !== undefined ? Number(delivery_success_rate) : driver.delivery_success_rate;
+
+    await db.query(`
+      UPDATE delivery_drivers
+      SET name = ?, vehicle_number = ?, vehicle_type = ?, mobile = ?,
+          status = ?, avg_time = ?, delivery_success_rate = ?, updated_at = ?
+      WHERE id = ? AND user_id = ?
+    `, [
+      updatedName, updatedVehicle, updatedType, updatedMobile,
+      updatedStatus, updatedAvg, updatedRate, nowIso,
+      driver.id, userId
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Driver updated successfully',
+      data: {
+        ...driver,
+        name: updatedName,
+        vehicle: updatedVehicle,
+        vehicle_number: updatedVehicle,
+        vehicle_type: updatedType,
+        mobile: updatedMobile,
+        status: updatedStatus,
+        avg_time: updatedAvg,
+        delivery_success_rate: updatedRate,
+        updated_at: nowIso
+      }
+    });
+  } catch (error) {
+    console.error('[ComplianceRoute] update driver error:', error.message);
+    return res.status(500).json({ success: false, message: error.message || 'Failed to update driver' });
+  }
+});
+
+router.delete(['/drivers/:id', '/delivery-staff/:id', '/delivery-drivers/:id'], async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?.userId || 1;
+    const targetId = req.params.id;
+
+    await db.query(`
+      DELETE FROM delivery_drivers
+      WHERE user_id = ? AND (id = ? OR driver_id = ?)
+    `, [userId, targetId || 0, targetId || '']);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Driver removed successfully'
+    });
+  } catch (error) {
+    console.error('[ComplianceRoute] delete driver error:', error.message);
+    return res.status(500).json({ success: false, message: error.message || 'Failed to delete driver' });
+  }
+});
+
 module.exports = router;
