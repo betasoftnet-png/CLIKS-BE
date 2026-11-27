@@ -237,9 +237,30 @@ const purchaseController = {
                     userId: req.user.id,
                     branchId: req.user.branch_id || req.body.branch_id || null,
                     docType: 'PURCHASE',
-                    prefix: userSettings.prefixPurchase || 'PO-',
+                    prefix: userSettings.prefixPurchase || (doc_type === 'BILL' ? 'BILL-' : (doc_type === 'RETURN' ? 'RET-' : 'PO-')),
                     padding: 6
                 });
+            } else {
+                // Prevent duplicate PO/bill reference number collision for this user
+                const existingPurchase = await db.prepare(
+                    'SELECT id FROM business_purchases WHERE user_id = ? AND purchase_number = ?'
+                ).get(req.user.id, purchaseNum);
+
+                if (existingPurchase) {
+                    let userSettings = {};
+                    try {
+                        const userRow = await db.prepare('SELECT settings FROM users WHERE id = ?').get(req.user.id);
+                        if (userRow?.settings) userSettings = JSON.parse(userRow.settings);
+                    } catch (e) {}
+
+                    purchaseNum = await getNextSequence({
+                        userId: req.user.id,
+                        branchId: req.user.branch_id || req.body.branch_id || null,
+                        docType: 'PURCHASE',
+                        prefix: userSettings.prefixPurchase || (doc_type === 'BILL' ? 'BILL-' : (doc_type === 'RETURN' ? 'RET-' : 'PO-')),
+                        padding: 6
+                    });
+                }
             }
             const isInternalRequisition = purchase_type === 'INTERNAL' || purchase_type === 'REQUISITION' || String(supplierName || '').toLowerCase().includes('main showroom');
             let finalStatus = status || 'Approved';
