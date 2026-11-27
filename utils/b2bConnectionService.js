@@ -126,14 +126,15 @@ const b2bConnectionService = {
 
             existing = await db.prepare('SELECT * FROM b2b_connections WHERE id = ?').get(res.lastInsertRowid || res.id);
 
-            // Send Notification to Target User: "[Business Name] has requested to connect with you as a supplier."
+            // Send Notification to Target User: "[Business Name] is trying to add you as a supplier to send you purchase orders."
             try {
                 await db.prepare(`
                     INSERT INTO notifications (user_id, sender_id, receiver_id, type, title, message, related_task_id, is_read, created_at)
-                    VALUES (?, ?, ?, 'b2b_connection_request', 'B2B Supplier Connection Request', ?, ?, 0, ?)
+                    VALUES (?, ?, ?, 'b2b_connection_request', ?, ?, ?, 0, ?)
                 `).run(
                     targetUser.id, requester_user_id, targetUser.id,
-                    `${requesterBiz} has requested to connect with you as a supplier.`,
+                    `New Supplier Request from ${requesterBiz}`,
+                    `"${requesterBiz}" is trying to add you as a supplier to send you purchase orders.`,
                     existing.id,
                     now
                 );

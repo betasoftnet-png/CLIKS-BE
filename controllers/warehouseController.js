@@ -173,13 +173,17 @@ const warehouseController = {
                             OR LOWER(warehouse_id) = ? 
                             OR LOWER(warehouse_id) = ? 
                             OR warehouse_id = ?
+                            OR LOWER(COALESCE(warehouse, '')) = ?
+                            OR LOWER(COALESCE(warehouse, '')) LIKE ?
                           )
                     `).get(
                         req.user.id, 
                         String(wh.id).toLowerCase(), 
                         (wh.name || '').toLowerCase(), 
                         (wh.code || '').toLowerCase(),
-                        wh.id
+                        wh.id,
+                        (wh.name || '').toLowerCase(),
+                        `%${(wh.name || '').toLowerCase()}%`
                     );
 
                     const stockStats = await db.prepare(`
@@ -385,13 +389,17 @@ const warehouseController = {
                         OR LOWER(warehouse_id) = ? 
                         OR LOWER(warehouse_id) = ?
                         OR warehouse_id = ?
+                        OR LOWER(COALESCE(warehouse, '')) = ?
+                        OR LOWER(COALESCE(warehouse, '')) LIKE ?
                       )
                 `).all(
                     req.user.id,
                     targetWhName.toLowerCase(),
                     targetWhId.toLowerCase(),
                     targetWhCode.toLowerCase(),
-                    id
+                    id,
+                    targetWhName.toLowerCase(),
+                    `%${targetWhName.toLowerCase()}%`
                 );
             } catch(e) {}
 

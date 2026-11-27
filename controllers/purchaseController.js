@@ -106,7 +106,7 @@ const replenishWarehouseStock = async ({ userId, warehouseId, warehouseName, ite
                 UPDATE business_products 
                 SET quantity = ?, stock_status = ?, warehouse_id = ?, warehouse = ?, purchase_price = ?, updated_at = ?
                 WHERE id = ? AND user_id = ?
-            `).run(newQty, newStatus, resolvedWhName, resolvedWhName, effectivePrice, now, prod.id, userId);
+            `).run(newQty, newStatus, whDbId, resolvedWhName, effectivePrice, now, prod.id, userId);
         } else {
             const effectiveSku = pSku || `SKU-${Math.floor(100000 + Math.random() * 900000)}`;
             const newProdRes = await db.prepare(`
@@ -117,7 +117,7 @@ const replenishWarehouseStock = async ({ userId, warehouseId, warehouseName, ite
             `).run(
                 userId, pName || 'Purchased Product', pName || 'Purchased Product', effectiveSku,
                 pUnit, pUnit, qtyToAdd, pPrice, pPrice > 0 ? (pPrice * 1.2) : 0,
-                qtyToAdd > 5 ? 'In Stock' : 'Low Stock', resolvedWhName, resolvedWhName, now, now
+                qtyToAdd > 5 ? 'In Stock' : 'Low Stock', whDbId, resolvedWhName, now, now
             );
             targetProdId = newProdRes.lastInsertRowid;
         }
@@ -200,10 +200,30 @@ const replenishWarehouseStock = async ({ userId, warehouseId, warehouseName, ite
     // -------------------------------------------------------------
     if (targetWhObj) {
         try {
-            const totalWhProducts = await db.prepare('SELECT COUNT(*) as cnt, SUM(quantity) as total_qty FROM business_products WHERE user_id = ? AND (LOWER(warehouse_id) = ? OR LOWER(warehouse) = ?)').get(userId, resolvedWhName.toLowerCase(), resolvedWhName.toLowerCase());
+            const cap = parseInt(targetWhObj.total_capacity, 10) > 0 ? parseInt(targetWhObj.total_capacity, 10) : 10000;
+            const totalWhProducts = await db.prepare(`
+                SELECT COUNT(*) as cnt, COALESCE(SUM(quantity), 0) as total_qty 
+                FROM business_products 
+                WHERE user_id = ? AND (
+                    LOWER(warehouse_id) = ? 
+                    OR LOWER(warehouse_id) = ? 
+                    OR LOWER(warehouse_id) = ? 
+                    OR warehouse_id = ?
+                    OR LOWER(COALESCE(warehouse, '')) = ?
+                    OR LOWER(COALESCE(warehouse, '')) LIKE ?
+                )
+            `).get(
+                userId, 
+                String(targetWhObj.id).toLowerCase(), 
+                (targetWhObj.name || '').toLowerCase(), 
+                (targetWhObj.code || '').toLowerCase(), 
+                targetWhObj.id, 
+                (targetWhObj.name || '').toLowerCase(), 
+                `%${(targetWhObj.name || '').toLowerCase()}%`
+            );
             if (totalWhProducts) {
                 const totalQty = totalWhProducts.total_qty || 0;
-                const capUtil = `${Math.min(100, Math.round((totalQty / 1000) * 100))}%`;
+                const capUtil = `${Math.min(100, Math.round((totalQty / cap) * 100))}%`;
                 await db.prepare('UPDATE warehouses SET capacity_utilization = ? WHERE id = ?').run(capUtil, targetWhObj.id);
             }
         } catch (e) { }
@@ -739,6 +759,65 @@ const purchaseController = {
                 }
             }
 
+            // Also retrieve incoming purchase orders where the logged-in user is the supplier
+            const userEmail = (req.user.email || '').toLowerCase();
+            const username = (req.user.username || '').toLowerCase();
+            const bizName = (req.user.business_name || '').toLowerCase();
+            const userGstin = (req.user.gst_number || req.user.gstin || '').toLowerCase();
+
+            let incomingPurchases = [];
+            try {
+                incomingPurchases = await db.prepare(`
+                    SELECT DISTINCT p.*, 
+                        buyer.business_name AS buyer_business_name, 
+                        buyer.username AS buyer_username,
+                        buyer.email AS buyer_email,
+                        buyer.phone AS buyer_phone
+                    FROM business_purchases p
+                    LEFT JOIN b2b_invoice_relationships rel ON p.id = rel.source_purchase_invoice_id
+                    LEFT JOIN users buyer ON buyer.id = p.user_id
+                    WHERE p.user_id != ? AND (
+                        rel.supplier_user_id = ?
+                        OR ( ? != '' AND LOWER(COALESCE(rel.supplier_email, '')) = ? )
+                        OR ( ? != '' AND LOWER(COALESCE(p.supplier_name, '')) = ? )
+                        OR ( ? != '' AND LOWER(COALESCE(p.supplier_name, '')) = ? )
+                        OR ( ? != '' AND LOWER(COALESCE(p.supplier_name, '')) = ? )
+                        OR ( ? != '' AND LOWER(COALESCE(p.supplier_name, '')) LIKE ? )
+                        OR ( ? != '' AND LOWER(COALESCE(p.supplier_gstin, '')) = ? )
+                    )
+                    ORDER BY p.id DESC
+                `).all(
+                    req.user.id,
+                    req.user.id,
+                    userEmail, userEmail,
+                    username, username,
+                    bizName, bizName,
+                    userEmail, userEmail,
+                    username, `%${username}%`,
+                    userGstin, userGstin
+                );
+            } catch (incErr) {
+                console.warn('[Purchase Controller] Incoming purchases query error:', incErr.message);
+                incomingPurchases = [];
+            }
+
+            if (Array.isArray(incomingPurchases)) {
+                for (const inc of incomingPurchases) {
+                    inc.is_incoming_po = true;
+                    inc.dealer_name = inc.buyer_business_name || inc.buyer_username || inc.buyer_email || 'Buyer Client';
+                    inc.buyer_name = inc.dealer_name;
+                    if (!inc.supplier_confirmation_status) {
+                        inc.supplier_confirmation_status = inc.status === 'CONFIRMED' ? 'CONFIRMED BY SUPPLIER' : (inc.status || 'PENDING');
+                    }
+                    try {
+                        inc.items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(inc.id);
+                    } catch (e) {
+                        inc.items = [];
+                    }
+                    purchases.push(inc);
+                }
+            }
+
             return sendSuccess(res, purchases, 'Purchases retrieved successfully');
         } catch (error) {
             console.error('[Purchase Controller] Error fetching purchases:', error);
@@ -751,7 +830,31 @@ const purchaseController = {
     getPurchaseById: async (req, res) => {
         const { id } = req.params;
         try {
-            const purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            let purchase = await db.prepare('SELECT * FROM business_purchases WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!purchase) {
+                const userEmail = (req.user.email || '').toLowerCase();
+                const username = (req.user.username || '').toLowerCase();
+                const bizName = (req.user.business_name || '').toLowerCase();
+                try {
+                    purchase = await db.prepare(`
+                        SELECT p.*, buyer.business_name AS buyer_business_name, buyer.username AS buyer_username, buyer.email AS buyer_email
+                        FROM business_purchases p
+                        LEFT JOIN b2b_invoice_relationships rel ON p.id = rel.source_purchase_invoice_id
+                        LEFT JOIN users buyer ON buyer.id = p.user_id
+                        WHERE p.id = ? AND (
+                            rel.supplier_user_id = ? 
+                            OR ( ? != '' AND LOWER(COALESCE(rel.supplier_email, '')) = ? )
+                            OR ( ? != '' AND LOWER(COALESCE(p.supplier_name, '')) = ? )
+                            OR ( ? != '' AND LOWER(COALESCE(p.supplier_name, '')) = ? )
+                            OR ( ? != '' AND LOWER(COALESCE(p.supplier_name, '')) = ? )
+                        )
+                    `).get(id, req.user.id, userEmail, userEmail, username, username, bizName, bizName, userEmail, userEmail);
+                    if (purchase) {
+                        purchase.is_incoming_po = true;
+                        purchase.dealer_name = purchase.buyer_business_name || purchase.buyer_username || purchase.buyer_email || 'Buyer Client';
+                    }
+                } catch (e) {}
+            }
             if (!purchase) return sendError(res, 'Purchase record not found', 404);
 
             purchase.items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(id);
