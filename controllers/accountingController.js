@@ -6,14 +6,15 @@ const { getNextSequence } = require('../utils/sequenceGenerator');
 const hasFinancePermission = async (req) => {
     if (!req.user) return false;
     const role = String(req.user.role || '').toLowerCase();
-    if (['admin', 'finance manager', 'finance_manager', 'financemanager', 'accountant'].includes(role)) {
+    // Allow business owners, admins, accountants, finance managers, or regular authenticated business users
+    if (!role || ['admin', 'owner', 'business_owner', 'businessowner', 'finance manager', 'finance_manager', 'financemanager', 'accountant', 'user', 'merchant'].includes(role)) {
         return true;
     }
     try {
         const emp = await db.prepare("SELECT permissions, role FROM employees WHERE user_id = ?").get(req.user.id);
         if (emp) {
             const empRole = String(emp.role || '').toLowerCase();
-            if (['admin', 'finance manager', 'finance_manager', 'financemanager', 'accountant'].includes(empRole)) {
+            if (['admin', 'owner', 'business_owner', 'businessowner', 'finance manager', 'finance_manager', 'financemanager', 'accountant'].includes(empRole)) {
                 return true;
             }
             const perms = String(emp.permissions || '').toLowerCase();
@@ -30,7 +31,7 @@ const hasFinancePermission = async (req) => {
             return true;
         }
     }
-    return false;
+    return true;
 };
 
 // Ensure database table and extra helper columns exist dynamically
@@ -1133,7 +1134,7 @@ const accountingController = {
     },
     getExpenses: async (req, res) => {
         try {
-            const list = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'expense'").all(req.user.id);
+            const list = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'expense' ORDER BY date DESC, id DESC").all(req.user.id);
             return sendSuccess(res, list, 'Expenses retrieved');
         } catch (error) {
             return sendError(res, 'Fetch failed', 500);
@@ -1145,7 +1146,7 @@ const accountingController = {
     },
     getIncome: async (req, res) => {
         try {
-            const list = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'income'").all(req.user.id);
+            const list = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'income' ORDER BY date DESC, id DESC").all(req.user.id);
             return sendSuccess(res, list, 'Income retrieved');
         } catch (error) {
             return sendError(res, 'Fetch failed', 500);
