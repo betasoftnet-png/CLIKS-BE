@@ -1259,26 +1259,30 @@ const purchaseController = {
 
         try {
             const idClean = String(id).trim();
-            const numClean = idClean.replace(/^(INV|PO)-/i, '');
-            const idNum = (!isNaN(Number(idClean)) && idClean !== '') ? Number(idClean) : ((!isNaN(Number(numClean)) && numClean !== '') ? Number(numClean) : null);
+            const isPureNumber = /^\d+$/.test(idClean);
+            const idNum = isPureNumber ? Number(idClean) : null;
+            const numClean = idClean.replace(/^(INV|PO|BILL|PRN|RET)-/i, '');
 
             // 1. Load the purchase bill by ID or purchase_number cleanly handling integer types
             let bill = null;
             if (idNum !== null) {
-                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND (id = ? OR purchase_number = ? OR purchase_number = ?)').get(userId, idNum, idClean, `PO-${numClean}`); } catch (e) { }
+                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND id = ?').get(userId, idNum); } catch (e) { }
             }
             if (!bill) {
-                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND (purchase_number = ? OR purchase_number = ?)').get(userId, idClean, `PO-${numClean}`); } catch (e) { }
+                try { 
+                    bill = await db.prepare('SELECT * FROM business_purchases WHERE user_id = ? AND (purchase_number = ? OR purchase_number = ? OR purchase_number = ?)').get(userId, idClean, `PO-${numClean}`, `BILL-${numClean}`); 
+                } catch (e) { }
             }
             if (!bill && idNum !== null) {
-                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE id = ? OR purchase_number = ? OR purchase_number = ?').get(idNum, idClean, `PO-${numClean}`); } catch (e) { }
+                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE id = ?').get(idNum); } catch (e) { }
             }
             if (!bill) {
-                try { bill = await db.prepare('SELECT * FROM business_purchases WHERE purchase_number = ? OR purchase_number = ?').get(idClean, `PO-${numClean}`); } catch (e) { }
+                try { 
+                    bill = await db.prepare('SELECT * FROM business_purchases WHERE purchase_number = ? OR purchase_number = ? OR purchase_number = ?').get(idClean, `PO-${numClean}`, `BILL-${numClean}`); 
+                } catch (e) { }
             }
 
             if (!bill) return sendError(res, 'Purchase bill not found', 404);
-            if (bill.status === 'Completed') return sendError(res, 'Goods already received for this bill', 400);
             if (bill.status === 'PARTIAL_REJECTED') return sendError(res, 'Cannot receive goods for a rejected purchase order', 400);
 
             // 1.5 Resolve Target Warehouse Database Profile safely (preventing 22P02 PostgreSQL integer error)
@@ -1303,6 +1307,35 @@ const purchaseController = {
             const whCode = targetWhObj ? (targetWhObj.code || `WH-${whDbId}`) : String(warehouse_code || `WH-${whDbId}`);
 
             console.log(`[Receive Goods Debug] Resolved Warehouse: ID=${whDbId}, Name=${whName}, Code=${whCode}`);
+
+            // If bill is already Completed, gracefully re-allocate warehouse inventory without throwing a blocking error
+            if (bill.status === 'Completed') {
+                if (whName) {
+                    try {
+                        await db.prepare('UPDATE business_purchases SET warehouse_id = ?, updated_at = ? WHERE id = ?').run(whName, now, bill.id);
+
+                        let items = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(bill.id);
+                        if (!items || items.length === 0) {
+                            if (req.body && Array.isArray(req.body.items) && req.body.items.length > 0) {
+                                items = req.body.items;
+                            }
+                        }
+
+                        await replenishWarehouseStock({
+                            userId: bill.user_id || userId,
+                            warehouseId: whDbId,
+                            warehouseName: whName,
+                            items: items || [],
+                            purchaseNumber: bill.purchase_number,
+                            purchaseId: bill.id,
+                            docType: bill.doc_type || 'BILL'
+                        });
+                    } catch (e) {
+                        console.warn('[Receive Goods] Re-allocation error:', e.message);
+                    }
+                }
+                return sendSuccess(res, { id: bill.id, purchase_number: bill.purchase_number, status: 'Completed', warehouse: whName }, 'Goods received and warehouse inventory updated successfully.');
+            }
 
             // 2. Mark bill as Completed & set selected warehouse and doc_type
             const updatePORes = await db.prepare(`
