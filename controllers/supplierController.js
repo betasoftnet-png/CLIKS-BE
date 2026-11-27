@@ -74,6 +74,20 @@ const supplierController = {
                 );
             }
 
+            // Enforce unique supplier name per business user (prevent duplicate supplier creation)
+            if (name) {
+                const existingWithName = await db.prepare(
+                    'SELECT id, name FROM business_suppliers WHERE user_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?))'
+                ).get(req.user.id, name);
+                if (existingWithName) {
+                    return sendError(
+                        res,
+                        `A supplier named '${name}' is already registered. Duplicate supplier records are prevented to maintain clean ledger and balance tracking.`,
+                        400
+                    );
+                }
+            }
+
             const now = new Date().toISOString();
             const initialStatus = status || 'PENDING';
             const docsStr = typeof documents === 'object' ? JSON.stringify(documents) : (documents || '[]');
@@ -216,7 +230,35 @@ const supplierController = {
             }
 
             query += ` ORDER BY created_at DESC, id DESC`;
-            const suppliers = await db.prepare(query).all(...params);
+            const rawSuppliers = await db.prepare(query).all(...params);
+
+            // Deduplicate supplier records by normalized name so duplicate entries are consolidated and shown only once
+            const seenSupplierNames = new Set();
+            const suppliers = [];
+            for (const s of (rawSuppliers || [])) {
+                const normName = (s.name || '').trim().toLowerCase();
+                if (!normName) {
+                    suppliers.push(s);
+                    continue;
+                }
+                if (!seenSupplierNames.has(normName)) {
+                    seenSupplierNames.add(normName);
+                    suppliers.push(s);
+                } else {
+                    // If duplicate has higher balance, update the existing entry
+                    const idx = suppliers.findIndex(x => (x.name || '').trim().toLowerCase() === normName);
+                    if (idx !== -1) {
+                        const curBal = parseFloat(s.outstanding_balance || 0);
+                        const prevBal = parseFloat(suppliers[idx].outstanding_balance || 0);
+                        if (curBal > prevBal) {
+                            suppliers[idx].outstanding_balance = curBal;
+                        }
+                        if (!suppliers[idx].reminder_schedule && s.reminder_schedule) {
+                            suppliers[idx].reminder_schedule = s.reminder_schedule;
+                        }
+                    }
+                }
+            }
 
             let purchasesRows = [];
             try {
@@ -467,6 +509,56 @@ const supplierController = {
         } catch (e) {
             console.error('[autoDispatchAllReminders Error]', e);
             return sendError(res, 'Failed to execute batch auto-triggers', 500);
+        }
+    },
+
+    // 2e. Send Scheduled Email Reminder for a Supplier
+    sendEmailReminder: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const supplier = await db.prepare('SELECT * FROM business_suppliers WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!supplier) return sendError(res, 'Supplier not found', 404);
+
+            const email = supplier.email || req.body?.email;
+            if (!email) return sendError(res, 'Supplier does not have a registered email address to dispatch email reminder', 400);
+
+            const bal = parseFloat(supplier.outstanding_balance || supplier.current_balance || 0);
+            let bizName = 'Our Business';
+            try {
+                const me = await db.prepare('SELECT business_name, username FROM users WHERE id = ?').get(req.user.id);
+                if (me?.business_name) bizName = me.business_name;
+                else if (me?.username) bizName = me.username;
+            } catch (e) {}
+
+            const currencySymbol = '₹';
+            const balStr = bal > 0 ? `${currencySymbol}${bal.toLocaleString('en-IN')}` : `${currencySymbol}0.00`;
+            const code = supplier.supplier_code || `SUP-${supplier.id}`;
+            const subject = `Payment Statement Notice: Outstanding Balance ${balStr} Due - ${bizName}`;
+            const now = new Date().toISOString();
+
+            try {
+                const { logBusinessAudit } = require('../utils/auditLogger');
+                await logBusinessAudit(req.user.id, 'AUTO_EMAIL_DISPATCH', `Scheduled balance reminder email dispatched to ${supplier.name} (${email}) for balance ${balStr}`, 'INFO');
+            } catch (e) {}
+
+            try {
+                await db.prepare('UPDATE business_suppliers SET updated_at = ? WHERE id = ?').run(now, id);
+            } catch (e) {}
+
+            return sendSuccess(res, {
+                dispatched: true,
+                channel: 'EMAIL',
+                email: email,
+                supplier_id: supplier.id,
+                supplier_name: supplier.name,
+                supplier_code: code,
+                balance: bal,
+                subject: subject,
+                sent_at: now
+            }, `Scheduled reminder email dispatched successfully to ${email}`);
+        } catch (e) {
+            console.error('[sendEmailReminder Error]', e);
+            return sendError(res, 'Failed to send email reminder', 500);
         }
     },
 

@@ -37,6 +37,7 @@ router.get('/network/registered',        supplierController.getRegisteredNetwork
 // Automated Balance Reminders (avoid manual human intervention)
 router.post('/reminders/auto-dispatch-all', supplierController.autoDispatchAllReminders);
 router.post('/:id/auto-balance-trigger',    supplierController.triggerAutoBalanceAlert);
+router.post('/:id/send-email-reminder',     supplierController.sendEmailReminder);
 
 // Base CRUD
 router.post('/',                     supplierController.createSupplier);
