@@ -94,7 +94,18 @@ const supplierController = {
             
             // Trigger B2B Connection request if supplier email matches a registered Cliks Business user
             let b2bStatus = 'PENDING';
+            let isRegisteredOnCliks = false;
+            let registeredCliksUser = null;
+
             if (created && created.email) {
+                try {
+                    const uRow = await db.prepare('SELECT id, username, business_name, email FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get(String(created.email).toLowerCase(), String(created.email).toLowerCase());
+                    if (uRow) {
+                        isRegisteredOnCliks = true;
+                        registeredCliksUser = uRow;
+                    }
+                } catch (e) {}
+
                 try {
                     const b2bConn = await b2bConnectionService.createOrUpdateConnection({
                         requester_user_id: req.user.id,
@@ -107,6 +118,36 @@ const supplierController = {
                 } catch (b2bErr) {
                     console.warn('[Supplier Controller] B2B connection sync warning:', b2bErr.message);
                 }
+            }
+
+            // Automated WhatsApp Invite if supplier is NOT using Cliks Business App
+            let whatsappInvite = null;
+            if (!isRegisteredOnCliks) {
+                const digits = String(created.phone || phone || '').replace(/\D/g, '');
+                const cleanPhone = digits.length === 10 ? `91${digits}` : digits;
+                let bizName = 'Our Business';
+                try {
+                    const me = await db.prepare('SELECT business_name, username FROM users WHERE id = ?').get(req.user.id);
+                    if (me?.business_name) bizName = me.business_name;
+                    else if (me?.username) bizName = me.username;
+                } catch (e) {}
+
+                const inviteMsg = `Hello *${created.name}*,\n\n*${bizName}* has registered you as an authorized vendor on CLIKS Business.\n\nTo view, accept, and manage purchase orders directly:\n📲 *Install Cliks Business App*: https://cliksbusiness.com/download\nOr log in at: https://cliksbusiness.com\n\nThank you!`;
+                const waUrl = cleanPhone 
+                    ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(inviteMsg)}` 
+                    : `https://wa.me/?text=${encodeURIComponent(inviteMsg)}`;
+
+                whatsappInvite = {
+                    phone: cleanPhone,
+                    message: inviteMsg,
+                    whatsapp_url: waUrl,
+                    supplier_not_registered: true
+                };
+
+                try {
+                    const { logBusinessAudit } = require('../utils/auditLogger');
+                    await logBusinessAudit(req.user.id, 'WHATSAPP_INVITE_PREPARED', `Prepared automated WhatsApp app-download invite for unregistered supplier ${created.name} (${cleanPhone})`, 'INFO');
+                } catch (e) {}
             }
 
             // Sync connection request for website supplier portal
@@ -126,9 +167,15 @@ const supplierController = {
                 connStatus = await supplierConnectionService.getSupplierConnectionStatus(req.user.id, created.id, created.email);
             } catch (csErr) {}
 
-            const finalStatus = (b2bStatus === 'CONNECTED' || b2bStatus === 'REJECTED') ? b2bStatus : (connStatus || b2bStatus || 'PENDING');
+            const finalStatus = (b2bStatus === 'CONNECTED' || b2bStatus === 'ACCEPTED') ? 'CONNECTED' : (b2bStatus === 'REJECTED' ? 'REJECTED' : (connStatus || b2bStatus || 'PENDING'));
 
-            return sendSuccess(res, { ...created, status: finalStatus, connection_status: finalStatus }, 'Supplier registered successfully', 201);
+            return sendSuccess(res, { 
+                ...created, 
+                status: finalStatus, 
+                connection_status: finalStatus,
+                is_cliks_registered: isRegisteredOnCliks,
+                whatsapp_invite: whatsappInvite
+            }, 'Supplier registered successfully', 201);
         } catch (error) {
             console.error('[Supplier Controller] Error creating supplier:', error);
             return sendError(res, 'Failed to create supplier', 500);
@@ -223,6 +270,20 @@ const supplierController = {
                 // Reliability score: 0-100 based on fulfillment and pseudo-lead time
                 const reliability = totalOrd > 0 ? Math.min(100, Math.max(0, fulfillmentRate - (leadTimeDays > 3 ? (leadTimeDays - 3) * 5 : 0))) : 95;
 
+                let isCliksUser = false;
+                if (s.email) {
+                    try {
+                        const cliksU = await db.prepare('SELECT id, business_name FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get(String(s.email).toLowerCase(), String(s.email).toLowerCase());
+                        if (cliksU) isCliksUser = true;
+                    } catch (e) {}
+                }
+                if (!isCliksUser && s.name) {
+                    try {
+                        const cliksU2 = await db.prepare('SELECT id FROM users WHERE LOWER(business_name) = ? OR LOWER(username) = ?').get(String(s.name).toLowerCase(), String(s.name).toLowerCase());
+                        if (cliksU2) isCliksUser = true;
+                    } catch (e) {}
+                }
+
                 return {
                     ...s,
                     supplier_name: s.name,
@@ -230,6 +291,7 @@ const supplierController = {
                     total_purchased: calculatedPurchases,
                     status: displaySt,
                     connection_status: displaySt,
+                    is_cliks_registered: isCliksUser || displaySt === 'CONNECTED',
                     scorecard: {
                         fulfillment_rate: fulfillmentRate,
                         lead_time_days: leadTimeDays,
@@ -245,7 +307,11 @@ const supplierController = {
                 finalResult = enriched.filter(item => {
                     const st1 = String(item.status || '').toLowerCase();
                     const st2 = String(item.connection_status || '').toLowerCase();
-                    return st1 === targetSt || st2 === targetSt || (targetSt === 'connected' && (st1 === 'accepted' || st2 === 'accepted'));
+                    if (targetSt === 'connected') return st1 === 'connected' || st2 === 'connected' || st1 === 'accepted' || st2 === 'accepted';
+                    if (targetSt === 'pending') return st1 === 'pending' || st2 === 'pending';
+                    if (targetSt === 'active') return st1 === 'active' || st2 === 'active' || st1 === 'connected' || st2 === 'connected';
+                    if (targetSt === 'inactive') return st1 === 'inactive' || st2 === 'inactive' || st1 === 'unconnected' || st1 === 'rejected';
+                    return st1 === targetSt || st2 === targetSt;
                 });
             }
 
@@ -253,6 +319,41 @@ const supplierController = {
         } catch (error) {
             console.error('[Supplier Controller] Error fetching suppliers:', error);
             return sendError(res, 'Failed to retrieve suppliers', 500);
+        }
+    },
+
+    // 2b. Get Cliks App Registered Network Suppliers
+    getRegisteredNetworkSuppliers: async (req, res) => {
+        try {
+            const networkUsers = await db.prepare(`
+                SELECT id, username, business_name, email, gstin, address, pincode 
+                FROM users 
+                WHERE id != ? AND (business_name IS NOT NULL OR username IS NOT NULL)
+                ORDER BY business_name ASC, username ASC
+            `).all(req.user.id);
+
+            const mapped = (networkUsers || []).map(u => ({
+                id: `cliks_user_${u.id}`,
+                supplier_id: `cliks_user_${u.id}`,
+                name: u.business_name || u.username,
+                supplier_name: u.business_name || u.username,
+                company_name: u.business_name || 'Cliks Business Partner',
+                company: u.business_name || 'Cliks Business Partner',
+                email: u.email,
+                phone: '',
+                gstin: u.gstin || '',
+                address: u.address || '',
+                billing_address: u.address || '',
+                status: 'CONNECTED',
+                connection_status: 'CONNECTED',
+                is_cliks_registered: true,
+                is_network_partner: true
+            }));
+
+            return sendSuccess(res, mapped, 'Cliks network registered suppliers loaded');
+        } catch (err) {
+            console.error('[getRegisteredNetworkSuppliers error]', err);
+            return sendError(res, 'Failed to fetch registered suppliers', 500);
         }
     },
 
@@ -343,7 +444,7 @@ const supplierController = {
                 WHERE id = ? AND user_id = ?
             `).run(
                 name !== undefined ? name : supplier.name,
-                email !== undefined ? email : supplier.email,
+                supplier.email, // Locked: email cannot be altered to prevent account collision & B2B conflicts
                 phone !== undefined ? phone : supplier.phone,
                 company !== undefined ? company : supplier.company,
                 gstin !== undefined ? gstin : supplier.gstin,

@@ -31,6 +31,9 @@ router.get('/dashboard-summary',     supplierController.getDashboardSummary);
 // B2B Supplier Connection Request
 router.post('/b2b-request',          supplierController.createB2BSupplierRequest);
 
+// Network Registered Suppliers
+router.get('/network/registered',    supplierController.getRegisteredNetworkSuppliers);
+
 // Base CRUD
 router.post('/',                     supplierController.createSupplier);
 router.get('/',                      supplierController.getSuppliers);

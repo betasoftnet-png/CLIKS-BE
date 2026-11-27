@@ -653,6 +653,58 @@ const purchaseController = {
                 await logBusinessAudit(req.user.id, 'PURCHASE_CREATE', `Created purchase document ${purchaseNum} (${doc_type}) for supplier ${supplierName} (amount: ₹${grand_total})`, 'SUCCESS');
             } catch (e) { }
 
+            // --- Check if supplier is registered on Cliks Business App ---
+            let isSupplierOnCliks = false;
+            try {
+                if (targetSupplierEmail) {
+                    const u = await db.prepare("SELECT id, username, business_name FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)").get(String(targetSupplierEmail).toLowerCase(), String(targetSupplierEmail).toLowerCase());
+                    if (u) isSupplierOnCliks = true;
+                }
+                if (!isSupplierOnCliks && supplierName) {
+                    const u2 = await db.prepare("SELECT id FROM users WHERE LOWER(business_name) = LOWER(?) OR LOWER(username) = LOWER(?)").get(String(supplierName).toLowerCase(), String(supplierName).toLowerCase());
+                    if (u2) isSupplierOnCliks = true;
+                }
+            } catch (e) {}
+
+            let whatsappInvite = null;
+            if (!isSupplierOnCliks && !isInternalRequisition) {
+                let supPhone = contact_number || '';
+                if (!supPhone && req.body.supplier_id) {
+                    try {
+                        const supObj = await db.prepare("SELECT phone, phone_number, alternate_phone FROM business_suppliers WHERE id = ?").get(req.body.supplier_id);
+                        supPhone = supObj?.phone || supObj?.phone_number || supObj?.alternate_phone || '';
+                    } catch (e) {}
+                }
+                const digits = String(supPhone || '').replace(/\D/g, '');
+                const cleanPhone = digits.length === 10 ? `91${digits}` : digits;
+
+                let buyerName = 'Our Business';
+                try {
+                    const me = await db.prepare('SELECT business_name, username FROM users WHERE id = ?').get(req.user.id);
+                    if (me?.business_name) buyerName = me.business_name;
+                    else if (me?.username) buyerName = me.username;
+                } catch (e) {}
+
+                const amountStr = Number(grand_total || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' });
+                const waMsg = `Hello *${supplierName}*,\n\n*${buyerName}* has generated Purchase Order *#${purchaseNum}* (${amountStr}) for your business on CLIKS.\n\nTo view, accept, and process this purchase order, please install the Cliks Business App:\n📲 *Install Cliks Business App*: https://cliksbusiness.com/download\nOr log in at: https://cliksbusiness.com\n\nThank you!`;
+                const waUrl = cleanPhone ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(waMsg)}` : `https://wa.me/?text=${encodeURIComponent(waMsg)}`;
+
+                whatsappInvite = {
+                    phone: cleanPhone,
+                    message: waMsg,
+                    whatsapp_url: waUrl,
+                    supplier_not_registered: true,
+                    purchase_number: purchaseNum
+                };
+
+                try {
+                    await logBusinessAudit(req.user.id, 'WHATSAPP_INVITE_TRIGGER', `Automated WhatsApp app-install invitation prepared for unregistered supplier ${supplierName} on PO #${purchaseNum}`, 'INFO');
+                } catch (e) {}
+            }
+
+            created.whatsapp_invite = whatsappInvite;
+            created.is_supplier_on_cliks = isSupplierOnCliks;
+
             // --- Sync Purchase Bill to Expenses Registry ---
             if (String(doc_type).toUpperCase() === 'BILL') {
                 try {
@@ -1730,7 +1782,67 @@ const purchaseController = {
     },
 
     sendWhatsapp: async (req, res) => {
-        return sendSuccess(res, null, 'Message sent via WhatsApp successfully');
+        const { id } = req.params;
+        const requestedPhone = req.body?.phone || req.body?.mobile;
+        try {
+            const purchase = await db.prepare('SELECT * FROM business_purchases WHERE (id = ? OR purchase_number = ?) AND user_id = ?').get(id, id, req.user.id);
+            if (!purchase) return sendError(res, 'Purchase document not found', 404);
+
+            let phone = requestedPhone || purchase.contact_number || '';
+            if (!phone) {
+                const sup = await db.prepare('SELECT phone, phone_number, alternate_phone FROM business_suppliers WHERE user_id = ? AND name = ?').get(req.user.id, purchase.supplier_name);
+                phone = sup?.phone || sup?.phone_number || sup?.alternate_phone || '';
+            }
+
+            const digits = String(phone || '').replace(/\D/g, '');
+            const cleanPhone = digits.length === 10 ? `91${digits}` : digits;
+
+            // Check if supplier is registered on Cliks
+            let isRegistered = false;
+            try {
+                const u = await db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?) OR LOWER(business_name) = LOWER(?)').get(
+                    String(purchase.supplier_name || '').toLowerCase(),
+                    String(purchase.supplier_name || '').toLowerCase(),
+                    String(purchase.supplier_name || '').toLowerCase()
+                );
+                if (u) isRegistered = true;
+            } catch (e) {}
+
+            let buyerName = 'Our Business';
+            try {
+                const me = await db.prepare('SELECT business_name, username FROM users WHERE id = ?').get(req.user.id);
+                if (me?.business_name) buyerName = me.business_name;
+                else if (me?.username) buyerName = me.username;
+            } catch (e) {}
+
+            const supName = purchase.supplier_name || 'Vendor Partner';
+            const poNum = purchase.purchase_number || `#${purchase.id}`;
+            const total = Number(purchase.grand_total || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' });
+
+            let message = '';
+            if (!isRegistered) {
+                message = `Hello *${supName}*,\n\n*${buyerName}* has generated Purchase Order *${poNum}* (Total: *${total}*) for your business on CLIKS.\n\nTo view, accept, and process this purchase order, please install the Cliks Business App:\n📲 *Install Cliks Business App*: https://cliksbusiness.com/download\nOr log in at: https://cliksbusiness.com\n\nThank you!`;
+            } else {
+                message = `Hello *${supName}*,\n\nHere is your official Purchase Order *${poNum}* from *${buyerName}*.\n\n• Order Total: *${total}*\n• Date: ${purchase.purchase_date || 'Today'}\n• Payment Status: *${purchase.payment_status || 'Pending'}*\n\nYour order is directly synced in your Cliks Business App.`;
+            }
+
+            const waDirectUrl = cleanPhone 
+                ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`
+                : `https://wa.me/?text=${encodeURIComponent(message)}`;
+
+            await logBusinessAudit(req.user.id, 'WHATSAPP_PO_DISPATCH', `Dispatched WhatsApp PO notification for ${poNum} to ${cleanPhone || 'supplier'} (registered: ${isRegistered})`, 'INFO');
+
+            return sendSuccess(res, {
+                dispatched: true,
+                phone: cleanPhone,
+                message,
+                whatsappUrl: waDirectUrl,
+                is_cliks_user: isRegistered
+            }, `WhatsApp notification prepared for ${supName}`);
+        } catch (e) {
+            console.error('[Purchase sendWhatsapp Error]', e);
+            return sendError(res, 'Failed to prepare WhatsApp message', 500);
+        }
     },
 
     sendEmail: async (req, res) => {
