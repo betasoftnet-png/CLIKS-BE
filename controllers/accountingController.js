@@ -515,6 +515,44 @@ const accountingController = {
     },
     getJournalEntries: async (req, res) => {
         try {
+            // Auto-sync any existing POS invoices into accounting if not yet posted
+            try {
+                const unpostedPos = await db.prepare(`
+                    SELECT invoice_number, total_amount, paid_amount, due_amount, payment_mode, created_at
+                    FROM business_invoices
+                    WHERE user_id = ? AND invoice_type = 'POS'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM accounting 
+                          WHERE accounting.user_id = business_invoices.user_id 
+                            AND accounting.notes LIKE '%' || business_invoices.invoice_number || '%'
+                      )
+                `).all(req.user.id);
+
+                for (const posInv of (unpostedPos || [])) {
+                    const datePart = (posInv.created_at || new Date().toISOString()).split('T')[0];
+                    const numPaid = parseFloat(posInv.paid_amount) || 0;
+                    const numDue = parseFloat(posInv.due_amount) || 0;
+                    const numTot = parseFloat(posInv.total_amount) || 0;
+                    const mode = posInv.payment_mode || 'Cash in Hand';
+                    const effectivePaid = numPaid > 0 ? numPaid : (posInv.payment_mode === 'Credit' ? 0 : numTot);
+
+                    if (effectivePaid > 0) {
+                        await db.prepare(`
+                            INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                            VALUES (?, 'income', ?, ?, 'Sales Revenue', ?, ?, 'posted', ?, ?)
+                        `).run(req.user.id, datePart, effectivePaid, mode, `POS Invoice #${posInv.invoice_number}`, posInv.created_at || datePart, posInv.created_at || datePart);
+                    }
+                    if (numDue > 0) {
+                        await db.prepare(`
+                            INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                            VALUES (?, 'income', ?, ?, 'Sales Revenue', 'Accounts Receivable (Credit Sale)', ?, 'posted', ?, ?)
+                        `).run(req.user.id, datePart, numDue, `POS Invoice #${posInv.invoice_number} (Credit Sale)`, posInv.created_at || datePart, posInv.created_at || datePart);
+                    }
+                }
+            } catch (syncErr) {
+                console.warn('[Accounting Sync Notice] Auto-syncing POS invoices:', syncErr.message);
+            }
+
             const list = await db.prepare(`
                 SELECT * FROM accounting WHERE user_id = ? AND entry_type IN ('income', 'expense', 'transfer') ORDER BY id DESC
             `).all(req.user.id);

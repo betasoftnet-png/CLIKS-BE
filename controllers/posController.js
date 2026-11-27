@@ -672,6 +672,38 @@ const posController = {
                 console.error('[POS Controller] Warranty sync notice:', warrErr.message || warrErr);
             }
 
+            // Sync POS invoice to accounting entries (P&L Revenue and Accounts Receivable)
+            try {
+                function normalizePosPaymentMode(mode) {
+                    if (!mode) return 'Cash in Hand';
+                    const m = String(mode).toLowerCase();
+                    if (m === 'cash' || m.includes('cash in hand') || m.includes('hand')) return 'Cash in Hand';
+                    if (m.includes('hdfc')) return 'HDFC Bank Account';
+                    if (m.includes('icici')) return 'ICICI Bank Account';
+                    if (m.includes('sbi') || m.includes('state bank')) return 'SBI Current Account';
+                    if (m === 'upi' || m.includes('razorpay') || m.includes('gpay') || m.includes('phonepe') || m.includes('paytm')) return 'UPI / Razorpay';
+                    if (m === 'card' || m.includes('card')) return 'Card / POS Terminal';
+                    if (m === 'bank' || m.includes('bank')) return 'HDFC Bank Account';
+                    return mode;
+                }
+
+                const normalizedMode = normalizePosPaymentMode(payment_mode);
+                if (numPaid > 0) {
+                    await db.prepare(`
+                        INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                        VALUES (?, 'income', ?, ?, 'Sales Revenue', ?, ?, 'posted', ?, ?)
+                    `).run([userId, now.split('T')[0], numPaid, normalizedMode, `POS Invoice #${invoiceNumber}`, now, now]);
+                }
+                if (numDue > 0) {
+                    await db.prepare(`
+                        INSERT INTO accounting (user_id, entry_type, date, amount, category, mode, notes, status, created_at, updated_at)
+                        VALUES (?, 'income', ?, ?, 'Sales Revenue', 'Accounts Receivable (Credit Sale)', ?, 'posted', ?, ?)
+                    `).run([userId, now.split('T')[0], numDue, `POS Invoice #${invoiceNumber} (Credit Sale)`, now, now]);
+                }
+            } catch (accErr) {
+                console.error('[POS Controller] Error syncing to accounting:', accErr.message);
+            }
+
             return sendSuccess(res, createdInvoice, 'POS checkout completed successfully', 201);
         } catch (error) {
             console.error('[POS Controller] Checkout error:', error);
