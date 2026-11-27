@@ -49,6 +49,52 @@ const billingController = {
     getInvoices: async (req, res) => {
         const { search, status, customer_id } = req.query;
         try {
+            // Auto-sync any incoming Purchase Orders issued by buyers to this user
+            try {
+                const user = req.user;
+                const uName = (user.username || '').toLowerCase();
+                const uBiz = (user.business_name || '').toLowerCase();
+                const uEmail = (user.email || '').toLowerCase();
+
+                const pendingPurchases = await db.prepare(`
+                    SELECT p.* FROM business_purchases p
+                    WHERE (
+                        (LOWER(p.supplier_name) = ? AND ? != '')
+                        OR (LOWER(p.supplier_name) = ? AND ? != '')
+                        OR (LOWER(p.supplier_name) = ? AND ? != '')
+                        OR (p.supplier_email IS NOT NULL AND LOWER(p.supplier_email) = ? AND ? != '')
+                    )
+                    AND p.user_id != ?
+                    AND p.id NOT IN (
+                        SELECT source_purchase_invoice_id FROM b2b_invoice_relationships WHERE supplier_user_id = ?
+                    )
+                `).all(uName, uName, uBiz, uBiz, uEmail, uEmail, uEmail, uEmail, user.id, user.id);
+
+                if (pendingPurchases && pendingPurchases.length > 0) {
+                    const b2bService = require('../utils/b2bConnectionService');
+                    for (const pur of pendingPurchases) {
+                        let purItems = [];
+                        try {
+                            purItems = await db.prepare('SELECT * FROM business_purchase_items WHERE purchase_id = ?').all(pur.id);
+                        } catch (e) {
+                            purItems = typeof pur.items === 'string' ? JSON.parse(pur.items) : (pur.items || []);
+                        }
+                        await b2bService.syncPurchaseToSalesInvoice({
+                            purchaseId: pur.id,
+                            userId: pur.user_id,
+                            supplierEmail: user.email,
+                            supplierName: pur.supplier_name,
+                            purchaseData: {
+                                ...pur,
+                                items: purItems
+                            }
+                        });
+                    }
+                }
+            } catch (healErr) {
+                console.warn('[Billing Controller] Auto-sync incoming POs warning:', healErr.message);
+            }
+
             let query = `SELECT * FROM business_invoices WHERE user_id = ?`;
             const params = [req.user.id];
 
