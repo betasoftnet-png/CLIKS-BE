@@ -32,7 +32,11 @@ router.get('/dashboard-summary',     supplierController.getDashboardSummary);
 router.post('/b2b-request',          supplierController.createB2BSupplierRequest);
 
 // Network Registered Suppliers
-router.get('/network/registered',    supplierController.getRegisteredNetworkSuppliers);
+router.get('/network/registered',        supplierController.getRegisteredNetworkSuppliers);
+
+// Automated Balance Reminders (avoid manual human intervention)
+router.post('/reminders/auto-dispatch-all', supplierController.autoDispatchAllReminders);
+router.post('/:id/auto-balance-trigger',    supplierController.triggerAutoBalanceAlert);
 
 // Base CRUD
 router.post('/',                     supplierController.createSupplier);

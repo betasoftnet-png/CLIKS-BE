@@ -60,6 +60,20 @@ const supplierController = {
 
         try {
             await supplierConnectionService.ensureTable();
+
+            // Enforce unique supplier email per business user (prevent duplicate supplier email registration)
+            const existingWithEmail = await db.prepare(
+                'SELECT id, name FROM business_suppliers WHERE user_id = ? AND LOWER(email) = ?'
+            ).get(req.user.id, cleanEmail);
+
+            if (existingWithEmail) {
+                return sendError(
+                    res, 
+                    `A supplier with email '${cleanEmail}' is already registered (${existingWithEmail.name}). Each supplier must have a unique email address. You can delete the existing supplier first if you wish to re-register this email.`, 
+                    400
+                );
+            }
+
             const now = new Date().toISOString();
             const initialStatus = status || 'PENDING';
             const docsStr = typeof documents === 'object' ? JSON.stringify(documents) : (documents || '[]');
@@ -354,6 +368,105 @@ const supplierController = {
         } catch (err) {
             console.error('[getRegisteredNetworkSuppliers error]', err);
             return sendError(res, 'Failed to fetch registered suppliers', 500);
+        }
+    },
+
+    // 2c. Trigger Automated WhatsApp Balance Notice for a Supplier (no human intervention)
+    triggerAutoBalanceAlert: async (req, res) => {
+        const { id } = req.params;
+        try {
+            const supplier = await db.prepare('SELECT * FROM business_suppliers WHERE id = ? AND user_id = ?').get(id, req.user.id);
+            if (!supplier) return sendError(res, 'Supplier not found', 404);
+
+            const bal = parseFloat(supplier.outstanding_balance || supplier.current_balance || 0);
+            const digits = String(supplier.phone || supplier.phone_number || '').replace(/\D/g, '');
+            const cleanPhone = digits.length === 10 ? `91${digits}` : digits;
+
+            let bizName = 'Our Business';
+            try {
+                const me = await db.prepare('SELECT business_name, username FROM users WHERE id = ?').get(req.user.id);
+                if (me?.business_name) bizName = me.business_name;
+                else if (me?.username) bizName = me.username;
+            } catch (e) {}
+
+            const currencySymbol = '₹';
+            const balStr = bal > 0 ? `${currencySymbol}${bal.toLocaleString('en-IN')}` : `${currencySymbol}0.00 (Settled)`;
+            const autoMsg = `[AUTOMATED BALANCE NOTICE]\nDear *${supplier.name || supplier.supplier_name}*,\n\nThis is an automated balance statement from *${bizName}*.\n\n• Current Payable Balance: *${balStr}*\n• Account Code: *${supplier.supplier_code || `SUP-${supplier.id}`}*\n• GSTIN: ${supplier.gstin || 'N/A'}\n\nThis notice was automatically processed by CLIKS Business. Please contact accounts for any clarifications.\n\nThank you!`;
+
+            const waDirectUrl = cleanPhone 
+                ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(autoMsg)}`
+                : `https://wa.me/?text=${encodeURIComponent(autoMsg)}`;
+
+            const now = new Date().toISOString();
+            try {
+                await db.prepare('UPDATE business_suppliers SET updated_at = ? WHERE id = ?').run(now, id);
+            } catch (e) {}
+
+            try {
+                const { logBusinessAudit } = require('../utils/auditLogger');
+                await logBusinessAudit(req.user.id, 'AUTO_BALANCE_TRIGGER', `Automated WhatsApp balance alert triggered for supplier ${supplier.name} (Balance: ${balStr}) to ${cleanPhone || 'supplier phone'}`, 'INFO');
+            } catch (e) {}
+
+            return sendSuccess(res, {
+                dispatched: true,
+                automated: true,
+                supplier_id: supplier.id,
+                supplier_name: supplier.name,
+                balance: bal,
+                phone: cleanPhone,
+                message: autoMsg,
+                whatsapp_url: waDirectUrl,
+                timestamp: now
+            }, `Automated balance alert triggered for ${supplier.name}`);
+        } catch (e) {
+            console.error('[triggerAutoBalanceAlert Error]', e);
+            return sendError(res, 'Failed to trigger automated balance alert', 500);
+        }
+    },
+
+    // 2d. Batch Automated Balance Alerts for All Suppliers with Outstanding Payables
+    autoDispatchAllReminders: async (req, res) => {
+        try {
+            const suppliers = await db.prepare('SELECT * FROM business_suppliers WHERE user_id = ? AND outstanding_balance > 0').all(req.user.id);
+            let bizName = 'Our Business';
+            try {
+                const me = await db.prepare('SELECT business_name, username FROM users WHERE id = ?').get(req.user.id);
+                if (me?.business_name) bizName = me.business_name;
+                else if (me?.username) bizName = me.username;
+            } catch (e) {}
+
+            const results = [];
+            const now = new Date().toISOString();
+            const { logBusinessAudit } = require('../utils/auditLogger');
+
+            for (const s of (suppliers || [])) {
+                const bal = parseFloat(s.outstanding_balance || 0);
+                const digits = String(s.phone || s.phone_number || '').replace(/\D/g, '');
+                const cleanPhone = digits.length === 10 ? `91${digits}` : digits;
+                const autoMsg = `[AUTOMATED BALANCE NOTICE]\nDear *${s.name}*,\n\nAutomated statement notice from *${bizName}*:\n• Outstanding Payable Balance: *₹${bal.toLocaleString('en-IN')}*\n• Code: *${s.supplier_code || `SUP-${s.id}`}*\n\nDispatched automatically via CLIKS Business.`;
+                const waUrl = cleanPhone ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(autoMsg)}` : `https://wa.me/?text=${encodeURIComponent(autoMsg)}`;
+
+                try {
+                    await logBusinessAudit(req.user.id, 'AUTO_BALANCE_BATCH', `Automated balance alert queued for ${s.name} (₹${bal})`, 'INFO');
+                } catch (e) {}
+
+                results.push({
+                    id: s.id,
+                    name: s.name,
+                    balance: bal,
+                    phone: cleanPhone,
+                    whatsapp_url: waUrl
+                });
+            }
+
+            return sendSuccess(res, {
+                total_triggered: results.length,
+                timestamp: now,
+                items: results
+            }, `Automated balance triggers queued for ${results.length} suppliers`);
+        } catch (e) {
+            console.error('[autoDispatchAllReminders Error]', e);
+            return sendError(res, 'Failed to execute batch auto-triggers', 500);
         }
     },
 
