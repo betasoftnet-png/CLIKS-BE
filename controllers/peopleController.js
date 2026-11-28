@@ -536,15 +536,20 @@ const respondToRequest = async (req, res) => {
     try {
       const recipientUser = await db.prepare('SELECT id FROM users WHERE id = ?').get(req.user.id);
       if (recipientUser && requestItem.requester_email) {
-        const reciprocal = await db.prepare('SELECT id FROM people WHERE user_id = ? AND LOWER(email) = LOWER(?)').get(req.user.id, requestItem.requester_email);
+        // Use role_type and relationship sent by requester or explicitly passed by recipient
+        const reciprocalRole = req.body.role_type || req.body.classification || requestItem.role_type || 'relative';
+        const reciprocalRel = req.body.relationship || requestItem.relationship || reciprocalRole;
+
+        const reciprocal = await db.prepare('SELECT id, role_type FROM people WHERE user_id = ? AND LOWER(email) = LOWER(?)').get(req.user.id, requestItem.requester_email);
         if (!reciprocal) {
           const contactName = requestItem.requester_business_name || requestItem.requester_username || 'Connected Contact';
           await db.prepare(`
             INSERT INTO people (user_id, name, role_type, relationship, email, status, created_at, updated_at)
-            VALUES (?, ?, 'business', 'Connected Network', ?, 'accepted', ?, ?)
-          `).run(req.user.id, contactName, requestItem.requester_email.toLowerCase().trim(), now, now);
+            VALUES (?, ?, ?, ?, ?, 'accepted', ?, ?)
+          `).run(req.user.id, contactName, reciprocalRole, reciprocalRel, requestItem.requester_email.toLowerCase().trim(), now, now);
         } else {
-          await db.prepare('UPDATE people SET status = ?, updated_at = ? WHERE id = ?').run('accepted', now, reciprocal.id);
+          const targetRole = (reciprocal.role_type && reciprocal.role_type !== 'business') ? reciprocal.role_type : reciprocalRole;
+          await db.prepare('UPDATE people SET status = ?, role_type = ?, relationship = ?, updated_at = ? WHERE id = ?').run('accepted', targetRole, reciprocalRel, now, reciprocal.id);
         }
       }
     } catch (e) {
