@@ -16,6 +16,8 @@ router.post('/recurring', expensesController.createRecurring);
 router.get('/recurring', expensesController.getRecurrings);
 router.put('/recurring/:id', expensesController.updateRecurring);
 router.delete('/recurring/:id', expensesController.deleteRecurring);
+router.post('/recurring/:id/send-reminder', expensesController.sendRecurringReminder);
+router.post('/recurring/:id/remind', expensesController.sendRecurringReminder);
 
 router.post('/reimburse', expensesController.reimburseExpense);
 router.get('/reimbursements', expensesController.getReimbursements);
