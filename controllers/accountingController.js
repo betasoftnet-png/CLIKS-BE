@@ -1135,7 +1135,20 @@ const accountingController = {
     getExpenses: async (req, res) => {
         try {
             const list = await db.prepare("SELECT * FROM accounting WHERE user_id = ? AND entry_type = 'expense' ORDER BY date DESC, id DESC").all(req.user.id);
-            return sendSuccess(res, list, 'Expenses retrieved');
+            // Consolidate duplicate identical salary/system expense rows
+            const seenKeys = new Set();
+            const deduplicated = [];
+            for (const item of (list || [])) {
+                const note = (item.notes || '').trim().toLowerCase();
+                const isSalary = note.startsWith('salary paid to') || (item.category || '').toLowerCase() === 'salary expenses';
+                if (isSalary) {
+                    const key = `salary_${note}_${item.date}_${item.amount}`;
+                    if (seenKeys.has(key)) continue;
+                    seenKeys.add(key);
+                }
+                deduplicated.push(item);
+            }
+            return sendSuccess(res, deduplicated, 'Expenses retrieved');
         } catch (error) {
             return sendError(res, 'Fetch failed', 500);
         }

@@ -505,12 +505,16 @@ const expensesController = {
             const now = new Date().toISOString();
             const userId = (req.user && req.user.id) ? req.user.id : 1;
             const approver = req.user?.username || req.user?.email || 'Business Manager';
+            const rawId = req.params.id;
+            const cleanIdStr = String(rawId).replace(/^CLM-\d+-/i, '').replace(/^CLM-/i, '').replace(/^0+/, '');
+            const numId = parseInt(cleanIdStr, 10);
+            const targetId = isNaN(numId) ? rawId : numId;
             
-            let result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Approved', approval_by = ?, updated_at = ? WHERE id = ? AND user_id = ?").run(approver, now, req.params.id, userId);
+            let result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Approved', approval_by = ?, updated_at = ? WHERE (id = ? OR id = ?) AND user_id = ?").run(approver, now, rawId, targetId, userId);
             
             // If user_id didn't match (e.g. claim belongs to business staff/branch), update directly by ID
             if (!result || result.changes === 0) {
-                result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Approved', approval_by = ?, updated_at = ? WHERE id = ?").run(approver, now, req.params.id);
+                result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Approved', approval_by = ?, updated_at = ? WHERE id = ? OR id = ?").run(approver, now, rawId, targetId);
             }
             
             return sendSuccess(res, null, 'Reimbursement approved');
@@ -524,16 +528,20 @@ const expensesController = {
         try {
             const now = new Date().toISOString();
             const userId = (req.user && req.user.id) ? req.user.id : 1;
+            const rawId = req.params.id;
+            const cleanIdStr = String(rawId).replace(/^CLM-\d+-/i, '').replace(/^CLM-/i, '').replace(/^0+/, '');
+            const numId = parseInt(cleanIdStr, 10);
+            const targetId = isNaN(numId) ? rawId : numId;
             let result;
             if (reason) {
-                result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', description = ?, updated_at = ? WHERE id = ? AND user_id = ?").run(reason, now, req.params.id, userId);
+                result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', description = ?, updated_at = ? WHERE (id = ? OR id = ?) AND user_id = ?").run(reason, now, rawId, targetId, userId);
                 if (!result || result.changes === 0) {
-                    result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', description = ?, updated_at = ? WHERE id = ?").run(reason, now, req.params.id);
+                    result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', description = ?, updated_at = ? WHERE id = ? OR id = ?").run(reason, now, rawId, targetId);
                 }
             } else {
-                result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', updated_at = ? WHERE id = ? AND user_id = ?").run(now, req.params.id, userId);
+                result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', updated_at = ? WHERE (id = ? OR id = ?) AND user_id = ?").run(now, rawId, targetId, userId);
                 if (!result || result.changes === 0) {
-                    result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', updated_at = ? WHERE id = ?").run(now, req.params.id);
+                    result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Rejected', updated_at = ? WHERE id = ? OR id = ?").run(now, rawId, targetId);
                 }
             }
             return sendSuccess(res, null, 'Reimbursement rejected');
@@ -547,8 +555,17 @@ const expensesController = {
         try {
             const now = new Date().toISOString();
             const finalDate = paymentDate || now.split('T')[0];
-            await db.prepare("UPDATE expenses SET reimbursement_status = 'Paid', expense_date = ?, updated_at = ? WHERE id = ? AND user_id = ?").run(finalDate, now, req.params.id, req.user.id);
-            await createExpenseForClaim(req.params.id, req.user.id, paymentMode, finalDate);
+            const userId = (req.user && req.user.id) ? req.user.id : 1;
+            const rawId = req.params.id;
+            const cleanIdStr = String(rawId).replace(/^CLM-\d+-/i, '').replace(/^CLM-/i, '').replace(/^0+/, '');
+            const numId = parseInt(cleanIdStr, 10);
+            const targetId = isNaN(numId) ? rawId : numId;
+
+            let result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Paid', expense_date = ?, updated_at = ? WHERE (id = ? OR id = ?) AND user_id = ?").run(finalDate, now, rawId, targetId, userId);
+            if (!result || result.changes === 0) {
+                result = await db.prepare("UPDATE expenses SET reimbursement_status = 'Paid', expense_date = ?, updated_at = ? WHERE id = ? OR id = ?").run(finalDate, now, rawId, targetId);
+            }
+            await createExpenseForClaim(targetId, userId, paymentMode, finalDate);
             return sendSuccess(res, null, 'Reimbursement marked as Paid');
         } catch (error) {
             console.error('[Expense Claim] Pay Error:', error);

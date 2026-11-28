@@ -232,21 +232,30 @@ const supplierController = {
             query += ` ORDER BY created_at DESC, id DESC`;
             const rawSuppliers = await db.prepare(query).all(...params);
 
-            // Deduplicate supplier records by normalized name so duplicate entries are consolidated and shown only once
+            // Deduplicate supplier records by normalized name and email so duplicate entries are consolidated and shown only once
             const seenSupplierNames = new Set();
+            const seenSupplierEmails = new Set();
             const suppliers = [];
             for (const s of (rawSuppliers || [])) {
                 const normName = (s.name || '').trim().toLowerCase();
-                if (!normName) {
+                const normEmail = (s.email || '').trim().toLowerCase();
+                if (!normName && !normEmail) {
                     suppliers.push(s);
                     continue;
                 }
-                if (!seenSupplierNames.has(normName)) {
-                    seenSupplierNames.add(normName);
+                const isNameDup = normName && seenSupplierNames.has(normName);
+                const isEmailDup = normEmail && seenSupplierEmails.has(normEmail);
+
+                if (!isNameDup && !isEmailDup) {
+                    if (normName) seenSupplierNames.add(normName);
+                    if (normEmail) seenSupplierEmails.add(normEmail);
                     suppliers.push(s);
                 } else {
-                    // If duplicate has higher balance, update the existing entry
-                    const idx = suppliers.findIndex(x => (x.name || '').trim().toLowerCase() === normName);
+                    // Update existing consolidated supplier with latest balance/details
+                    const idx = suppliers.findIndex(x => 
+                        (normName && (x.name || '').trim().toLowerCase() === normName) ||
+                        (normEmail && (x.email || '').trim().toLowerCase() === normEmail)
+                    );
                     if (idx !== -1) {
                         const curBal = parseFloat(s.outstanding_balance || 0);
                         const prevBal = parseFloat(suppliers[idx].outstanding_balance || 0);
@@ -255,6 +264,9 @@ const supplierController = {
                         }
                         if (!suppliers[idx].reminder_schedule && s.reminder_schedule) {
                             suppliers[idx].reminder_schedule = s.reminder_schedule;
+                        }
+                        if (!suppliers[idx].gstin && s.gstin) {
+                            suppliers[idx].gstin = s.gstin;
                         }
                     }
                 }

@@ -836,6 +836,18 @@ const purchaseController = {
                         OR ( ? != '' AND LOWER(COALESCE(p.supplier_name, '')) = ? )
                         OR ( ? != '' AND LOWER(COALESCE(p.supplier_name, '')) LIKE ? )
                         OR ( ? != '' AND LOWER(COALESCE(p.supplier_gstin, '')) = ? )
+                        OR p.user_id IN (
+                            SELECT requester_user_id FROM b2b_connections 
+                            WHERE (target_user_id = ? OR ( ? != '' AND LOWER(target_email) = ? ))
+                        )
+                        OR p.user_id IN (
+                            SELECT target_user_id FROM b2b_connections 
+                            WHERE (requester_user_id = ? OR ( ? != '' AND LOWER(requester_email) = ? ))
+                        )
+                        OR p.user_id IN (
+                            SELECT business_id FROM supplier_connections 
+                            WHERE (supplier_user_id = ? OR ( ? != '' AND LOWER(supplier_email) = ? ))
+                        )
                     )
                     ORDER BY p.id DESC
                 `).all(
@@ -846,15 +858,23 @@ const purchaseController = {
                     bizName, bizName,
                     userEmail, userEmail,
                     username, `%${username}%`,
-                    userGstin, userGstin
+                    userGstin, userGstin,
+                    req.user.id, userEmail, userEmail,
+                    req.user.id, userEmail, userEmail,
+                    req.user.id, userEmail, userEmail
                 );
             } catch (incErr) {
                 console.warn('[Purchase Controller] Incoming purchases query error:', incErr.message);
                 incomingPurchases = [];
             }
 
+            const seenPurchaseIds = new Set(purchases.map(p => p.id));
+
             if (Array.isArray(incomingPurchases)) {
                 for (const inc of incomingPurchases) {
+                    if (seenPurchaseIds.has(inc.id)) continue;
+                    seenPurchaseIds.add(inc.id);
+
                     inc.is_incoming_po = true;
                     inc.dealer_name = inc.buyer_business_name || inc.buyer_username || inc.buyer_email || 'Buyer Client';
                     inc.buyer_name = inc.dealer_name;
