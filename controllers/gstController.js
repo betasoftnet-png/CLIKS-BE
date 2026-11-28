@@ -129,6 +129,16 @@ const gstController = {
             const userId = req.user?.id || req.user?.userId;
             if (!userId) return sendSuccess(res, [], 'GST Invoices fetched');
 
+            // On-demand sync all sales invoices for this user to ensure GSTR-1 always has all POS & sales data
+            try {
+                const sales = await db.prepare("SELECT id FROM business_invoices WHERE user_id = ? AND invoice_number IS NOT NULL AND invoice_number != ''").all(userId);
+                for (const inv of sales) {
+                    await gstHelper.syncInvoiceToGstr1(inv.id, userId);
+                }
+            } catch (syncErr) {
+                console.warn('[GST Controller] getInvoices on-demand sync warning:', syncErr.message);
+            }
+
             const isPg = process.env.DB_TYPE === 'postgres';
 
             let query = `SELECT * FROM gst_invoices WHERE user_id = ?`;
