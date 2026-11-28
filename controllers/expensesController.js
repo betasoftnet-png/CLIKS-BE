@@ -928,7 +928,26 @@ const expensesController = {
             }
 
             const now = new Date().toISOString();
-            const membersJson = JSON.stringify(members);
+
+            const memberCount = members.length;
+            const defaultEqualShare = memberCount > 0 ? limit / memberCount : 0;
+
+            // Sanitize each member's individual quota and spent amount
+            const sanitizedMembers = members.map(m => {
+                const memberQuota = (m.quota !== undefined && m.quota !== null && m.quota !== '') 
+                    ? Math.max(0, parseFloat(m.quota) || 0)
+                    : ((m.allocated_budget !== undefined && m.allocated_budget !== null && m.allocated_budget !== '')
+                        ? Math.max(0, parseFloat(m.allocated_budget) || 0)
+                        : defaultEqualShare);
+                return {
+                    ...m,
+                    quota: memberQuota,
+                    allocated_budget: memberQuota,
+                    spent: Math.max(0, Math.abs(parseFloat(m.spent) || 0))
+                };
+            });
+
+            const membersJson = JSON.stringify(sanitizedMembers);
 
             // 1. Insert budget into expenses table
             const result = await db.prepare(`
@@ -938,23 +957,21 @@ const expensesController = {
             `).run(req.user.id, limit, category_name.trim(), limit, bMonth, cForward, membersJson, now, now);
 
             const department_id = result.lastInsertRowid;
-            const memberCount = members.length;
-            const allocatedBudget = memberCount > 0 ? limit / memberCount : 0;
 
             // 2. Insert team members into department_team_members table
-            for (const m of members) {
+            for (const m of sanitizedMembers) {
                 await db.prepare(`
                     INSERT INTO department_team_members (
                         department_id, employee_id, employee_name, salary, allocated_budget, spent, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     department_id, m.employee_id, m.name, m.salary ? parseFloat(m.salary) : null,
-                    allocatedBudget, m.spent ? parseFloat(m.spent) : 0, now, now
+                    m.quota, m.spent, now, now
                 );
             }
 
             const inserted = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(department_id);
-            inserted.team_members = members;
+            inserted.team_members = sanitizedMembers;
             return sendSuccess(res, inserted, 'Budget limit allocated', 201);
         } catch (error) {
             console.error('[Expense Budget] Error:', error);
@@ -967,12 +984,22 @@ const expensesController = {
             // Hydrate team members from relational database table for each budget record
             for (const item of list) {
                 const members = await db.prepare("SELECT * FROM department_team_members WHERE department_id = ?").all(item.id);
-                item.team_members = members.map(m => ({
-                    employee_id: m.employee_id,
-                    name: m.employee_name,
-                    salary: m.salary,
-                    spent: m.spent || 0
-                }));
+                if (members && members.length > 0) {
+                    item.team_members = members.map(m => ({
+                        employee_id: m.employee_id,
+                        name: m.employee_name,
+                        salary: m.salary,
+                        quota: m.allocated_budget !== null && m.allocated_budget !== undefined ? m.allocated_budget : null,
+                        allocated_budget: m.allocated_budget !== null && m.allocated_budget !== undefined ? m.allocated_budget : null,
+                        spent: m.spent || 0
+                    }));
+                } else {
+                    try {
+                        item.team_members = typeof item.team_members === 'string' ? JSON.parse(item.team_members || '[]') : (item.team_members || []);
+                    } catch (e) {
+                        item.team_members = [];
+                    }
+                }
             }
             return sendSuccess(res, list, 'Budgets targets retrieved');
         } catch (error) {
@@ -1025,8 +1052,24 @@ const expensesController = {
             }
 
             const now = new Date().toISOString();
-            const membersJson = JSON.stringify(members);
+            const memberCount = members.length;
+            const defaultEqualShare = memberCount > 0 ? limit / memberCount : 0;
 
+            const sanitizedMembers = members.map(m => {
+                const memberQuota = (m.quota !== undefined && m.quota !== null && m.quota !== '')
+                    ? Math.max(0, parseFloat(m.quota) || 0)
+                    : ((m.allocated_budget !== undefined && m.allocated_budget !== null && m.allocated_budget !== '')
+                        ? Math.max(0, parseFloat(m.allocated_budget) || 0)
+                        : defaultEqualShare);
+                return {
+                    ...m,
+                    quota: memberQuota,
+                    allocated_budget: memberQuota,
+                    spent: Math.max(0, Math.abs(parseFloat(m.spent) || 0))
+                };
+            });
+
+            const membersJson = JSON.stringify(sanitizedMembers);
             const spentAmtVal = req.body.spent_amount !== undefined ? (parseFloat(req.body.spent_amount) || 0) : null;
 
             // 1. Update expenses record
@@ -1035,26 +1078,23 @@ const expensesController = {
                 WHERE id = ? AND user_id = ? AND is_budget = 'true'
             `).run(category_name.trim(), limit, limit, bMonth, cForward, membersJson, spentAmtVal, now, id, req.user.id);
 
-            const memberCount = members.length;
-            const allocatedBudget = memberCount > 0 ? limit / memberCount : 0;
-
             // 2. Clear old members from database table
             await db.prepare('DELETE FROM department_team_members WHERE department_id = ?').run(id);
 
             // 3. Write new members to database table
-            for (const m of members) {
+            for (const m of sanitizedMembers) {
                 await db.prepare(`
                     INSERT INTO department_team_members (
                         department_id, employee_id, employee_name, salary, allocated_budget, spent, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     id, m.employee_id, m.name, m.salary ? parseFloat(m.salary) : null,
-                    allocatedBudget, m.spent ? parseFloat(m.spent) : 0, now, now
+                    m.quota, m.spent, now, now
                 );
             }
 
             const updated = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(id);
-            updated.team_members = members;
+            updated.team_members = sanitizedMembers;
             return sendSuccess(res, updated, 'Budget target updated');
         } catch (error) {
             console.error('[Expense Budget] Update Error:', error);
