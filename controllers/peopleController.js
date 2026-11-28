@@ -387,8 +387,25 @@ const createPerson = async (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const info = await stmt.run(req.user.id, name, role_type, relationship || null, phone ? phone.trim() : null, cleanEmail, company || null, contact_info || null, notes || null, status, now, now);
+  const createdPersonId = info.lastInsertRowid;
+
+  // Handle Initial Net Exposure / Opening Cost
+  const rawExposure = req.body.initial_exposure ?? req.body.net_exposure ?? req.body.cost;
+  const exposureAmt = parseFloat(rawExposure || 0);
+  if (!isNaN(exposureAmt) && exposureAmt > 0) {
+    const expType = (req.body.exposure_type === 'payable' || req.body.exposure_type === 'borrowed') ? 'borrowed' : 'lent';
+    const txDesc = req.body.exposure_description || 'Opening Balance / Initial Net Exposure';
+    try {
+      await db.prepare(`
+        INSERT INTO people_transactions (person_id, user_id, type, amount, date, description, category, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(createdPersonId, req.user.id, expType, exposureAmt, now.split('T')[0], txDesc, 'Opening Exposure', now, now);
+    } catch (txErr) {
+      console.warn('Failed to insert opening exposure transaction:', txErr.message);
+    }
+  }
   
-  const newItem = await db.prepare('SELECT * FROM people WHERE id = ?').get(info.lastInsertRowid);
+  const newItem = await db.prepare('SELECT * FROM people WHERE id = ?').get(createdPersonId);
   return sendSuccess(res, newItem, 'Person created and invitation request sent', 201);
 };
 
@@ -446,6 +463,37 @@ const updatePerson = async (req, res) => {
     params.push(new Date().toISOString());
     params.push(req.params.id, req.user.id);
     await db.prepare(`UPDATE people SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`).run(...params);
+  }
+
+  // Handle Initial Net Exposure update if provided
+  if (req.body.initial_exposure !== undefined || req.body.net_exposure !== undefined || req.body.cost !== undefined) {
+    const rawExposure = req.body.initial_exposure ?? req.body.net_exposure ?? req.body.cost;
+    const exposureAmt = parseFloat(rawExposure || 0);
+    const expType = (req.body.exposure_type === 'payable' || req.body.exposure_type === 'borrowed') ? 'borrowed' : 'lent';
+    const nowIso = new Date().toISOString();
+
+    const existingOpening = await db.prepare(`
+      SELECT id FROM people_transactions 
+      WHERE person_id = ? AND user_id = ? AND (category = 'Opening Exposure' OR description LIKE 'Opening Balance%')
+      LIMIT 1
+    `).get(req.params.id, req.user.id);
+
+    if (existingOpening) {
+      if (exposureAmt > 0) {
+        await db.prepare(`
+          UPDATE people_transactions SET type = ?, amount = ?, updated_at = ?
+          WHERE id = ?
+        `).run(expType, exposureAmt, nowIso, existingOpening.id);
+      } else {
+        await db.prepare('DELETE FROM people_transactions WHERE id = ?').run(existingOpening.id);
+      }
+    } else if (exposureAmt > 0) {
+      const txDesc = req.body.exposure_description || 'Opening Balance / Initial Net Exposure';
+      await db.prepare(`
+        INSERT INTO people_transactions (person_id, user_id, type, amount, date, description, category, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(req.params.id, req.user.id, expType, exposureAmt, nowIso.split('T')[0], txDesc, 'Opening Exposure', nowIso, nowIso);
+    }
   }
   
   const updatedItem = await db.prepare('SELECT * FROM people WHERE id = ?').get(req.params.id);

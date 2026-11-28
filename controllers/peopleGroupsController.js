@@ -652,6 +652,8 @@ const getGroupIncomingRequests = async (req, res) => {
       g.group_type,
       g.currency,
       g.target_amount,
+      (SELECT COUNT(*) FROM people_group_members WHERE group_id = g.id) as member_count,
+      (SELECT COUNT(*) FROM people_group_members WHERE group_id = g.id AND status = 'accepted') as accepted_members_count,
       u.username as inviter_username,
       u.email as inviter_email,
       u.business_name as inviter_business_name
